@@ -5,17 +5,14 @@ Source: https://balatrowiki.org/w/Jokers (150 jokers in collection order) plus p
 ## Counts
 - Total 150. Rarity: Common 61, Uncommon 64, Rare 20, Legendary 5.
 - Waves: 3.1 = 54, 3.2 = 33, 3.3 = 20, 3.4 = 33, 3.5 = 10 (correctness of category preferred over the 45/35/20/40/10 target).
-- Not Blueprint/Brainstorm copyable (`copyable=no`): 33 (see csv).
+- Not Blueprint/Brainstorm copyable (`copyable=no`): 29 (see csv); values follow each joker's wiki "Compatibility: Copyable" field.
 
 ## UNVERIFIED
-- Matador: wiki says "earn $8 if played hand triggers the Boss Blind ability". Interpretation A: only when a played hand triggers a boss effect (e.g. The Tooth/Needle/Psychic-style); B: also discards (e.g. The Hook). Copyable set to `no` as a guess.
-- Joker Stencil: whether its own slot counts as empty. Chosen: yes (X = free slots + number of Stencils, Negative slots add). Alternative: free slots only.
-- Mr. Bones: restore semantics (round is won, blind cleared, Joker destroyed) taken from general knowledge.
-- Ceremonial Dagger / Madness copyable=no and Certificate / Marble copyable=yes: from knowledge of Blueprint behaviour, wiki summary did not list them on the fetched table.
-- Legendary `cost`: wiki shows N/A (not sold in shops); csv uses 20 (assumed internal base for sell value). Verify.
-- Blueprint/Brainstorm: chained copying (Blueprint->Brainstorm, Brainstorm copying Blueprint) assumed to work.
-- Raised Fist tie rule (rightmost lowest) and Ancient Joker / Mail-In target selection (new target differs from previous) assumed.
-- Ramen decay: X0.01 per discarded card (wiki table); verify the figure.
+- Joker Stencil: wiki says "X1 Mult for each empty Joker slot, Joker Stencil included"; behaviour with multiple Stencils / Negative slots still taken from game knowledge (X = free slots + number of Stencils).
+- Blueprint/Brainstorm: wiki confirms Brainstorm copies what a leftmost Blueprint copies; Blueprint->Brainstorm chains not explicitly stated.
+- Luchador and Diet Cola are marked copyable by the wiki but are sell-triggered, so Blueprint cannot meaningfully copy them; copyable=yes only records the wiki flag.
+- Matador: exact boss-trigger list taken from the wiki page; wiki itself notes it is inconsistent ("oversight"), so implement per the listed blinds only.
+- Mr. Bones: exact check timing (final hand) from wiki prose; no numbers beyond 25%.
 
 ## Interaction notes
 - Legendary jokers appear only via The Soul (Spectral) / not in shops.
@@ -27,3 +24,10 @@ Source: https://balatrowiki.org/w/Jokers (150 jokers in collection order) plus p
 - Self-destructing jokers: Gros Michel, Cavendish, Ice Cream, Popcorn, Ramen, Seltzer, Turtle Bean, Mr. Bones, Madness (others), Ceremonial Dagger (right neighbor).
 - Eternal/Perishable/Rental stickers are out of scope here.
 - Most "create a card" jokers require free consumable/joker slots.
+
+## Verification log
+Task 3.0v: every row 1-150 was compared against its own balatrowiki.org page (fetched in full; all 150 reachable). Rarity and buy price matched the CSV for all 150 rows (Legendary buy price 20, sell 10, confirmed on Canio/Triboulet/Yorick/Chicot/Perkeo pages). All base numbers in effect text (Mult/Chips/X values, odds, increments) matched. Changes made:
+- copyable (set to the wiki Copyable flag): Ceremonial Dagger, Madness, Luchador, Diet Cola, Matador, Stuntman no->yes; Midas Mask, Trading Card yes->no.
+- effect clarified from wiki prose: Ramen (destroyed at X1 or below, Hook discards count), Mr. Bones (no blind reward money, interest still paid, not saved by empty deck), Matador (boss-trigger list, no discards), Madness, Ceremonial Dagger, Blackboard (Stone blocks), Square Joker (4 played cards), Flower Pot (needs 4 scoring cards), Castle/Mail-In Rebate/The Idol target selection weighting, Erosion (Abandoned Deck 40), Rocket (increase before payout), Sixth Sense, Obelisk (reset only if strictly most played), Midas Mask (overwrites enhancement), Vampire, Red Card, Gros Michel/Cavendish spawn conditions, Chicot, Perkeo, Hiker.
+- timing: Matador gained `boss_triggered`.
+- Ramen X0.01 decay, Raised Fist rightmost-lowest tie rule, Ancient Joker new suit chosen from the other 3 suits: confirmed. Legendary cost 20: confirmed. Ceremonial Dagger/Madness/Certificate/Marble copyable: resolved from wiki.
