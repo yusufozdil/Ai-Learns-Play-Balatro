@@ -123,3 +123,6 @@ Thumbs.db
 
 # ---------- Local agent settings (personal, may contain paths/permissions) ----------
 .claude/settings.local.json
+
+# ---------- Agent worktrees (isolated copies used by subagents) ----------
+.claude/worktrees/

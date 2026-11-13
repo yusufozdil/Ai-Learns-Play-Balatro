@@ -129,3 +129,12 @@ Scoring order inside the set: left to right as in the player's hand order (prd.m
 - Wild debuffed: reverts to its base suit (S4, S5). Stone debuffed: no rank/suit (S5).
 - A debuffed card in the scoring set contributes no chips, mult, enhancement, edition or seal effects (S5), and gives no perma/Hiker bonus (S5). Money from Gold Seal = $0 (S4/Gold Seal page https://balatrowiki.org/w/Gold_Seal).
 - Boss "hand restriction" blinds (Psychic/Eye/Mouth): hands not meeting the restriction can be played but score nothing and fire no effects (https://balatrowiki.org/w/Blinds_and_Antes).
+
+## 8. Implementation notes (Phase 1B, `hand_eval.rs`)
+- Per-card data (rank, 4-bit suit mask via `Card::has_suit`) is computed once; `evaluate_all_subsets` reuses it for all subsets. Stone = rank 0, suit mask 0.
+- Four Fingers with several qualifying 4-card flushes (only reachable with Wild/Smeared cards): the suit set with the most matching cards wins, ties go to the set holding the leftmost differing card. A 5-card straight run beats a 4-card run; at most one run of 4+ ranks can exist in 5 cards.
+- Straight Flush scoring set = straight cards | flush cards; Flush House / Flush Five / Full House / Five of a Kind score all five played cards.
+- Four/Three/Pair/Two Pair score every non-Stone card whose rank count reaches the group size (Four of a Kind with a kicker: only the 4).
+- `evaluate` with more than 5 cards: `debug_assert!` fails in debug; in release only the first 5 are evaluated. `evaluate_all_subsets` accepts at most 16 cards (same behavior).
+- `scoring_mask` of `evaluate_all_subsets` entries indexes the selection (played order), not the hand.
+- Tests include a brute-force reference evaluator (subset enumeration) that agrees with `evaluate` on hand type and `contains` for random hands with all flag/enhancement combinations.
