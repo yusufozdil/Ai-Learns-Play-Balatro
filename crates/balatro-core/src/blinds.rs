@@ -12,9 +12,12 @@ pub use crate::data::blind_chips::{
 };
 
 /// Which blind of the ante.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum BlindKind {
     /// Small blind.
+    #[default]
     Small,
     /// Big blind.
     Big,

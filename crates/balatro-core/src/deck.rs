@@ -24,7 +24,7 @@ pub enum DeckError {
 }
 
 /// Which pile to add a card to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pile {
     /// Draw pile.
     Draw,

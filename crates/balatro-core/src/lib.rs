@@ -14,6 +14,7 @@ pub mod enums;
 pub mod game;
 pub mod hand_eval;
 pub mod hooks;
+pub mod joker;
 pub mod packs;
 pub mod rng;
 pub mod scoring;
