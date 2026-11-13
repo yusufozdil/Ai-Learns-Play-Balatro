@@ -48,6 +48,11 @@ fn suits() {
     for suit in Suit::ALL {
         assert!(w.has_suit(suit, &none));
     }
+    // Debuffed Wild reverts to its printed suit (h is Hearts).
+    w.debuffed = true;
+    assert!(w.has_suit(Suit::Hearts, &none));
+    assert!(!w.has_suit(Suit::Spades, &none));
+    assert!(w.has_suit(Suit::Diamonds, &smeared));
     let mut st = h;
     st.enhancement = Enhancement::Stone;
     for suit in Suit::ALL {

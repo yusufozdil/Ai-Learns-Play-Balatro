@@ -91,14 +91,14 @@ impl Card {
         flags.pareidolia || self.rank.is_face_rank()
     }
 
-    /// Suit membership: Stone -> never; Wild -> every suit; Smeared makes Hearts==Diamonds and
-    /// Spades==Clubs; otherwise exact match.
-    // UNVERIFIED: debuffed Wild cards are still treated as matching every suit here.
+    /// Suit membership: Stone -> never; Wild -> every suit (unless debuffed: a debuffed Wild
+    /// card reverts to its printed suit, docs/mechanics/hands.md §4.2); Smeared makes
+    /// Hearts==Diamonds and Spades==Clubs; otherwise exact match.
     pub fn has_suit(&self, suit: Suit, flags: &RuleFlags) -> bool {
         if self.is_stone() {
             return false;
         }
-        if self.enhancement == Enhancement::Wild {
+        if self.enhancement == Enhancement::Wild && !self.debuffed {
             return true;
         }
         if flags.smeared {
