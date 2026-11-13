@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "balatro-rl"
+version = "0.1.0"
+description = "Headless Balatro rules simulator (Rust) + RL team training"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.0"]
+
+[dependency-groups]
+dev = ["maturin>=1.9,<2", "pytest>=8", "ruff>=0.8"]
+
+[tool.maturin]
+manifest-path = "crates/balatro-py/Cargo.toml"
+python-source = "python"
+module-name = "balatro_rl._engine"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests_py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]

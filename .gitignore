@@ -1,0 +1,125 @@
+# ==========================================================================
+# council-of-jokers — .gitignore
+# Principle: commit source, docs and small configs only. Never commit build
+# outputs, environments, secrets, training artifacts or any game files.
+# ==========================================================================
+
+# ---------- Secrets & credentials (never commit) ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+*secret*
+*secrets*
+*credential*
+*credentials*
+*.token
+.token
+token.json
+token.txt
+*_token.json
+*_token.txt
+.netrc
+.pypirc
+.npmrc
+id_rsa*
+id_ed25519*
+*.gpg
+wandb/settings
+
+# ---------- Proprietary game files (never commit; see notes.md §1) ----------
+# The simulator models mechanics from public descriptions only.
+*.love
+Balatro*
+!**/balatro_*
+!**/balatro-*
+game_files/
+game_assets/
+*.exe
+*.dll
+*.dylib
+
+# ---------- Rust ----------
+/target/
+**/target/
+*.rs.bk
+*.profraw
+*.profdata
+perf.data*
+flamegraph*.svg
+
+# ---------- Python ----------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.lcov
+.ipynb_checkpoints/
+
+# ---------- Training artifacts & data (large / regenerable) ----------
+runs/
+logs/
+wandb/
+mlruns/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.npz
+*.npy
+*.parquet
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+replays/
+datasets/
+
+# ---------- Local archives & scratch ----------
+snapshots/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+tmp/
+scratch/
+*.log
+
+# ---------- Editors / OS ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------- Local agent settings (personal, may contain paths/permissions) ----------
+.claude/settings.local.json

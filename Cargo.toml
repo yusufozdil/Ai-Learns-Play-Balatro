@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/balatro-core", "crates/balatro-py"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Release speed + debug symbols, for perf/flamegraph.
+[profile.profiling]
+inherits = "release"
+debug = true
+
+# Tests run in an optimized dev profile so exhaustive tests (e.g. all 2.6M 5-card hands) stay fast.
+[profile.test]
+opt-level = 2
