@@ -119,8 +119,8 @@ pub struct ConsumableDef {
     /// [`MAX_CONSUMABLE_TARGETS`].
     pub max_targets: u8,
     /// Needs a drawn hand even without targets (Sigil, Ouija, Familiar, Grim, Incantation,
-    /// Immolate). Implied when `max_targets > 0`. Such cards are usable only in `Phase::Play`
-    /// (Phase 5 adds Arcana/Spectral packs).
+    /// Immolate). Implied when `max_targets > 0`. Such cards are usable only while a hand is
+    /// dealt: `Phase::Play` and Arcana/Spectral packs.
     pub needs_hand: bool,
     /// Extra usability condition (free slot, eligible joker, money, ...). `None` = always.
     pub can_use: Option<CanUseFn>,

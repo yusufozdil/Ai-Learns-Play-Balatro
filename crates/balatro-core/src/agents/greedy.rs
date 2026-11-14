@@ -1,5 +1,7 @@
 //! Greedy agent: plays the highest-scoring hand, discards toward a flush/straight or keeps the
-//! scoring cards of its best hand when the blind cannot be beaten this turn.
+//! scoring cards of its best hand when the blind cannot be beaten this turn. In the market it buys
+//! and opens packs with simple value rules (`shop_action` / `pack_action`); it always selects the
+//! next blind.
 
 use super::Agent;
 use crate::actions::Action;

@@ -6,7 +6,7 @@
 //! Rule changers (Pareidolia, Splash, Shortcut) only set `Modifiers::rules` flags; hand
 //! evaluation, `ctx.is_face` and the scoring set honour them. Creators (8 Ball, Superposition,
 //! Seance, Vagabond, Sixth Sense, Riff-Raff, Marble, DNA) queue `SideEffect`s; the game layer
-//! checks slot room when applying them (consumable slots from Phase 4, joker slots from Phase 5).
+//! checks slot room when applying them (consumable and joker slots alike).
 
 use crate::card::Card;
 use crate::content::jokers::JokerId;
@@ -281,7 +281,7 @@ fn seance_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 // --- Riff-Raff: https://balatrowiki.org/w/Riff-Raff -----------------------------------------
 // When a blind is selected (any kind), create 2 Common Jokers as joker-slot room allows (the
-// game layer drops what does not fit; random jokers exist from Phase 5).
+// game layer drops what does not fit).
 const RIFF_RAFF_JOKERS: usize = 2;
 
 fn riff_raff_blind_select(_: &mut JokerInstance, ctx: &mut EventCtx<'_>) {

@@ -121,8 +121,8 @@ pub fn try_boss_def(id: BossId) -> Option<&'static BossDef> {
     BOSS_REGISTRY[id.index()]
 }
 
-/// Number of consumable definitions of `id` across all tables (must be 0 or 1; 1 once Phase 4
-/// is complete).
+/// Number of consumable definitions of `id` across all tables (always 1: every consumable is
+/// defined).
 pub fn consumable_def_count(id: ConsumableId) -> usize {
     CONSUMABLE_SOURCES
         .iter()
@@ -131,7 +131,7 @@ pub fn consumable_def_count(id: ConsumableId) -> usize {
         .count()
 }
 
-/// Number of boss definitions of `id` (must be 0 or 1; 1 once Phase 4 is complete).
+/// Number of boss definitions of `id` (always 1: every boss is defined).
 pub fn boss_def_count(id: BossId) -> usize {
     BOSS_SOURCES
         .iter()
@@ -154,7 +154,7 @@ pub fn try_tag_def(id: TagId) -> Option<&'static TagDef> {
     TAG_REGISTRY[id.index()]
 }
 
-/// Number of voucher definitions of `id` (must be 0 or 1; 1 once Phase 5B/5C is complete).
+/// Number of voucher definitions of `id` (always 1: every one is defined).
 pub fn voucher_def_count(id: VoucherId) -> usize {
     VOUCHER_SOURCES
         .iter()
@@ -163,7 +163,7 @@ pub fn voucher_def_count(id: VoucherId) -> usize {
         .count()
 }
 
-/// Number of tag definitions of `id` (must be 0 or 1; 1 once Phase 5B/5C is complete).
+/// Number of tag definitions of `id` (always 1: every one is defined).
 pub fn tag_def_count(id: TagId) -> usize {
     TAG_SOURCES
         .iter()

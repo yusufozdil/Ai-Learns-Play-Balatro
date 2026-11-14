@@ -79,7 +79,12 @@ impl Game {
         let s = &mut self.state;
         packs::open(s, spec, origin);
         let kind = spec.kind;
-        fire_paid(s, &mut self.fx, |inp| hooks::fire_pack_open(inp, kind));
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_pack_open.is_some(),
+            |inp| hooks::fire_pack_open(inp, kind),
+        );
         self.resolve_fx();
     }
 
@@ -124,7 +129,12 @@ impl Game {
             s.shop.rerolls += 1;
         }
         shop::reroll_cards(s);
-        fire_paid(s, &mut self.fx, hooks::fire_reroll);
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_reroll.is_some(),
+            hooks::fire_reroll,
+        );
         self.resolve_fx();
     }
 
@@ -183,7 +193,12 @@ impl Game {
             .as_ref()
             .map_or(PackKind::Standard, |p| p.spec.kind);
         let s = &mut self.state;
-        fire_paid(s, &mut self.fx, |inp| hooks::fire_pack_skip(inp, kind));
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_pack_skip.is_some(),
+            |inp| hooks::fire_pack_skip(inp, kind),
+        );
         self.resolve_fx();
         self.close_pack();
     }

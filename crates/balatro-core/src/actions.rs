@@ -4,7 +4,7 @@
 //! Contract: [`validate`] is pure and is the single gate of `Game::step`; an action that passes
 //! it is executed without further failure, and an action that fails it leaves the state
 //! untouched. [`legal_actions`] lists exactly the candidate actions that pass [`validate`]
-//! (tested). Phase 2C replaces the enumeration with a fixed-size action codec and masks.
+//! (tested). The fixed-size action codec and masks for the env are built on top of it (Phase 8).
 
 use crate::blinds::BlindKind;
 use crate::boss;
@@ -18,6 +18,7 @@ use crate::shop::{self, ShopCard, ShopCardKind};
 use crate::state::GameState;
 use crate::voucher::BossReroll;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use thiserror::Error;
 
 /// Every decision a player can make (prd.md §3.1). Indices are positions (hand position, joker
@@ -567,18 +568,125 @@ pub fn validate_use_def(
     Ok(())
 }
 
-/// Every card selection with 1..=5 cards over a hand of `hand_len` cards, ascending.
-fn push_selections(hand_len: usize, out: &mut Vec<u16>) {
+/// Precomputed selection tables (built once).
+struct SelectionTables {
+    /// Every mask with 1..=5 bits over 16 cards, ascending.
+    masks: Vec<u16>,
+    /// `Action::Play(m)` for every mask (same order).
+    play: Vec<Action>,
+    /// `Action::Discard(m)` for every mask (same order).
+    discard: Vec<Action>,
+}
+
+fn tables() -> &'static SelectionTables {
+    static TABLE: OnceLock<SelectionTables> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let masks: Vec<u16> = (1u32..=u32::from(u16::MAX))
+            .filter(|m| m.count_ones() <= MAX_SELECTED_CARDS)
+            .map(|m| m as u16)
+            .collect();
+        SelectionTables {
+            play: masks.iter().map(|&m| Action::Play(m)).collect(),
+            discard: masks.iter().map(|&m| Action::Discard(m)).collect(),
+            masks,
+        }
+    })
+}
+
+/// Number of table entries (a prefix) that fit a hand of `hand_len` cards. The masks of a shorter
+/// hand are a prefix of the masks of a longer one, so one table serves every hand size.
+fn prefix_len(t: &SelectionTables, hand_len: usize) -> usize {
     let n = hand_len.min(16);
     if n == 0 {
-        return;
+        return 0;
     }
-    let limit: u32 = 1 << n;
-    for m in 1..limit {
-        if m.count_ones() <= MAX_SELECTED_CARDS {
-            out.push(m as u16);
+    let limit = 1u32 << n;
+    t.masks.partition_point(|&m| u32::from(m) < limit)
+}
+
+/// Every card selection with 1..=5 cards over a hand of `hand_len` cards, ascending.
+fn selections(hand_len: usize) -> &'static [u16] {
+    let t = tables();
+    &t.masks[..prefix_len(t, hand_len)]
+}
+
+/// The legal `Play` / `Discard` card selections of the current state, described without
+/// materialising the actions: the legal masks are `masks` (ascending; only those containing
+/// `forced`, if set), offered as `Play` when `can_play` and as `Discard` when `can_discard`.
+/// `legal_actions` lists the `Play` masks, then the `Discard` masks, in this order.
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionSpace {
+    /// All 1..=5 card selections over the hand, ascending.
+    pub masks: &'static [u16],
+    /// Hand position every selection must contain (Cerulean Bell), if any.
+    pub forced: Option<u8>,
+    /// `Play(mask)` is legal for the masks.
+    pub can_play: bool,
+    /// `Discard(mask)` is legal for the masks.
+    pub can_discard: bool,
+}
+
+impl SelectionSpace {
+    /// `mask` is one of the legal selections (before the play/discard split).
+    #[inline]
+    pub fn allows(&self, mask: u16) -> bool {
+        self.forced.is_none_or(|p| (mask >> p) & 1 == 1)
+    }
+
+    /// The legal masks, ascending.
+    pub fn iter(&self) -> impl Iterator<Item = u16> + '_ {
+        self.masks.iter().copied().filter(|&m| self.allows(m))
+    }
+
+    /// Number of legal masks.
+    pub fn mask_count(&self) -> usize {
+        match self.forced {
+            None => self.masks.len(),
+            Some(_) => self.iter().count(),
         }
     }
+
+    /// Number of legal `Play` plus `Discard` actions.
+    pub fn len(&self) -> usize {
+        (usize::from(self.can_play) + usize::from(self.can_discard)) * self.mask_count()
+    }
+
+    /// No Play/Discard action is legal.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Play/Discard selection space of `state` (empty outside `Phase::Play`).
+pub fn selection_space(state: &GameState) -> SelectionSpace {
+    if state.phase != Phase::Play || state.is_terminal() {
+        return SelectionSpace {
+            masks: &[],
+            forced: None,
+            can_play: false,
+            can_discard: false,
+        };
+    }
+    SelectionSpace {
+        masks: selections(state.deck.hand.len()),
+        forced: boss::forced_position(state)
+            .filter(|&p| p < 16)
+            .map(|p| p as u8),
+        can_play: state.hands_left > 0,
+        can_discard: state.discards_left > 0,
+    }
+}
+
+/// Number of legal actions, without building the list for the Play/Discard selections. Equals
+/// `legal_actions(..).len()`. `scratch` holds the (few) other actions; it is cleared.
+pub fn legal_count_with(state: &GameState, scratch: &mut Vec<Action>) -> usize {
+    legal_actions_impl(state, scratch, false);
+    scratch.len() + selection_space(state).len()
+}
+
+/// [`legal_count_with`] with a temporary buffer.
+pub fn legal_count(state: &GameState) -> usize {
+    legal_count_with(state, &mut Vec::new())
 }
 
 /// Append every legal action of `state` to `out` (cleared first). Order: phase actions, then
@@ -592,9 +700,14 @@ fn push_selections(hand_len: usize, out: &mut Vec<u16>) {
 /// gets every selection whose size is in `min_targets..=max_targets` (at most
 /// `MAX_CONSUMABLE_TARGETS` = 3: 92 masks for 8 cards) that passes `validate`. Cerulean Bell
 /// restricts Play/Discard masks to those containing the forced card (not consumable targets).
-/// Skeleton: exhaustive enumeration (218 Play + 218 Discard masks for 8 cards); Phase 8
-/// provides the fixed-size codec/masks for the env.
+/// Exhaustive enumeration (218 Play + 218 Discard masks for 8 cards); envs that only need a count
+/// or a mask use [`legal_count`] / [`selection_space`] and never build the list.
 pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
+    legal_actions_impl(state, out, true);
+}
+
+/// [`legal_actions`]; with `with_selections == false` the Play/Discard actions are left out.
+fn legal_actions_impl(state: &GameState, out: &mut Vec<Action>, with_selections: bool) {
     out.clear();
     if state.is_terminal() {
         return;
@@ -635,24 +748,37 @@ pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
             consumable_actions(state, &[], out);
         }
         Phase::Play => {
-            let mut masks = Vec::new();
-            push_selections(state.deck.hand.len(), &mut masks);
-            let forced = boss::forced_position(state).filter(|&p| p < 16);
-            let ok = |m: u16| forced.is_none_or(|p| (m >> p) & 1 == 1);
-            if state.hands_left > 0 {
-                out.extend(masks.iter().filter(|&&m| ok(m)).map(|&m| Action::Play(m)));
-            }
-            if state.discards_left > 0 {
-                out.extend(
-                    masks
-                        .iter()
-                        .filter(|&&m| ok(m))
-                        .map(|&m| Action::Discard(m)),
-                );
+            let masks = selections(state.deck.hand.len());
+            if with_selections {
+                let t = tables();
+                let k = masks.len();
+                let forced = boss::forced_position(state).filter(|&p| p < 16);
+                out.reserve(k * 2);
+                if forced.is_none() {
+                    if state.hands_left > 0 {
+                        out.extend_from_slice(&t.play[..k]);
+                    }
+                    if state.discards_left > 0 {
+                        out.extend_from_slice(&t.discard[..k]);
+                    }
+                } else {
+                    let ok = |m: u16| forced.is_none_or(|p| (m >> p) & 1 == 1);
+                    if state.hands_left > 0 {
+                        out.extend(masks.iter().filter(|&&m| ok(m)).map(|&m| Action::Play(m)));
+                    }
+                    if state.discards_left > 0 {
+                        out.extend(
+                            masks
+                                .iter()
+                                .filter(|&&m| ok(m))
+                                .map(|&m| Action::Discard(m)),
+                        );
+                    }
+                }
             }
             sell(out);
             moves(out);
-            consumable_actions(state, &masks, out);
+            consumable_actions(state, masks, out);
         }
         Phase::Shop => {
             out.push(Action::EndShop);
@@ -678,8 +804,7 @@ pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
             consumable_actions(state, &[], out);
         }
         Phase::PackOpen => {
-            let mut masks = Vec::new();
-            push_selections(state.deck.hand.len(), &mut masks);
+            let masks = selections(state.deck.hand.len());
             if let Some(pack) = &state.pack {
                 for (i, item) in pack.items.iter().enumerate() {
                     let (Some(item), Ok(index)) = (item, u8::try_from(i)) else {
@@ -699,7 +824,7 @@ pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
                                     u32::from(def.min_targets),
                                     u32::from(def.max_targets.min(MAX_CONSUMABLE_TARGETS)),
                                 );
-                                for &m in &masks {
+                                for &m in masks {
                                     let k = m.count_ones();
                                     if k >= lo && k <= hi && validate_pick(state, index, m).is_ok()
                                     {
@@ -719,7 +844,7 @@ pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
             out.push(Action::SkipPack);
             sell(out);
             moves(out);
-            consumable_actions(state, &masks, out);
+            consumable_actions(state, masks, out);
         }
         Phase::GameOver | Phase::Won => {}
     }

@@ -923,6 +923,15 @@ enum Reach {
     Except(usize),
 }
 
+/// Some joker in the area has the hook `has` selects. A superset of the jokers an event can reach
+/// (debuffed and doomed jokers included; a copier only runs the hooks of jokers in the area), so
+/// `false` means the event would do nothing.
+pub fn any_hook(jokers: &[JokerInstance], has: fn(&Hooks) -> bool) -> bool {
+    jokers
+        .iter()
+        .any(|j| try_def(j.id).is_some_and(|d| has(&d.hooks)))
+}
+
 /// Generic event dispatcher: left to right, skipping debuffed and doomed jokers; resolves
 /// copiers when `copies` is true; runs each hook on a scratch copy of the source joker's state
 /// and writes it back unless the hook ran as a copy.

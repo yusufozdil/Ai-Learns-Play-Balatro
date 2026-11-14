@@ -246,7 +246,7 @@ fn aura(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Wraith: https://balatrowiki.org/w/Wraith ---------------------------------------------------
-// Random Rare joker (dropped until Phase 5) and money set to $0 (also when negative,
+// Random Rare joker and money set to $0 (also when negative,
 // notes.md §4.1b). Needs a free joker slot.
 const WRAITH_MONEY: i32 = 0;
 
@@ -256,7 +256,7 @@ fn wraith(ctx: &mut UseCtx<'_>) {
 }
 
 // --- The Soul: https://balatrowiki.org/w/The_Soul -----------------------------------------------
-// Random Legendary joker (dropped until Phase 5). Needs a free joker slot.
+// Random Legendary joker. Needs a free joker slot.
 
 fn the_soul(ctx: &mut UseCtx<'_>) {
     ctx.create_joker(Some(Rarity::Legendary));

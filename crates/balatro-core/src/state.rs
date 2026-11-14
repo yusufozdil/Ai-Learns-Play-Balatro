@@ -104,7 +104,7 @@ pub struct GameStats {
     /// Best single-hand score this run.
     pub best_hand: f64,
     /// Side effects that were not applied because they have no effect to run yet. Must stay 0
-    /// (Phase 5 implemented every `SideEffect`); a non-zero value is an engine bug.
+    /// (every `SideEffect` is implemented); a non-zero value is an engine bug.
     pub effects_unimplemented: u32,
     /// Side effects that produced nothing in normal play: no free slot, eternal target, no joker
     /// left in the pool, or past the cascade cap.
@@ -549,6 +549,29 @@ impl GameState {
     /// Count conventions (hooks.md §5.3) hold if the caller pays the action first: during
     /// scoring `hands_left` is already decremented and the play counters include the hand.
     pub fn run_view_with<'a>(&self, consumables: &'a [ConsumableInstance]) -> RunView<'a> {
+        self.run_view_deck(consumables, self.deck_counts())
+    }
+
+    /// [`GameState::run_view_with`] for the game layer's hook calls: with no joker in the area
+    /// nothing reads the view's deck counts, so the full-deck count is skipped (they stay at
+    /// their defaults).
+    pub(crate) fn run_view_for_hooks<'a>(
+        &self,
+        consumables: &'a [ConsumableInstance],
+    ) -> RunView<'a> {
+        let deck = if self.jokers.is_empty() {
+            DeckCounts::default()
+        } else {
+            self.deck_counts()
+        };
+        self.run_view_deck(consumables, deck)
+    }
+
+    fn run_view_deck<'a>(
+        &self,
+        consumables: &'a [ConsumableInstance],
+        deck: DeckCounts,
+    ) -> RunView<'a> {
         RunView {
             money: self.money,
             ante: u32::try_from(self.ante).unwrap_or(0),
@@ -567,7 +590,7 @@ impl GameState {
             joker_slots: self.joker_capacity(),
             consumable_slots: self.consumable_capacity(),
             consumables,
-            deck: self.deck_counts(),
+            deck,
             rules: self.mods.rules,
             prob_mult: self.mods.prob_mult,
             observatory: self.shop_mods.observatory,
@@ -720,7 +743,7 @@ fn clamp_delta(base: u32, delta: i32, lo: u32, hi: u32) -> u32 {
 }
 
 /// Phase transitions allowed by the state machine (prd.md §3.1). `from == to` is allowed for
-/// actions that stay in their phase (Play/Discard/Sell/Skip). PackOpen edges are for Phase 5.
+/// actions that stay in their phase (Play/Discard/Sell/Skip). PackOpen edges are the market packs and pack tags.
 pub fn transition_allowed(from: Phase, to: Phase) -> bool {
     use Phase::*;
     if from == to {
@@ -730,7 +753,7 @@ pub fn transition_allowed(from: Phase, to: Phase) -> bool {
         (from, to),
         (BlindSelect, Play)
             | (BlindSelect, GameOver) // nothing left to draw at round start
-            | (BlindSelect, PackOpen) // pack tag opened on skip (Phase 5)
+            | (BlindSelect, PackOpen) // pack tag opened on skip
             | (Play, Shop)
             | (Play, GameOver)
             | (Play, Won)

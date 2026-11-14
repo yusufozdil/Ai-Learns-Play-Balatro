@@ -3,7 +3,7 @@
 //! These jokers act on the game layer rather than on the score: they emit `DisableBoss`,
 //! `PreventDeath` and `CopyJoker` side effects or set passive flags that later systems read
 //! (`RuleFlags::smeared` for hand evaluation and suit tests, `Modifiers::allow_duplicates` for
-//! the Phase 5 shop/pack generators).
+//! the shop/pack generators).
 //!
 //! Follow `docs/design/hooks.md`. Each block cites its wiki page; numbers are named constants
 //! next to the joker. Tests: `tests/jokers_wave5.rs`.
@@ -121,7 +121,7 @@ fn smeared_modifiers(_: &JokerInstance, m: &mut Modifiers) {
 
 // --- Showman: https://balatrowiki.org/w/Showman ---------------------------------------------
 // Joker, Tarot, Planet and Spectral cards may appear multiple times (shop, packs, and card
-// generators such as Riff-raff / The Emperor). Read by Phase 5 via `Modifiers::allow_duplicates`.
+// generators such as Riff-raff / The Emperor). Read by the shop/pack generators via `Modifiers::allow_duplicates`.
 
 fn showman_modifiers(_: &JokerInstance, m: &mut Modifiers) {
     m.allow_duplicates = true;

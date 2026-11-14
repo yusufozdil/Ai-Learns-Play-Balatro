@@ -312,7 +312,7 @@ fn card_sharp_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 // --- Red Card: https://balatrowiki.org/w/Red_Card ------------------------------------------
 // value = current +mult (starts 0). +3 each time a Booster Pack is skipped (once per pack, even
-// Mega); not retroactive. `fire_pack_skip` is called once per skip by the pack system (Phase 5).
+// Mega); not retroactive. `fire_pack_skip` is called once per skip by the pack system.
 const RED_CARD_GAIN: f64 = 3.0;
 
 fn red_card_skip(j: &mut JokerInstance, _: &mut EventCtx<'_>, _: PackKind) {

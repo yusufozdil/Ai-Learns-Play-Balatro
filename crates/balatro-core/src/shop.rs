@@ -31,6 +31,7 @@ use crate::packs::{PackSize, PackSpec};
 use crate::rng::{GameRng, RngKey};
 use crate::state::GameState;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 /// What a shop card slot holds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -237,11 +238,21 @@ fn joker_candidates(
     allow_duplicates: bool,
 ) -> Vec<JokerId> {
     let extinct = s.has_flag(RunFlag::GrosMichelExtinct);
-    JokerId::ALL
-        .into_iter()
+    // Per-rarity id lists (id order), built once: no scan of the whole registry per roll.
+    static BY_RARITY: OnceLock<[Vec<JokerId>; Rarity::COUNT]> = OnceLock::new();
+    let table = BY_RARITY.get_or_init(|| {
+        std::array::from_fn(|i| {
+            JokerId::ALL
+                .into_iter()
+                .filter(|&id| try_def(id).is_some_and(|d| d.rarity.index() == i))
+                .collect()
+        })
+    });
+    table[rarity.index()]
+        .iter()
+        .copied()
         .filter(|&id| {
-            try_def(id).is_some_and(|d| d.rarity == rarity)
-                && joker_available(id, extinct)
+            joker_available(id, extinct)
                 && (allow_duplicates
                     || (!extra_taken.contains(&id) && !s.jokers.iter().any(|j| j.id == id)))
         })

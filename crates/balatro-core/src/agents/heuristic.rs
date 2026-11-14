@@ -71,8 +71,9 @@ impl Strategy {
 
     /// The hand type with the largest target weight.
     pub fn top_target(&self) -> HandType {
-        let mut best = HandType::Pair;
-        let mut w = -1.0;
+        // First maximum in `HandType::ALL` order (weights are never negative).
+        let mut best = HandType::ALL[0];
+        let mut w = self.target_hands[best.index()];
         for h in HandType::ALL {
             if self.target_hands[h.index()] > w {
                 w = self.target_hands[h.index()];

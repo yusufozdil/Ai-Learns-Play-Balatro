@@ -132,7 +132,7 @@ impl Deck {
             c.face_down = false;
         }
         // Canonical order first so the shuffle does not depend on prior pile history.
-        self.draw_pile.sort_by_key(|c| c.uid);
+        self.draw_pile.sort_unstable_by_key(|c| c.uid);
         rng.shuffle(RngKey::Deck, &mut self.draw_pile);
     }
 
@@ -157,7 +157,7 @@ impl Deck {
     /// Sort hand: rank descending, then suit (Spades, Hearts, Clubs, Diamonds), then uid;
     /// Stone cards last.
     pub fn sort_hand(&mut self) {
-        self.hand.sort_by_key(sort_key);
+        self.hand.sort_unstable_by_key(sort_key);
     }
 
     /// Remove and return the hand cards selected by `mask` (bit i = position i), in left-to-right
@@ -171,15 +171,18 @@ impl Deck {
             return Err(DeckError::MaskOutOfRange { mask, hand_len: n });
         }
         let mut taken = Vec::with_capacity(mask.count_ones() as usize);
-        let mut kept = Vec::with_capacity(n);
-        for (i, c) in self.hand.drain(..).enumerate() {
+        // Compact the kept cards in place (order preserved).
+        let mut kept = 0;
+        for i in 0..n {
+            let c = self.hand[i];
             if i < 16 && (mask >> i) & 1 == 1 {
                 taken.push(c);
             } else {
-                kept.push(c);
+                self.hand[kept] = c;
+                kept += 1;
             }
         }
-        self.hand = kept;
+        self.hand.truncate(kept);
         Ok(taken)
     }
 

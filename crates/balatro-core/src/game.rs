@@ -25,7 +25,8 @@ use crate::economy::{self, CashOut, CashOutInput};
 use crate::enums::{Edition, HandType, Phase, Seal};
 use crate::hand_eval;
 use crate::hooks::{
-    self, DiscardInfo, EventInput, EventResult, RoundEndInfo, SellTarget, SideEffect, SoldItem,
+    self, DiscardInfo, EventInput, EventResult, Hooks, RoundEndInfo, SellTarget, SideEffect,
+    SoldItem,
 };
 use crate::joker::JokerInstance;
 use crate::rng::RngKey;
@@ -187,6 +188,25 @@ impl Game {
         actions::legal_actions(&self.state, out);
     }
 
+    /// Number of legal actions (`legal_actions().len()`) without building the Play/Discard part
+    /// of the list. `scratch` is a reusable buffer for the remaining actions (cleared).
+    pub fn legal_count(&self, scratch: &mut Vec<Action>) -> usize {
+        actions::legal_count_with(&self.state, scratch)
+    }
+
+    /// The legal Play/Discard card selections as a compact description (no `Action`s built); see
+    /// [`actions::SelectionSpace`]. Empty outside `Phase::Play`.
+    pub fn selection_space(&self) -> actions::SelectionSpace {
+        actions::selection_space(&self.state)
+    }
+
+    /// Start a new run in place (same as `*self = Game::new(seed, config)`, keeping the scratch
+    /// buffers of the scorer and the effect queue).
+    pub fn reset_with_seed(&mut self, seed: u64, config: GameConfig) {
+        self.state = GameState::new(seed, config);
+        self.fx.clear();
+    }
+
     /// Check an action without applying it.
     pub fn validate(&self, action: Action) -> Result<(), ActionError> {
         actions::validate(&self.state, action)
@@ -221,7 +241,7 @@ impl Game {
         let eval = hand_eval::evaluate(&played, &s.mods.rules);
         let ht = eval.hand_type;
         // Same counters `play` has paid by the time scoring runs.
-        let mut view = s.run_view_with(&s.consumables);
+        let mut view = s.run_view_for_hooks(&s.consumables);
         view.hands_left = view.hands_left.saturating_sub(1);
         view.hands_played_round += 1;
         view.hands_played_run += 1;
@@ -369,7 +389,12 @@ impl Game {
         s.jokers.push(j);
         s.refresh_modifiers();
         let slot = s.jokers.len() - 1;
-        fire_paid(s, &mut self.fx, |inp| hooks::fire_acquire(inp, slot));
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_acquire.is_some(),
+            |inp| hooks::fire_acquire(inp, slot),
+        );
         self.resolve_fx();
         if self.state.phase == Phase::Play {
             boss::refresh_debuffs(&mut self.state);
@@ -377,7 +402,7 @@ impl Game {
         Some(slot)
     }
 
-    /// Add a consumable (packs/shop in Phase 5, tests). Returns its slot, or `None` without room
+    /// Add a consumable (tests and tools; the market and packs add theirs internally). Returns its slot, or `None` without room
     /// (Negative ones always fit).
     pub fn add_consumable(&mut self, c: ConsumableInstance) -> Option<usize> {
         let s = &mut self.state;
@@ -405,7 +430,12 @@ impl Game {
         // for joker `on_blind_select` (Chicot's disable reverts the set-up).
         s.phase = Phase::Play;
         boss::blind_start(s);
-        fire_paid(s, &mut self.fx, hooks::fire_blind_select);
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_blind_select.is_some(),
+            hooks::fire_blind_select,
+        );
         self.resolve_fx();
         let s = &mut self.state;
         tag::fire_round_start(s, &mut self.fx);
@@ -413,7 +443,12 @@ impl Game {
         let s = &mut self.state;
         boss::refresh_debuffs(s);
         boss::draw(s, DrawKind::RoundStart);
-        fire_paid(s, &mut self.fx, hooks::fire_first_hand_drawn);
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_first_hand_drawn.is_some(),
+            hooks::fire_first_hand_drawn,
+        );
         self.resolve_fx();
         self.settle(info, DrawKind::Refill);
     }
@@ -433,7 +468,12 @@ impl Game {
         tag::gain(s, tag, hand, &mut self.fx);
         self.resolve_fx();
         let s = &mut self.state;
-        fire_paid(s, &mut self.fx, hooks::fire_blind_skip);
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_blind_skip.is_some(),
+            hooks::fire_blind_skip,
+        );
         self.resolve_fx();
         advance_blind(&mut self.state);
         // Pack tags open their pack right away; the last one returns to BlindSelect.
@@ -483,7 +523,7 @@ impl Game {
         }
 
         let s = &mut self.state;
-        let view = s.run_view_with(&s.consumables);
+        let view = s.run_view_for_hooks(&s.consumables);
         let r = self.scorer.score_hand(ScoreInput {
             played: &mut s.deck.played,
             held: &s.deck.hand,
@@ -527,7 +567,12 @@ impl Game {
             hand_type: hand_eval::evaluate(&cards, &s.mods.rules).hand_type,
             forced: true,
         };
-        fire_paid(s, &mut self.fx, |inp| hooks::fire_discard(inp, &d));
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_discard.is_some(),
+            |inp| hooks::fire_discard(inp, &d),
+        );
         push_purple_seals(&cards, &mut self.fx);
         self.resolve_fx();
     }
@@ -548,7 +593,12 @@ impl Game {
             hand_type,
             forced: false,
         };
-        fire_paid(s, &mut self.fx, |inp| hooks::fire_discard(inp, &d));
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_discard.is_some(),
+            |inp| hooks::fire_discard(inp, &d),
+        );
         push_purple_seals(&cards, &mut self.fx);
         self.resolve_fx();
         self.settle(info, DrawKind::AfterDiscard);
@@ -562,10 +612,18 @@ impl Game {
         };
         let price = sold.sell_value;
         // Hooks run before the joker is removed (hooks.md §15).
-        fire_paid(s, &mut self.fx, |inp| hooks::fire_sell_self(inp, slot));
-        fire_paid(s, &mut self.fx, |inp| {
-            hooks::fire_sell_other(inp, &SoldItem::Joker(sold), Some(slot))
-        });
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_sell_self.is_some(),
+            |inp| hooks::fire_sell_self(inp, slot),
+        );
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_sell_other.is_some(),
+            |inp| hooks::fire_sell_other(inp, &SoldItem::Joker(sold), Some(slot)),
+        );
         if let Some(pos) = s.jokers.iter().position(|j| j.uid == sold.uid) {
             s.jokers.remove(pos);
         }
@@ -612,9 +670,12 @@ impl Game {
         let s = &mut self.state;
         record_use(s, used.id);
         info.used = Some(used.id);
-        fire_paid(s, &mut self.fx, |inp| {
-            hooks::fire_consumable_used(inp, &used)
-        });
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_consumable_used.is_some(),
+            |inp| hooks::fire_consumable_used(inp, &used),
+        );
         self.resolve_fx();
         let s = &mut self.state;
         if s.phase == Phase::Play {
@@ -632,9 +693,12 @@ impl Game {
         let Some(&sold) = s.consumables.get(slot) else {
             return; // rejected by `validate`
         };
-        fire_paid(s, &mut self.fx, |inp| {
-            hooks::fire_sell_other(inp, &SoldItem::Consumable(sold), None)
-        });
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_sell_other.is_some(),
+            |inp| hooks::fire_sell_other(inp, &SoldItem::Consumable(sold), None),
+        );
         // Event effects are only queued, so `slot` still names the sold card.
         s.consumables.remove(slot);
         s.money = s.money.saturating_add(sold.sell_value);
@@ -647,7 +711,12 @@ impl Game {
 
     fn end_shop(&mut self) {
         let s = &mut self.state;
-        fire_paid(s, &mut self.fx, hooks::fire_shop_exit);
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_shop_exit.is_some(),
+            hooks::fire_shop_exit,
+        );
         self.resolve_fx();
         let s = &mut self.state;
         s.shop = ShopState::default();
@@ -693,7 +762,7 @@ impl Game {
         let last = s.last_hand.unwrap_or(HandType::HighCard);
         // 1. Cards held at round end: Gold card money, Blue Seal planets (Red Seal / Mime
         //    retrigger them). Paid now, so it counts for interest (notes.md §4.1c).
-        let view = s.run_view_with(&s.consumables);
+        let view = s.run_view_for_hooks(&s.consumables);
         let held_money =
             self.scorer
                 .round_end_held(&s.deck.hand, &mut s.jokers, &view, &mut s.rng, last);
@@ -715,7 +784,12 @@ impl Game {
         if !won && !out_of_cards {
             end.saved = round_end_saves(s, &end);
         }
-        let joker_money = fire(s, &mut self.fx, |inp| hooks::fire_round_end(inp, &end));
+        let joker_money = fire(
+            s,
+            &mut self.fx,
+            |h| h.on_round_end.is_some(),
+            |inp| hooks::fire_round_end(inp, &end),
+        );
         let rep = self.resolve_fx();
         let saved = !won && !out_of_cards && rep.prevent_death;
         debug_assert_eq!(saved, end.saved);
@@ -785,7 +859,12 @@ impl Game {
         self.fx.extend(tag_fx);
         self.resolve_fx();
         let s = &mut self.state;
-        fire_paid(s, &mut self.fx, hooks::fire_shop_enter);
+        fire_paid(
+            s,
+            &mut self.fx,
+            |h| h.on_shop_enter.is_some(),
+            hooks::fire_shop_enter,
+        );
         self.resolve_fx();
     }
 
@@ -808,7 +887,7 @@ fn round_end_saves(s: &GameState, end: &RoundEndInfo) -> bool {
     let mut jokers = s.jokers.clone();
     let mut rng = s.rng.clone();
     let mut fx = Vec::new();
-    let view = s.run_view_with(&s.consumables);
+    let view = s.run_view_for_hooks(&s.consumables);
     hooks::fire_round_end(
         EventInput {
             jokers: &mut jokers,
@@ -827,9 +906,15 @@ fn round_end_saves(s: &GameState, end: &RoundEndInfo) -> bool {
 pub(crate) fn fire(
     s: &mut GameState,
     fx: &mut Vec<SideEffect>,
+    has_hook: fn(&Hooks) -> bool,
     f: impl FnOnce(EventInput<'_>) -> EventResult,
 ) -> i32 {
-    let view = s.run_view_with(&s.consumables);
+    // No joker can react (copiers only run hooks of jokers in the area): skip building the run
+    // view (a full-deck count) and the dispatch, which would do nothing.
+    if !hooks::any_hook(&s.jokers, has_hook) {
+        return 0;
+    }
+    let view = s.run_view_for_hooks(&s.consumables);
     let r = f(EventInput {
         jokers: &mut s.jokers,
         run: &view,
@@ -845,9 +930,10 @@ pub(crate) fn fire(
 pub(crate) fn fire_paid(
     s: &mut GameState,
     fx: &mut Vec<SideEffect>,
+    has_hook: fn(&Hooks) -> bool,
     f: impl FnOnce(EventInput<'_>) -> EventResult,
 ) {
-    let d = fire(s, fx, f);
+    let d = fire(s, fx, has_hook, f);
     s.money = s.money.saturating_add(d);
 }
 
@@ -878,7 +964,7 @@ pub(crate) fn gather_deck(s: &mut GameState) {
         c.debuffed = false;
         c.face_down = false;
     }
-    d.draw_pile.sort_by_key(|c| c.uid);
+    d.draw_pile.sort_unstable_by_key(|c| c.uid);
 }
 
 /// Apply a side-effect queue to the state, in order (hooks.md §6, §15), then fire the follow-up
@@ -909,16 +995,29 @@ pub fn apply_side_effects(s: &mut GameState, effects: &[SideEffect]) -> EffectRe
         }
         s.refresh_modifiers();
         if !destroyed.is_empty() {
-            fire_paid(s, &mut pending, |inp| {
-                hooks::fire_cards_destroyed(inp, &destroyed)
-            });
+            fire_paid(
+                s,
+                &mut pending,
+                |h| h.on_cards_destroyed.is_some(),
+                |inp| hooks::fire_cards_destroyed(inp, &destroyed),
+            );
         }
         if !added.is_empty() {
-            fire_paid(s, &mut pending, |inp| hooks::fire_cards_added(inp, &added));
+            fire_paid(
+                s,
+                &mut pending,
+                |h| h.on_cards_added.is_some(),
+                |inp| hooks::fire_cards_added(inp, &added),
+            );
         }
         for uid in new_jokers {
             if let Some(slot) = s.jokers.iter().position(|j| j.uid == uid) {
-                fire_paid(s, &mut pending, |inp| hooks::fire_acquire(inp, slot));
+                fire_paid(
+                    s,
+                    &mut pending,
+                    |h| h.on_acquire.is_some(),
+                    |inp| hooks::fire_acquire(inp, slot),
+                );
             }
         }
     }

@@ -275,7 +275,8 @@ fn world(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Judgement: https://balatrowiki.org/w/Judgement -------------------------------------------
-// Creates a random joker (shop odds); dropped by the game layer until Phase 5.
+// Creates a random joker (shop odds); needs a free joker slot (the game layer drops it
+// otherwise).
 
 fn judgement_can_use(c: &UseCheck<'_>) -> bool {
     c.free_joker_slots() > 0
