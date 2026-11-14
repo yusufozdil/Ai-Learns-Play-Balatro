@@ -159,7 +159,7 @@ each repeated by Red Seal and `held_retriggers` (Mime, and its copies).
 `push_effect()`, `effects()`, `level_up_hand()`, `destroy_self()`, `destroy_joker(slot)`,
 `is_doomed(slot)`, `chance()`, `rng_range()`, `rng()`, `is_face()`, `has_suit()`.
 Payloads arrive as hook arguments: `DiscardInfo { cards, hand_type }`,
-`RoundEndInfo { won, round_score, target }` (+ `boss_defeated(run)`), `SoldItem`, `PackKind`,
+`RoundEndInfo { won, saved, round_score, target }` (+ `boss_defeated(run)` = boss blind && (won || saved); `saved` = Mr. Bones' `PreventDeath`, probed by the game layer before the real dispatch), `SoldItem`, `PackKind`,
 `ConsumableView`, `&[Card]` for destroyed/added cards (snapshots before removal).
 
 ### 5.3 `RunView` fields (both contexts)
@@ -170,6 +170,7 @@ All counts are taken **after the triggering action is paid for**.
 |---|---|
 | `money` | money before this hand/event (use `ctx.money()`) |
 | `ante`, `round`, `blind: BlindKind`, `boss: BossView` | progress; `boss.{active, halve_base, triggered, hand_invalid, id}` |
+| `in_round` | `phase == Play`. In the shop / at blind select `blind` already names the next blind; Luchador `on_sell_self` and Chicot `on_acquire` disable the boss only when `in_round` |
 | `hands_left` | hands left **excluding** the hand being scored (`is_final_hand()` = 0: Dusk, Acrobat) |
 | `discards_left` | discards left (Banner, Mystic Summit, Delayed Gratification) |
 | `hands_played_round`, `hands_played_run` | **including** the current hand (DNA/Sixth Sense: `hands_played_round == 1`) |

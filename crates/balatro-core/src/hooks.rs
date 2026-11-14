@@ -370,6 +370,9 @@ pub struct RunView<'a> {
     pub blind: BlindKind,
     /// Boss facts (placeholder).
     pub boss: BossView,
+    /// A round is being played (`Phase::Play`). `false` in the shop and at blind select, where
+    /// `blind` already names the next blind (Luchador, Chicot: disable the boss only inside it).
+    pub in_round: bool,
     /// Hands left this round, excluding the hand being scored (0 = this is the final hand).
     pub hands_left: u32,
     /// Discards left this round.
@@ -416,6 +419,7 @@ impl Default for RunView<'_> {
             round: 1,
             blind: BlindKind::Small,
             boss: BossView::default(),
+            in_round: false,
             hands_left: 0,
             discards_left: 0,
             hands_played_round: 0,
@@ -689,6 +693,9 @@ pub struct DiscardInfo<'a> {
 pub struct RoundEndInfo {
     /// The blind was beaten. `false` = the run is about to end (Mr. Bones may save it).
     pub won: bool,
+    /// The lost round is saved by `PreventDeath` (Mr. Bones). The game layer probes this before
+    /// the real dispatch, so every hook of the event sees the same value.
+    pub saved: bool,
     /// Chips scored this round.
     pub round_score: f64,
     /// Chips required by the blind.
@@ -696,9 +703,10 @@ pub struct RoundEndInfo {
 }
 
 impl RoundEndInfo {
-    /// A boss blind was defeated (Rocket, Campfire reset). Needs the run's blind kind.
+    /// A boss blind round ended as a win, or was saved by Mr. Bones: the game treats a saved
+    /// round like a normal round end (Rocket, Campfire reset). Needs the run's blind kind.
     pub fn boss_defeated(&self, run: &RunView<'_>) -> bool {
-        self.won && run.blind == BlindKind::Boss
+        (self.won || self.saved) && run.blind == BlindKind::Boss
     }
 }
 

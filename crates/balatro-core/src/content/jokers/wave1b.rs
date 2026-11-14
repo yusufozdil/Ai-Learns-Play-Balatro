@@ -321,10 +321,20 @@ fn onyx_agate_scored(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card)
 
 // --- Flower Pot: https://balatrowiki.org/w/Flower_Pot --------------------------------------
 // X3 if the scoring cards can be assigned to the four suits one-to-one (a Wild card fills only
-// one suit; needs >= 4 scoring cards). Debuffed cards do not count (wiki: debuffed Wild cards
-// do not count at all). Smeared is respected through `has_suit` (backtracking matching).
+// one suit; needs >= 4 scoring cards). Wiki (1.0.1f): "Debuffed cards still count for their
+// suit"; "Debuffed Wild cards don't count at all, though this seems to be a bug" (mirrored:
+// it changes the outcome). Smeared is respected through `has_suit` (backtracking matching).
 const FLOWER_POT_XMULT: f64 = 3.0;
 const ALL_SUITS: [Suit; 4] = [Suit::Hearts, Suit::Diamonds, Suit::Clubs, Suit::Spades];
+
+/// Suit test for Flower Pot: debuffed cards keep their (printed) suit, a debuffed Wild card has
+/// none.
+fn flower_pot_has_suit(ctx: &ScoreCtx<'_>, card: &Card, suit: Suit) -> bool {
+    if card.debuffed && card.enhancement == Enhancement::Wild {
+        return false;
+    }
+    ctx.has_suit(card, suit)
+}
 
 fn assign_suits(ctx: &ScoreCtx<'_>, cards: &[usize], suit_idx: usize, used: u8) -> bool {
     if suit_idx == ALL_SUITS.len() {
@@ -332,7 +342,7 @@ fn assign_suits(ctx: &ScoreCtx<'_>, cards: &[usize], suit_idx: usize, used: u8) 
     }
     for (k, &i) in cards.iter().enumerate() {
         if used & (1 << k) == 0
-            && ctx.has_suit(&ctx.played()[i], ALL_SUITS[suit_idx])
+            && flower_pot_has_suit(ctx, &ctx.played()[i], ALL_SUITS[suit_idx])
             && assign_suits(ctx, cards, suit_idx + 1, used | (1 << k))
         {
             return true;
@@ -344,12 +354,13 @@ fn assign_suits(ctx: &ScoreCtx<'_>, cards: &[usize], suit_idx: usize, used: u8) 
 /// Up to 8 scoring indices (the scoring mask is 8 bits wide).
 const MAX_SCORING: usize = 8;
 
-/// Non-debuffed scoring card indices in a fixed buffer (no allocation while scoring).
-fn live_scoring(ctx: &ScoreCtx<'_>) -> ([usize; MAX_SCORING], usize) {
+/// Scoring card indices in a fixed buffer (no allocation while scoring); `live_only` drops
+/// debuffed cards.
+fn scoring_buf(ctx: &ScoreCtx<'_>, live_only: bool) -> ([usize; MAX_SCORING], usize) {
     let mut buf = [0usize; MAX_SCORING];
     let mut n = 0;
     for i in ctx.scoring_indices() {
-        if n < MAX_SCORING && !ctx.played()[i].debuffed {
+        if n < MAX_SCORING && !(live_only && ctx.played()[i].debuffed) {
             buf[n] = i;
             n += 1;
         }
@@ -358,7 +369,7 @@ fn live_scoring(ctx: &ScoreCtx<'_>) -> ([usize; MAX_SCORING], usize) {
 }
 
 fn flower_pot_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let (buf, n) = live_scoring(ctx);
+    let (buf, n) = scoring_buf(ctx, false);
     let cards = &buf[..n];
     if cards.len() >= ALL_SUITS.len() && assign_suits(ctx, cards, 0, 0) {
         ctx.x_mult(FLOWER_POT_XMULT);
@@ -368,11 +379,24 @@ fn flower_pot_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // --- Seeing Double: https://balatrowiki.org/w/Seeing_Double --------------------------------
 // X2 if two DIFFERENT scoring cards exist: one Club and one non-Club (Wild counts as either,
 // not both; Stone never qualifies; debuffed cards do not count).
+// Smeared Joker bug (wiki: "playing any hand (even High Card) containing a Club or Spade will
+// trigger Seeing Double. This interaction is a bug. This interaction doesn't apply if the card is
+// Wild."): mirrored, since it decides outcomes. With Smeared a live non-Wild black card is a
+// Club and a non-Club at once, so it triggers by itself.
 const SEEING_DOUBLE_XMULT: f64 = 2.0;
 
 fn seeing_double_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let (buf, n) = live_scoring(ctx);
+    let (buf, n) = scoring_buf(ctx, true);
     let cards = &buf[..n];
+    if ctx.run().rules.smeared
+        && cards.iter().any(|&i| {
+            let c = &ctx.played()[i];
+            c.enhancement != Enhancement::Wild && ctx.has_suit(c, Suit::Clubs)
+        })
+    {
+        ctx.x_mult(SEEING_DOUBLE_XMULT);
+        return;
+    }
     let is_club = |i: usize| ctx.has_suit(&ctx.played()[i], Suit::Clubs);
     let is_other = |i: usize| {
         let c = &ctx.played()[i];

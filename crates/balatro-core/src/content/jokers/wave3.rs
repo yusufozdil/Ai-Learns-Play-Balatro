@@ -75,6 +75,7 @@ pub static DEFS: &[JokerDef] = &[
     },
     JokerDef {
         blueprint_compatible: false,
+        perishable_compatible: false,
         init_value: ROCKET_BASE_PAYOUT,
         hooks: Hooks {
             on_round_end: Some(rocket_round_end),

@@ -254,6 +254,7 @@ fn cavendish_x3_and_round_end_destroy_roll() {
         let mut fx = Vec::new();
         let info = RoundEndInfo {
             won: true,
+            saved: false,
             round_score: 400.0,
             target: 300.0,
         };
@@ -755,6 +756,7 @@ fn round_end(js: &mut [JokerInstance], run: &RunView<'_>) -> (i32, Vec<SideEffec
     let mut fx = Vec::new();
     let info = RoundEndInfo {
         won: true,
+        saved: false,
         round_score: 400.0,
         target: 300.0,
     };

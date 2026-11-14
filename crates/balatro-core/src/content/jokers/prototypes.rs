@@ -70,6 +70,7 @@ pub static DEFS: &[JokerDef] = &[
         ..JokerDef::new(JokerId::RaisedFist, "Raised Fist", Rarity::Common, 5)
     },
     JokerDef {
+        perishable_compatible: false,
         hooks: Hooks {
             before_scoring: Some(ride_the_bus_before),
             joker_main: Some(ride_the_bus_main),

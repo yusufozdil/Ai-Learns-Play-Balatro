@@ -118,6 +118,7 @@ fn end_round(
         },
         &RoundEndInfo {
             won,
+            saved: false,
             round_score: 400.0,
             target: 300.0,
         },

@@ -541,15 +541,58 @@ fn flower_pot() {
     // Chips 30 + 2 + 2 + 3 = 37 -> 37 x 3 = 111.
     let three = ev(HandType::ThreeOfAKind, 0b0111, &[]);
     assert_eq!(score(&pw, &[], three, &fp), 111.0);
-    // A debuffed card does not count: 3 usable cards, and it gives no chips:
-    // chips 20 + 2 + 3 + 3 = 28, mult 2 -> 56.
+    // Wiki (1.0.1f): "Debuffed cards still count for their suit." The debuffed 2♠ gives no
+    // chips (20 + 2 + 3 + 3 = 28) but still fills the Spade slot: mult 2 x 3 = 6 -> 168.
     let (pd, ed) = four_cards([
         debuff(c(1, Two, Spades)),
         c(2, Two, Hearts),
         c(3, Three, Diamonds),
         c(4, Three, Clubs),
     ]);
-    assert_eq!(score(&pd, &[], ed, &fp), 56.0);
+    assert_eq!(score(&pd, &[], ed, &fp), 168.0);
+    // All four debuffed: still all four suits, no chips: 20 x 2 x 3 = 120.
+    let (pa, ea) = four_cards([
+        debuff(c(1, Two, Spades)),
+        debuff(c(2, Two, Hearts)),
+        debuff(c(3, Three, Diamonds)),
+        debuff(c(4, Three, Clubs)),
+    ]);
+    assert_eq!(score(&pa, &[], ea, &fp), 120.0);
+    // Wiki: "Debuffed Wild cards don't count at all" (mirrored bug). A debuffed Wild 3♠ is not a
+    // Club: only 3 suits are covered: chips 20 + 2 + 2 + 3 = 27, mult 2 -> 54.
+    let (pdw, edw) = four_cards([
+        c(1, Two, Spades),
+        c(2, Two, Hearts),
+        c(3, Three, Diamonds),
+        debuff(enh(c(4, Three, Spades), Enhancement::Wild)),
+    ]);
+    assert_eq!(score(&pdw, &[], edw, &fp), 54.0);
+    // ...while a live Wild in the same slot does fill it: chips 30, mult 6 -> 180.
+    let (plw, elw) = four_cards([
+        c(1, Two, Spades),
+        c(2, Two, Hearts),
+        c(3, Three, Diamonds),
+        enh(c(4, Three, Spades), Enhancement::Wild),
+    ]);
+    assert_eq!(score(&plw, &[], elw, &fp), 180.0);
+    // A debuffed Wild never helps even when a suit is free for its printed suit: ♠ ♥ ♦ + debuffed
+    // Wild 3♣ -> still no trigger (27 chips... 2 + 2 + 3 + 3 = 10 live, minus the debuffed 3:
+    // 20 + 2 + 2 + 3 = 27) x 2 = 54.
+    let (pdw2, edw2) = four_cards([
+        c(1, Two, Spades),
+        c(2, Two, Hearts),
+        c(3, Three, Diamonds),
+        debuff(enh(c(4, Three, Clubs), Enhancement::Wild)),
+    ]);
+    assert_eq!(score(&pdw2, &[], edw2, &fp), 54.0);
+    // A debuffed non-Wild 3♣ does fill the Club slot: chips 27 x (2 x 3) = 162.
+    let (pdc, edc) = four_cards([
+        c(1, Two, Spades),
+        c(2, Two, Hearts),
+        c(3, Three, Diamonds),
+        debuff(c(4, Three, Clubs)),
+    ]);
+    assert_eq!(score(&pdc, &[], edc, &fp), 162.0);
     // Smeared: ♠ ♠ ♥ ♥ = two of each colour -> triggers: 30 x 6 = 180. Without Smeared: 60.
     let (ps, es) = four_cards([
         c(1, Two, Spades),
@@ -616,6 +659,59 @@ fn seeing_double() {
     );
     // Blueprint: 24 x (2 x 2 x 2) = 192.
     assert_eq!(score(&ch, &[], e, &[J::Blueprint, J::SeeingDouble]), 192.0);
+}
+
+#[test]
+fn seeing_double_with_smeared_mirrors_the_wiki_bug() {
+    // Wiki: "playing any hand (even High Card) containing a Club or Spade will trigger Seeing
+    // Double. This interaction is a bug. This interaction doesn't apply if the card is Wild."
+    let sd = [J::SeeingDouble];
+    let sm = |p: &[Card], h: &[Card], e: HandEval, ids: &[JokerId]| {
+        let mut run = RunView::default();
+        run.rules.smeared = true;
+        score_run(p, h, e, ids, &run)
+    };
+    let hc = ev(HandType::HighCard, 0b1, &[]);
+    // 7♠ alone, High Card: 5 + 7 = 12 x 1 x 2 = 24. 7♣ alone: same.
+    assert_eq!(sm(&[c(1, Seven, Spades)], &[], hc, &sd), 24.0);
+    assert_eq!(sm(&[c(1, Seven, Clubs)], &[], hc, &sd), 24.0);
+    // Without Smeared the same hands do not trigger: 12.
+    assert_eq!(score(&[c(1, Seven, Spades)], &[], hc, &sd), 12.0);
+    // Reds alone never trigger (Smeared merges them with each other only): 12.
+    assert_eq!(sm(&[c(1, Seven, Hearts)], &[], hc, &sd), 12.0);
+    assert_eq!(sm(&[c(1, Seven, Diamonds)], &[], hc, &sd), 12.0);
+    // A lone Wild does not trigger even with Smeared: 12.
+    assert_eq!(
+        sm(&[enh(c(1, Seven, Spades), Enhancement::Wild)], &[], hc, &sd),
+        12.0
+    );
+    // Wild + Stone: nothing. 5 + 7 + 50 = 62.
+    let ws = [
+        enh(c(1, Seven, Hearts), Enhancement::Wild),
+        enh(c(2, Two, Clubs), Enhancement::Stone),
+    ];
+    assert_eq!(sm(&ws, &[], ev(HandType::HighCard, 0b11, &[]), &sd), 62.0);
+    // A debuffed Spade does not trigger: High Card 5 x 1 (no chips from it) = 5.
+    assert_eq!(sm(&[debuff(c(1, Seven, Spades))], &[], hc, &sd), 5.0);
+    // The black card must score: kicker 7♠ next to a scoring 7♥ -> 12.
+    let kick = [c(1, Seven, Hearts), c(2, Seven, Spades)];
+    assert_eq!(sm(&kick, &[], ev(HandType::HighCard, 0b01, &[]), &sd), 12.0);
+    // Wild + red pair: Wild is the Club, red the other: 24 x 4 = 96 (Pair 7♥ 7W).
+    let wr = [
+        enh(c(1, Seven, Hearts), Enhancement::Wild),
+        c(2, Seven, Diamonds),
+    ];
+    assert_eq!(sm(&wr, &[], ev(HandType::Pair, 0b11, &[]), &sd), 96.0);
+    // Blueprint copy doubles again: 24 x 2 x 2 = 48 for the lone Spade (12 x 4).
+    assert_eq!(
+        sm(
+            &[c(1, Seven, Spades)],
+            &[],
+            hc,
+            &[J::Blueprint, J::SeeingDouble]
+        ),
+        48.0
+    );
 }
 
 // ----- The Duo / Trio / Family / Order / Tribe -----

@@ -78,13 +78,12 @@ pub static DEFS: &[JokerDef] = &[
 // still active (a boss can be disabled once per round). Debuffed Luchador sells for its price but
 // does nothing (the dispatcher skips debuffed jokers).
 //
-// Gap (reported): `RunView` cannot tell "in the Boss Blind" from "in the shop before it" (during
-// the shop `run.blind` is already the next blind). The game layer must only honour this
-// `DisableBoss` while the boss round is being played (see the wave5 report / notes.md).
+// `run.in_round` tells "inside the Boss Blind round" from "in the shop before it" (during the
+// shop `run.blind` is already the next blind), so a shop sale never disables the next boss.
 
 fn luchador_sell_self(_: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
     let run = ctx.run();
-    if run.blind == BlindKind::Boss && run.boss.active {
+    if run.in_round && run.blind == BlindKind::Boss && run.boss.active {
         ctx.push_effect(SideEffect::DisableBoss);
     }
 }
@@ -183,7 +182,7 @@ fn chicot_blind_select(_: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
 
 fn chicot_acquire(_: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
     let run = ctx.run();
-    if run.blind == BlindKind::Boss && run.boss.active {
+    if run.in_round && run.blind == BlindKind::Boss && run.boss.active {
         ctx.push_effect(SideEffect::DisableBoss);
     }
 }

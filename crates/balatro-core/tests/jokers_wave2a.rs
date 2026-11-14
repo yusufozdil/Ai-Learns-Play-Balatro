@@ -186,6 +186,7 @@ fn destroyed_uids(fx: &[SideEffect]) -> Vec<u32> {
 fn round_end(js: &mut [JokerInstance], run: &RunView<'_>, seed: u64) -> Vec<SideEffect> {
     let info = RoundEndInfo {
         won: true,
+        saved: false,
         round_score: 400.0,
         target: 300.0,
     };

@@ -295,10 +295,21 @@ impl GameState {
         );
     }
 
-    /// Boss blind multiplier. TODO(Phase 4): Wall x4 / Violet Vessel x6 / Needle x1 (Chicot
-    /// reverts Wall and Vessel).
+    /// Boss blind multiplier. A disabled boss (Chicot, Luchador) uses the standard multiplier
+    /// instead of its special one.
     pub fn boss_mult(&self) -> f64 {
-        MULT_BOSS_DEFAULT
+        if self.boss_disabled {
+            return MULT_BOSS_DEFAULT;
+        }
+        self.special_boss_mult().unwrap_or(MULT_BOSS_DEFAULT)
+    }
+
+    /// Requirement multiplier of the current boss when it differs from the standard x2.
+    /// TODO(Phase 4): Wall x4 / Violet Vessel x6 / Needle x1, keyed on `boss_id` (the Needle
+    /// keeps x1 even when Chicot disables it; wave5.rs Chicot note, so the Needle will need an
+    /// exception in `boss_mult`).
+    fn special_boss_mult(&self) -> Option<f64> {
+        None
     }
 
     /// The current boss is a Showdown boss (ante % 8 == 0).
@@ -437,6 +448,7 @@ impl GameState {
             round: self.round,
             blind: self.blind,
             boss: self.boss_view(),
+            in_round: self.phase == Phase::Play,
             hands_left: self.hands_left,
             discards_left: self.discards_left,
             hands_played_round: self.hands_played_round,

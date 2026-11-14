@@ -219,3 +219,69 @@ fn blueprint_incompatible_set_matches_the_contract() {
     got.sort();
     assert_eq!(got, want, "CSV copyable=no set differs from hooks.md §8");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sticker compatibility (3.F)
+// ---------------------------------------------------------------------------------------------
+
+/// Jokers that cannot be Perishable. Source: https://balatrowiki.org/w/Perishable ("the
+/// following 18 Jokers").
+const NOT_PERISHABLE: [JokerId; 18] = [
+    JokerId::CeremonialDagger,
+    JokerId::RideTheBus,
+    JokerId::Runner,
+    JokerId::Constellation,
+    JokerId::GreenJoker,
+    JokerId::RedCard,
+    JokerId::Madness,
+    JokerId::SquareJoker,
+    JokerId::Vampire,
+    JokerId::Hologram,
+    JokerId::Rocket,
+    JokerId::Obelisk,
+    JokerId::LuckyCat,
+    JokerId::FlashCard,
+    JokerId::SpareTrousers,
+    JokerId::Castle,
+    JokerId::GlassJoker,
+    JokerId::WeeJoker,
+];
+
+/// Jokers that cannot be Eternal ("Jokers that self-destruct or activate on sell"). Source:
+/// https://balatrowiki.org/w/Eternal (11 jokers).
+const NOT_ETERNAL: [JokerId; 11] = [
+    JokerId::GrosMichel,
+    JokerId::IceCream,
+    JokerId::Cavendish,
+    JokerId::Luchador,
+    JokerId::TurtleBean,
+    JokerId::DietCola,
+    JokerId::Popcorn,
+    JokerId::Ramen,
+    JokerId::Seltzer,
+    JokerId::MrBones,
+    JokerId::InvisibleJoker,
+];
+
+#[test]
+fn sticker_flags_match_the_wiki_lists() {
+    let mut problems = Vec::new();
+    for id in JokerId::ALL {
+        let Some(d) = try_def(id) else { continue };
+        let want_perishable = !NOT_PERISHABLE.contains(&id);
+        if d.perishable_compatible != want_perishable {
+            problems.push(format!(
+                "{id:?}: perishable_compatible {} (wiki says {want_perishable})",
+                d.perishable_compatible
+            ));
+        }
+        let want_eternal = !NOT_ETERNAL.contains(&id);
+        if d.eternal_compatible != want_eternal {
+            problems.push(format!(
+                "{id:?}: eternal_compatible {} (wiki says {want_eternal})",
+                d.eternal_compatible
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}

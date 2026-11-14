@@ -505,14 +505,21 @@ impl Game {
 
         // 2. Jokers' end of round (also on a loss: Mr. Bones). Their money is a cash-out item.
         let s = &mut self.state;
-        let end = RoundEndInfo {
+        let mut end = RoundEndInfo {
             won,
+            saved: false,
             round_score: s.round_score,
             target: s.target,
         };
+        // A lost round may be saved by a joker (Mr. Bones). Hooks at this event (Campfire,
+        // Rocket) must see the outcome, so probe it on a copy of the jokers and the RNG first.
+        if !won && !out_of_cards {
+            end.saved = round_end_saves(s, &end);
+        }
         let joker_money = fire(s, &mut self.fx, |inp| hooks::fire_round_end(inp, &end));
         let rep = self.resolve_fx();
         let saved = !won && !out_of_cards && rep.prevent_death;
+        debug_assert_eq!(saved, end.saved);
 
         let s = &mut self.state;
         let mut report = RoundReport {
@@ -586,6 +593,26 @@ impl Game {
         self.fx.clear();
         rep
     }
+}
+
+/// Would the round-end event of a lost round queue a `PreventDeath`? Runs the event on copies
+/// of the jokers and the RNG, so nothing of the real state changes.
+fn round_end_saves(s: &GameState, end: &RoundEndInfo) -> bool {
+    let mut jokers = s.jokers.clone();
+    let mut rng = s.rng.clone();
+    let mut fx = Vec::new();
+    let view = s.run_view_with(&s.consumables);
+    hooks::fire_round_end(
+        EventInput {
+            jokers: &mut jokers,
+            run: &view,
+            deck: &s.deck,
+            rng: &mut rng,
+            effects: &mut fx,
+        },
+        end,
+    );
+    fx.iter().any(|e| matches!(e, SideEffect::PreventDeath))
 }
 
 /// Fire one joker event with the current [`RunView`]; side effects are appended to `fx`. Returns
@@ -791,8 +818,9 @@ fn apply_one(
         SideEffect::CreateTag { id } => s.tags.push(id),
         SideEffect::DisableBoss => {
             s.boss_disabled = true;
-            // TODO(Phase 4): Chicot reverts The Wall / Violet Vessel targets; only meaningful
-            // before the first hand.
+            // Wall / Violet Vessel fall back to the standard boss multiplier (Phase 4 adds the
+            // special ones); the target is recomputed with it.
+            s.refresh_target();
         }
         SideEffect::PreventDeath => rep.prevent_death = true,
         SideEffect::SetRunFlag(f) => {

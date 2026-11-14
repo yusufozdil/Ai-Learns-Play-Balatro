@@ -162,6 +162,7 @@ fn cons(id: u16) -> ConsumableView {
 fn round_end_info() -> RoundEndInfo {
     RoundEndInfo {
         won: true,
+        saved: false,
         round_score: 400.0,
         target: 300.0,
     }

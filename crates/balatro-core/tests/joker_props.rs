@@ -301,7 +301,7 @@ proptest! {
             money_total += hooks::fire_discard(inp!(), &d).money_delta;
             money_total += hooks::fire_cards_destroyed(inp!(), &discarded).money_delta;
             money_total += hooks::fire_cards_added(inp!(), &discarded).money_delta;
-            let end = RoundEndInfo { won: flags & 1 == 0, round_score: 100.0, target: 300.0 };
+            let end = RoundEndInfo { won: flags & 1 == 0, saved: false, round_score: 100.0, target: 300.0 };
             money_total += hooks::fire_round_end(inp!(), &end).money_delta;
             money_total += hooks::fire_shop_enter(inp!()).money_delta;
             money_total += hooks::fire_reroll(inp!()).money_delta;

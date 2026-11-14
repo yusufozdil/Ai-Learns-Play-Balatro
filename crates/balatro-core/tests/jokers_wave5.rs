@@ -138,6 +138,7 @@ fn fire(
 fn blind_view(blind: BlindKind, active: bool) -> RunView<'static> {
     RunView {
         blind,
+        in_round: true,
         boss: BossView {
             id: u16::from(active),
             active,
@@ -166,6 +167,7 @@ fn round_end(
 ) -> Vec<SideEffect> {
     let info = RoundEndInfo {
         won,
+        saved: false,
         round_score,
         target,
     };
@@ -342,6 +344,24 @@ fn luchador_does_nothing_outside_an_active_boss() {
 }
 
 #[test]
+fn luchador_and_chicot_acquire_ignore_a_boss_outside_the_round() {
+    // In the shop / at blind select `blind` already names the next blind: `in_round` is false.
+    let shop = RunView {
+        in_round: false,
+        ..blind_view(BlindKind::Boss, true)
+    };
+    let mut js = jokers(&[J::Luchador]);
+    assert!(sell(&mut js, 0, &shop).is_empty());
+    let mut js = jokers(&[J::Chicot]);
+    assert!(fire(&mut js, &shop, |inp| fire_acquire(inp, 0)).is_empty());
+    // Chicot's blind-select path does not need `in_round` (the round is not running yet).
+    assert_eq!(
+        fire(&mut js, &shop, fire_blind_select),
+        vec![SideEffect::DisableBoss]
+    );
+}
+
+#[test]
 fn luchador_copied_by_a_sold_blueprint_or_brainstorm_disables_the_boss() {
     // Wiki (Brainstorm): selling a copier that copies Luchador also disables the Boss Blind.
     let boss = blind_view(BlindKind::Boss, true);
@@ -391,7 +411,6 @@ fn luchador_in_the_game_disables_only_the_boss_being_played() {
 }
 
 #[test]
-#[ignore = "blocked: RunView cannot tell the shop before a boss from the boss round (wave5 report)"]
 fn luchador_sold_in_the_shop_before_the_boss_does_not_disable_it() {
     // Wiki: Luchador "will only take effect if sold after entering the Boss Blind". In the shop
     // after the Big blind `run.blind` is already Boss, so the hook cannot tell the difference.
@@ -499,6 +518,126 @@ fn mr_bones_in_the_game_saves_the_run_without_blind_reward() {
     end_shop(&mut g);
     select(&mut g);
     assert_eq!(g.state().phase, Phase::Play);
+}
+
+/// Reach the Boss blind round (boss id 1 = placeholder with an active effect).
+fn start_boss_round(g: &mut Game) {
+    advance_to_boss_select(g);
+    g.state_mut().boss_id = 1;
+    select(g);
+    assert_eq!(g.state().blind, BlindKind::Boss);
+    assert_eq!(g.state().phase, Phase::Play);
+}
+
+#[test]
+fn mr_bones_saved_boss_round_counts_as_a_defeated_boss_for_campfire_and_rocket() {
+    // Real game: Mr. Bones turns the loss into a normal round end, and Campfire / Rocket only ask
+    // "is the blind a boss". Joker order must not matter (Bones to the left or the right).
+    for bones_first in [true, false] {
+        let mut g = new_game(70);
+        if bones_first {
+            add(&mut g, J::MrBones);
+        }
+        let camp = add(&mut g, J::Campfire);
+        let rocket = add(&mut g, J::Rocket);
+        if !bones_first {
+            add(&mut g, J::MrBones);
+        }
+        g.state_mut().jokers[camp].value = 2.5;
+        g.state_mut().jokers[rocket].value = 3.0;
+        start_boss_round(&mut g);
+        let info = lose_final_hand(&mut g, 0.25);
+        let round = info.round.expect("round ended");
+        assert!(round.saved && round.won, "bones_first = {bones_first}");
+        // Rocket grew by $2 before its payout: 3 + 2 = 5 paid in the cash-out.
+        assert_eq!(round.cash_out.expect("cash-out").jokers, 5);
+        assert_eq!(slot_of(&g, J::MrBones), None);
+        let camp = slot_of(&g, J::Campfire).expect("campfire kept");
+        let rocket = slot_of(&g, J::Rocket).expect("rocket kept");
+        assert_eq!(g.state().jokers[camp].value, 1.0, "campfire reset");
+        assert_eq!(g.state().jokers[rocket].value, 5.0, "rocket grew");
+        assert_eq!(g.state().phase, Phase::Shop);
+    }
+}
+
+#[test]
+fn mr_bones_saved_small_round_does_not_reset_campfire_or_grow_rocket() {
+    let mut g = new_game(71);
+    let camp = add(&mut g, J::Campfire);
+    let rocket = add(&mut g, J::Rocket);
+    add(&mut g, J::MrBones);
+    g.state_mut().jokers[camp].value = 2.5;
+    g.state_mut().jokers[rocket].value = 3.0;
+    select(&mut g);
+    let info = lose_final_hand(&mut g, 0.25);
+    let round = info.round.expect("round ended");
+    assert!(round.saved);
+    // Rocket still pays its current $3, but does not grow outside a Boss Blind.
+    assert_eq!(round.cash_out.expect("cash-out").jokers, 3);
+    assert_eq!(g.state().jokers[camp].value, 2.5);
+    assert_eq!(g.state().jokers[rocket].value, 3.0);
+}
+
+#[test]
+fn round_end_probe_does_not_change_the_state_of_an_unsaved_loss() {
+    // Well below 25%: no save, the run ends; Campfire keeps its value (hooks saw `saved = false`).
+    let mut g = new_game(72);
+    let camp = add(&mut g, J::Campfire);
+    add(&mut g, J::MrBones);
+    g.state_mut().jokers[camp].value = 2.5;
+    start_boss_round(&mut g);
+    let info = lose_final_hand(&mut g, 0.1);
+    assert!(!info.round.expect("round").won);
+    assert_eq!(g.outcome(), Some(Outcome::Loss));
+    assert_eq!(
+        g.state().jokers[slot_of(&g, J::Campfire).unwrap()].value,
+        2.5
+    );
+    assert!(slot_of(&g, J::MrBones).is_some());
+}
+
+#[test]
+fn boss_defeated_reads_won_or_saved_on_a_boss_blind_only() {
+    let boss = blind_view(BlindKind::Boss, true);
+    let small = blind_view(BlindKind::Small, false);
+    let info = |won, saved| RoundEndInfo {
+        won,
+        saved,
+        round_score: 400.0,
+        target: 300.0,
+    };
+    assert!(info(true, false).boss_defeated(&boss));
+    assert!(info(false, true).boss_defeated(&boss));
+    assert!(!info(false, false).boss_defeated(&boss));
+    assert!(!info(true, false).boss_defeated(&small));
+    assert!(!info(false, true).boss_defeated(&small));
+}
+
+#[test]
+fn disable_boss_recomputes_the_target_with_the_standard_multiplier() {
+    // Boss specials (Wall x4, Violet Vessel x6) arrive in Phase 4; today every boss is x2, so
+    // the target is unchanged. The disabled boss must use the standard multiplier.
+    let mut g = new_game(73);
+    add(&mut g, J::Chicot);
+    advance_to_boss_select(&mut g);
+    g.state_mut().boss_id = 1;
+    let before = g.state().target;
+    select(&mut g);
+    assert!(g.state().boss_disabled);
+    assert_eq!(
+        g.state().boss_mult(),
+        balatro_core::blinds::MULT_BOSS_DEFAULT
+    );
+    assert_eq!(g.state().target, before);
+    assert_eq!(
+        g.state().target,
+        balatro_core::blinds::requirement(
+            g.state().ante,
+            BlindKind::Boss,
+            balatro_core::blinds::MULT_BOSS_DEFAULT,
+            g.state().config.stake.scaling()
+        )
+    );
 }
 
 #[test]
@@ -754,7 +893,6 @@ fn smeared_with_seeing_double_spade_counts_as_club() {
 }
 
 #[test]
-#[ignore = "wiki (Seeing Double): with Smeared a single Club/Spade triggers (even High Card); wave1b needs two cards - reported, not changed"]
 fn smeared_with_seeing_double_single_spade_high_card() {
     // 7S High Card: 5 + 7 = 12 chips x 1 = 12; wiki: X2 -> 24.
     let p = [c(1, Seven, Spades)];
@@ -1182,6 +1320,25 @@ fn chicot_in_the_game_disables_each_boss_and_only_bosses() {
     assert!(!g.state().boss_disabled);
     end_shop(&mut g);
     advance_to_boss_select(&mut g);
+    select(&mut g);
+    assert!(g.state().boss_disabled);
+}
+
+#[test]
+fn chicot_in_the_game_added_in_the_shop_before_the_boss_does_not_disable_it() {
+    let mut g = new_game(63);
+    select(&mut g);
+    beat_blind(&mut g);
+    end_shop(&mut g);
+    select(&mut g);
+    beat_blind(&mut g);
+    assert_eq!(g.state().phase, Phase::Shop);
+    assert_eq!(g.state().blind, BlindKind::Boss);
+    g.state_mut().boss_id = 1;
+    add(&mut g, J::Chicot);
+    assert!(!g.state().boss_disabled);
+    // The blind-select path still disables it when the boss is selected.
+    end_shop(&mut g);
     select(&mut g);
     assert!(g.state().boss_disabled);
 }
