@@ -266,3 +266,38 @@ help sampled play (it only matters where the argmax loops).
 `--reorder-cost -0.25` (as `c_loopfix2`) brought it to 0.8% at no cost in score. The cost -0.05 is small against the +1
 blind reward but real against the 0.003 entropy bonus; -0.25 did not reduce the sampled win rate in 6M steps, but only
 tested on a policy that already knows how to use the jokers, so keep it for the end.
+
+## 9. Phase 10C: the 100M-step run (2026-11-14)
+
+**Run** `e2e_long` = the recommended recipe above from `runs/bc/model.pt`: `--lr 1e-4 --kl-coef 0.3 --kl-anneal-updates 120
+--critic-warmup 2 --reorder-cost -0.05 --eval-move-limit 2 --total-steps 100e6 --eval-every 8 --eval-games 512`; 99.9M steps
+in 3.75 h (~8.1k steps/s; GPU memory ~15.5 of 16.3 GB with `expandable_segments`). Then `e2e_long_fix` = from
+`e2e_long/latest.pt`, `--lr 5e-5 --kl-coef 0 --critic-warmup 0 --seed 1 --reorder-cost -0.25`, 5.9M steps, 12.8 min
+(raw deterministic truncation of `e2e_long` was 1.1-1.6% > 0.5%).
+
+**Validation curve** (512 games, deterministic with guard 2): flat ~5.5-5.8 / 10-13% while the KL to BC anneals (first
+~15M steps), then a fast rise once it reaches 0 (update 120): 7.14 / 32% at 20M (same as `a_e2e`), 7.1-7.2 / 42-48% at
+24-37M (mean ante plateaus, the win rate keeps rising), 7.2-7.35 / 52-58% at 50-59M, 7.3-7.4 / 55-65% at 61-70M,
+7.50 / 66-70% at 99M. Approx KL per update fell 0.013 -> 0.0016 and entropy 0.59 -> 0.55; the curve had flattened but not
+stopped at 100M.
+
+**Test** (the same 1000 games, Red/White; teacher 5.91 / 16.1%, BC 5.29 / 6.5%, previous best `c_loopfix2/latest`
+7.24 / 44.2%):
+
+| checkpoint | steps total | det raw: ante / win / trunc | det guard 2: ante / win / trunc | sampled: ante / win / trunc |
+|---|---|---|---|---|
+| `e2e_long/best` (val. update 504) | 66M | 7.53 / 67.3% / 1.6% | 7.54 / 67.8% / 0% | 7.40 / 63.4% / 0% |
+| `e2e_long/latest` | 100M | 7.50 / 66.1% / 1.1% | 7.50 / 66.7% / 0% | 7.44 / 65.5% / 0% |
+| `e2e_long_fix/best` | 102M | 7.47 / 66.4% / 0.5% | 7.47 / 66.7% / 0% | 7.31 / 61.1% / 0% |
+| **`e2e_long_fix/latest`** | 106M | **7.51 / 68.6% / 0.1%** | **7.51 / 68.6% / 0%** | **7.46 / 65.9% / 0%** |
+
+Paired vs the teacher (`e2e_long/latest`, raw det): +1.38 +- 0.07 ante, +38.5 +- 1.9 points win. ~80% of the test games
+reach ante 8. The second fine-tune at cost -0.25 again removed the loop (truncation 0.1%, mean deterministic steps 202 ->
+173) with no loss in score; `e2e_long_fix/latest` is the current reference checkpoint.
+
+**Pitfall**: `scripts/evaluate.py --move-limit 0` does **not** disable the guard, it bans MoveJoker entirely (the guard
+blocks after `moves >= limit`); omit the flag for raw numbers. With MoveJoker banned the same checkpoint drops to
+~7.3 / 55% (det and sampled), i.e. joker ordering is worth ~11 points of win rate to this policy.
+
+Open: memory ablation `e2e_nomem` (24M steps from `runs/bc_nomem/model.pt`, compare with the first 24M of `e2e_long`) parked
+by the user; seed repeats; Phase 5E (other decks and stakes) deferred until after training.
