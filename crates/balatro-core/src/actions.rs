@@ -7,6 +7,9 @@
 //! (tested). Phase 2C replaces the enumeration with a fixed-size action codec and masks.
 
 use crate::blinds::BlindKind;
+use crate::boss;
+use crate::consumable::{MAX_CONSUMABLE_TARGETS, UseCheck};
+use crate::content::try_consumable_def;
 use crate::data::run_rules::MAX_SELECTED_CARDS;
 use crate::enums::Phase;
 use crate::state::GameState;
@@ -29,14 +32,14 @@ pub enum Action {
     SellJoker(u8),
     /// Shop: leave the shop.
     EndShop,
-    /// Play/Shop: use the consumable in `slot` on the selected hand cards. Phase 4.
+    /// Play/Shop: use the consumable in `slot` on the selected hand cards.
     UseConsumable {
         /// Consumable slot.
         slot: u8,
         /// Selected hand cards (bitmask), 0 if the consumable has no targets.
         targets: u16,
     },
-    /// Play/Shop: sell the consumable in this slot. Phase 4.
+    /// Play/Shop: sell the consumable in this slot.
     SellConsumable(u8),
     /// Play/Shop: move a joker from one slot to another. Phase 5.
     MoveJoker {
@@ -127,12 +130,44 @@ pub enum ActionError {
     /// Eternal jokers cannot be sold.
     #[error("eternal jokers cannot be sold")]
     EternalJoker,
+    /// No consumable in that slot.
+    #[error("no consumable in slot {index} ({len} held)")]
+    InvalidConsumable {
+        /// Requested slot.
+        index: u8,
+        /// Consumables held.
+        len: usize,
+    },
+    /// The consumable has no definition yet (it can only be sold).
+    #[error("this consumable is not implemented yet")]
+    UnknownConsumable,
+    /// The consumable needs a drawn hand (only in `Phase::Play`).
+    #[error("this consumable needs cards in hand")]
+    NeedsHand,
+    /// Wrong number of selected hand cards for the consumable.
+    #[error("{selected} target cards selected, need {min}..={max}")]
+    TargetCount {
+        /// Selected cards.
+        selected: u32,
+        /// Minimum.
+        min: u8,
+        /// Maximum.
+        max: u8,
+    },
+    /// The consumable's own condition fails (no free slot, no eligible joker, ...).
+    #[error("this consumable cannot be used now")]
+    CannotUse,
+    /// The boss forces a card to be selected (Cerulean Bell) and the selection lacks it.
+    #[error("the force-selected card at position {position} must be selected")]
+    ForcedCardMissing {
+        /// Hand position of the forced card.
+        position: usize,
+    },
 }
 
 /// Plan phase that implements each not-yet-available action (for `NotImplemented`).
 fn unimplemented_phase(a: Action) -> Option<u8> {
     match a {
-        Action::UseConsumable { .. } | Action::SellConsumable(_) => Some(4),
         Action::MoveJoker { .. }
         | Action::Buy(_)
         | Action::BuyAndUse(_)
@@ -198,6 +233,7 @@ pub fn validate(state: &GameState, action: Action) -> Result<(), ActionError> {
                 return Err(ActionError::NoHandsLeft);
             }
             validate_selection(mask, state.deck.hand.len())?;
+            check_forced(state, mask)?;
         }
         Action::Discard(mask) => {
             if phase != Phase::Play {
@@ -207,6 +243,7 @@ pub fn validate(state: &GameState, action: Action) -> Result<(), ActionError> {
                 return Err(ActionError::NoDiscardsLeft);
             }
             validate_selection(mask, state.deck.hand.len())?;
+            check_forced(state, mask)?;
         }
         Action::SellJoker(i) => {
             if !matches!(phase, Phase::Play | Phase::Shop) {
@@ -228,10 +265,25 @@ pub fn validate(state: &GameState, action: Action) -> Result<(), ActionError> {
                 return Err(wrong());
             }
         }
+        Action::UseConsumable { slot, targets } => {
+            if !matches!(phase, Phase::Play | Phase::Shop) {
+                return Err(wrong());
+            }
+            validate_use(state, slot, targets)?;
+        }
+        Action::SellConsumable(i) => {
+            if !matches!(phase, Phase::Play | Phase::Shop) {
+                return Err(wrong());
+            }
+            if usize::from(i) >= state.consumables.len() {
+                return Err(ActionError::InvalidConsumable {
+                    index: i,
+                    len: state.consumables.len(),
+                });
+            }
+        }
         // Handled by `unimplemented_phase` above.
-        Action::UseConsumable { .. }
-        | Action::SellConsumable(_)
-        | Action::MoveJoker { .. }
+        Action::MoveJoker { .. }
         | Action::Buy(_)
         | Action::BuyAndUse(_)
         | Action::OpenPack(_)
@@ -244,6 +296,66 @@ pub fn validate(state: &GameState, action: Action) -> Result<(), ActionError> {
                 phase_of_plan: 5,
             });
         }
+    }
+    Ok(())
+}
+
+/// Cerulean Bell: a Play/Discard selection must contain the force-selected card.
+fn check_forced(state: &GameState, mask: u16) -> Result<(), ActionError> {
+    match boss::forced_position(state) {
+        Some(p) if p < 16 && (mask >> p) & 1 == 0 => {
+            Err(ActionError::ForcedCardMissing { position: p })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Validate using the consumable in `slot` with `targets` (phase already checked): the card
+/// exists and is defined; cards needing a hand only in `Phase::Play`; untargeted cards need
+/// `targets == 0`, targeted ones `min..=max` selected cards inside the hand; then the card's
+/// own `can_use`. Pure.
+pub fn validate_use(state: &GameState, slot: u8, targets: u16) -> Result<(), ActionError> {
+    let c = state
+        .consumables
+        .get(usize::from(slot))
+        .ok_or(ActionError::InvalidConsumable {
+            index: slot,
+            len: state.consumables.len(),
+        })?;
+    let def = try_consumable_def(c.id).ok_or(ActionError::UnknownConsumable)?;
+    if def.requires_hand() && (state.phase != Phase::Play || state.deck.hand.is_empty()) {
+        return Err(ActionError::NeedsHand);
+    }
+    let selected = targets.count_ones();
+    if def.max_targets == 0 {
+        if targets != 0 {
+            return Err(ActionError::TargetCount {
+                selected,
+                min: 0,
+                max: 0,
+            });
+        }
+    } else {
+        let hand_len = state.deck.hand.len();
+        if hand_len < 16 && (targets >> hand_len) != 0 {
+            return Err(ActionError::SelectionOutOfRange {
+                mask: targets,
+                hand_len,
+            });
+        }
+        let max = def.max_targets.min(MAX_CONSUMABLE_TARGETS);
+        if selected < u32::from(def.min_targets) || selected > u32::from(max) {
+            return Err(ActionError::TargetCount {
+                selected,
+                min: def.min_targets,
+                max,
+            });
+        }
+    }
+    if let Some(f) = def.can_use
+        && !f(&UseCheck::new(state, targets, Some(usize::from(slot))))
+    {
+        return Err(ActionError::CannotUse);
     }
     Ok(())
 }
@@ -263,8 +375,15 @@ fn push_selections(hand_len: usize, out: &mut Vec<u16>) {
 }
 
 /// Append every legal action of `state` to `out` (cleared first). Order: phase actions, then
-/// `Play` masks ascending, `Discard` masks ascending, `SellJoker` slots ascending.
-/// Skeleton: exhaustive enumeration (218 Play + 218 Discard masks for 8 cards); Phase 2C
+/// `Play` masks ascending, `Discard` masks ascending, `SellJoker` slots ascending, then per
+/// consumable slot (ascending) its `UseConsumable` actions (targets ascending) followed by its
+/// `SellConsumable`.
+///
+/// Target enumeration rule: an untargeted card gets one action (`targets = 0`); a targeted card
+/// gets every selection whose size is in `min_targets..=max_targets` (at most
+/// `MAX_CONSUMABLE_TARGETS` = 3: 92 masks for 8 cards) that passes `validate`. Cerulean Bell
+/// restricts Play/Discard masks to those containing the forced card (not consumable targets).
+/// Skeleton: exhaustive enumeration (218 Play + 218 Discard masks for 8 cards); Phase 8
 /// provides the fixed-size codec/masks for the env.
 pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
     out.clear();
@@ -290,20 +409,58 @@ pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
         Phase::Play => {
             let mut masks = Vec::new();
             push_selections(state.deck.hand.len(), &mut masks);
+            let forced = boss::forced_position(state).filter(|&p| p < 16);
+            let ok = |m: u16| forced.is_none_or(|p| (m >> p) & 1 == 1);
             if state.hands_left > 0 {
-                out.extend(masks.iter().map(|&m| Action::Play(m)));
+                out.extend(masks.iter().filter(|&&m| ok(m)).map(|&m| Action::Play(m)));
             }
             if state.discards_left > 0 {
-                out.extend(masks.iter().map(|&m| Action::Discard(m)));
+                out.extend(
+                    masks
+                        .iter()
+                        .filter(|&&m| ok(m))
+                        .map(|&m| Action::Discard(m)),
+                );
             }
             sell(out);
+            consumable_actions(state, &masks, out);
         }
         Phase::Shop => {
             out.push(Action::EndShop);
             sell(out);
+            consumable_actions(state, &[], out);
         }
         // TODO(Phase 5): pack items.
         Phase::PackOpen => {}
         Phase::GameOver | Phase::Won => {}
+    }
+}
+
+/// Per consumable slot: legal `UseConsumable` actions (see [`legal_actions`]) then
+/// `SellConsumable`. `masks` = all 1..=5 card selections of the hand (ascending).
+fn consumable_actions(state: &GameState, masks: &[u16], out: &mut Vec<Action>) {
+    for (i, c) in state.consumables.iter().enumerate() {
+        let Ok(slot) = u8::try_from(i) else {
+            break;
+        };
+        if let Some(def) = try_consumable_def(c.id) {
+            if def.max_targets == 0 {
+                if validate_use(state, slot, 0).is_ok() {
+                    out.push(Action::UseConsumable { slot, targets: 0 });
+                }
+            } else {
+                let (lo, hi) = (
+                    u32::from(def.min_targets),
+                    u32::from(def.max_targets.min(MAX_CONSUMABLE_TARGETS)),
+                );
+                for &m in masks {
+                    let k = m.count_ones();
+                    if k >= lo && k <= hi && validate_use(state, slot, m).is_ok() {
+                        out.push(Action::UseConsumable { slot, targets: m });
+                    }
+                }
+            }
+        }
+        out.push(Action::SellConsumable(slot));
     }
 }

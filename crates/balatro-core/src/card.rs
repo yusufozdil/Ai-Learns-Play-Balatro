@@ -38,8 +38,12 @@ pub struct Card {
     pub perma_bonus: i32,
     /// Debuffed by a boss blind.
     pub debuffed: bool,
-    /// Face down (boss blind effect).
+    /// Face down (boss blind effect: The House/Wheel/Fish/Mark). The observation must show
+    /// such a card as unknown (Phase 8); rules treat it normally. Cleared at round end.
     pub face_down: bool,
+    /// Played during the current ante (The Pillar). Set by the game when the card is played,
+    /// cleared at ante start.
+    pub played_ante: bool,
 }
 
 impl Card {
@@ -55,6 +59,7 @@ impl Card {
             perma_bonus: 0,
             debuffed: false,
             face_down: false,
+            played_ante: false,
         }
     }
 

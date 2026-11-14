@@ -3,6 +3,7 @@
 //! hold after every step (`debug_assert` inside `step`), and every game terminates.
 //! The 100k-game version is Phase 2D.
 
+use balatro_core::actions::Action;
 use balatro_core::content::jokers::JokerId;
 use balatro_core::enums::Phase;
 use balatro_core::game::Game;
@@ -67,9 +68,19 @@ fn round_winning_policy_reaches_later_antes() {
         let mut steps = 0;
         while !g.is_terminal() && steps < MAX_STEPS {
             g.legal_actions_into(&mut legal);
-            let a = legal[policy.range(RngKey::Misc, 0, legal.len())];
-            if g.state().phase == Phase::Play && matches!(a, balatro_core::actions::Action::Play(_))
+            let mut a = legal[policy.range(RngKey::Misc, 0, legal.len())];
+            // A hand the boss rejects (The Psychic) scores 0: play a valid one instead.
+            let valid = |a: &Action| match *a {
+                Action::Play(m) => g.preview_play(m).is_ok_and(|r| !r.invalid),
+                _ => false,
+            };
+            if matches!(a, Action::Play(_))
+                && !valid(&a)
+                && let Some(&b) = legal.iter().find(|x| valid(x))
             {
+                a = b;
+            }
+            if g.state().phase == Phase::Play && matches!(a, Action::Play(_)) {
                 let t = g.state().target;
                 g.state_mut().round_score = t - 1.0;
             }

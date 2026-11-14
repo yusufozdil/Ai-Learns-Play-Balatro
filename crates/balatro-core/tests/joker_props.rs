@@ -6,13 +6,14 @@
 //! non-scoring event on random boards.
 
 use balatro_core::card::Card;
+use balatro_core::content::ConsumableId;
 use balatro_core::content::jokers::{JokerId, all_defs};
 use balatro_core::deck::{Deck, Pile};
 use balatro_core::enums::{Edition, Enhancement, HandType, Rank, Seal, Suit};
 use balatro_core::hand_eval::evaluate;
 use balatro_core::hooks::{
-    self, BlindKind, ConsumableKind, ConsumableView, DeckCounts, DiscardInfo, EventInput, PackKind,
-    RoundEndInfo, RunView, SideEffect, SoldItem, collect_modifiers,
+    self, BlindKind, ConsumableView, DeckCounts, DiscardInfo, EventInput, PackKind, RoundEndInfo,
+    RunView, SideEffect, SoldItem, collect_modifiers,
 };
 use balatro_core::joker::JokerInstance;
 use balatro_core::rng::GameRng;
@@ -193,20 +194,12 @@ fn check_effects(
     Ok(())
 }
 
-const CONSUMABLES: [ConsumableView; 2] = [
-    ConsumableView {
-        kind: ConsumableKind::Planet,
-        id: 1,
-        planet_hand: Some(HandType::Pair),
-        negative: false,
-    },
-    ConsumableView {
-        kind: ConsumableKind::Tarot,
-        id: 2,
-        planet_hand: None,
-        negative: false,
-    },
-];
+fn consumables_fixture() -> [ConsumableView; 2] {
+    [
+        ConsumableView::new(ConsumableId::Mercury),
+        ConsumableView::new(ConsumableId::TheHighPriestess),
+    ]
+}
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
@@ -229,8 +222,9 @@ proptest! {
         let played = number(played, 1);
         let held = number(held, 20);
         let js = build_jokers(&specs, &ids);
+        let cons = consumables_fixture();
         let run = run_view(
-            &js, &played, &held, &CONSUMABLES[..n_consumables], money, hands_left,
+            &js, &played, &held, &cons[..n_consumables], money, hands_left,
             discards_left, levels, plays, flags,
         );
 
@@ -276,8 +270,9 @@ proptest! {
         let js0 = build_jokers(&specs, &ids);
         let deck = Deck::standard();
         let discarded = number(discarded, 60);
+        let cons = consumables_fixture();
         let run = run_view(
-            &js0, &discarded, &[], &CONSUMABLES, money, 1, 1, [1; 12], [0; 12], flags,
+            &js0, &discarded, &[], &cons, money, 1, 1, [1; 12], [0; 12], flags,
         );
 
         let fire_all = |js: &mut Vec<JokerInstance>| {
@@ -297,6 +292,7 @@ proptest! {
             let d = DiscardInfo {
                 cards: &discarded,
                 hand_type: evaluate(&discarded, &run.rules).hand_type,
+                forced: false,
             };
             money_total += hooks::fire_discard(inp!(), &d).money_delta;
             money_total += hooks::fire_cards_destroyed(inp!(), &discarded).money_delta;
@@ -307,7 +303,7 @@ proptest! {
             money_total += hooks::fire_reroll(inp!()).money_delta;
             money_total += hooks::fire_pack_open(inp!(), PackKind::Arcana).money_delta;
             money_total += hooks::fire_pack_skip(inp!(), PackKind::Buffoon).money_delta;
-            money_total += hooks::fire_consumable_used(inp!(), &CONSUMABLES[0]).money_delta;
+            money_total += hooks::fire_consumable_used(inp!(), &cons[0]).money_delta;
             money_total += hooks::fire_shop_exit(inp!()).money_delta;
             money_total += hooks::fire_blind_skip(inp!()).money_delta;
             if !js.is_empty() {

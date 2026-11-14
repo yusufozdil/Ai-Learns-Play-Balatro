@@ -369,7 +369,8 @@ fn golden_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundEndI
 
 // --- Burnt Joker: https://balatrowiki.org/w/Burnt_Joker -------------------------------------
 fn burnt_discard(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, d: &DiscardInfo<'_>) {
-    if ctx.run().discards_used_round == 1 && !d.cards.is_empty() {
+    // A boss-forced discard (The Hook) is not a discard action (`d.forced`).
+    if !d.forced && ctx.run().discards_used_round == 1 && !d.cards.is_empty() {
         ctx.level_up_hand(d.hand_type, 1);
     }
 }

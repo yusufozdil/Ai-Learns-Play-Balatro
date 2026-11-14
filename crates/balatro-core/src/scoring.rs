@@ -987,7 +987,7 @@ impl ScoreCtx<'_> {
         if run.observatory {
             let ht = self.eval.hand_type;
             for (i, c) in run.consumables.iter().enumerate() {
-                if c.planet_hand == Some(ht) {
+                if c.planet_hand() == Some(ht) {
                     self.source = TraceSource::Observatory {
                         consumable: small(i),
                     };

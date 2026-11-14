@@ -1008,6 +1008,7 @@ fn discard_jokers_ignore_debuffed_cards() {
     let info = DiscardInfo {
         cards: &cards,
         hand_type: HandType::ThreeOfAKind,
+        forced: false,
     };
     let r = fire_discard(
         EventInput {
@@ -1071,5 +1072,11 @@ fn dna_and_sixth_sense_on_the_same_single_six() {
         "DNA copy is in the hand"
     );
     assert_eq!(joker_value(&g, J::Hologram), 1.25);
-    assert_eq!(s.stats.effects_dropped, dropped0 + 1, "the Spectral");
+    // The Spectral is created (Phase 4 implements consumables).
+    assert_eq!(s.stats.effects_dropped, dropped0);
+    assert_eq!(s.consumables.len(), 1);
+    assert_eq!(
+        s.consumables[0].kind(),
+        balatro_core::consumable::ConsumableKind::Spectral
+    );
 }

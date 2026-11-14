@@ -262,11 +262,11 @@ fn runner_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // --- Constellation: https://balatrowiki.org/w/Constellation ---------------------------------
 // value = current xmult (starts 1.0). +0.1 for every Planet card used AFTER acquisition (not
 // retroactive). Spectral cards such as Black Hole are not Planets. `fire_consumable_used` is
-// called by the consumable system (Phase 4).
+// called by the game layer after the card's own effect.
 const CONSTELLATION_GAIN: f64 = 0.1;
 
 fn constellation_used(j: &mut JokerInstance, _: &mut EventCtx<'_>, used: &ConsumableView) {
-    if used.kind == ConsumableKind::Planet {
+    if used.kind() == ConsumableKind::Planet {
         j.value += CONSTELLATION_GAIN;
     }
 }

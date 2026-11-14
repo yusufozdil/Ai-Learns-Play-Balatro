@@ -3,6 +3,7 @@
 
 pub mod blind_chips;
 pub mod card_effects;
+pub mod consumables;
 pub mod hand_levels;
 pub mod prices;
 pub mod run_rules;

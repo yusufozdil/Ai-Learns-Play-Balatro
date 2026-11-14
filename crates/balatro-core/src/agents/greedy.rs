@@ -169,9 +169,10 @@ impl Agent for GreedyAgent {
                 if score >= need || s.discards_left == 0 {
                     return Action::Play(mask);
                 }
+                // A boss may forbid the planned discard (Cerulean Bell's forced card).
                 match Self::discard_plan(game, mask, ht) {
-                    Some(d) => Action::Discard(d),
-                    None => Action::Play(mask),
+                    Some(d) if game.validate(Action::Discard(d)).is_ok() => Action::Discard(d),
+                    _ => Action::Play(mask),
                 }
             }
             Phase::Shop => Action::EndShop,

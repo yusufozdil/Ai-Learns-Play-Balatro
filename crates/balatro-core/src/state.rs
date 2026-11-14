@@ -6,6 +6,10 @@
 //! (effective hand size, slots, blind target), the [`RunView`] builder and the invariants.
 
 use crate::blinds::{self, BlindKind, MULT_BOSS_DEFAULT, StakeScaling};
+use crate::boss::{self, BossState};
+use crate::consumable::ConsumableInstance;
+use crate::content::ids::{BossId, ConsumableId};
+use crate::content::try_boss_def;
 use crate::data::prices::{INTEREST_CAP_BASE, STARTING_MONEY};
 use crate::data::run_rules::{
     BASE_CONSUMABLE_SLOTS, BASE_DISCARDS, BASE_HAND_SIZE, BASE_HANDS, BASE_JOKER_SLOTS,
@@ -15,7 +19,7 @@ use crate::data::run_rules::{
 use crate::deck::Deck;
 use crate::enums::{Edition, HandType, Phase};
 use crate::hooks::{
-    BossView, ConsumableView, DeckCounts, Modifiers, RunFlag, RunStats, RunView, collect_modifiers,
+    BossView, DeckCounts, Modifiers, RunFlag, RunStats, RunView, collect_modifiers,
 };
 use crate::joker::JokerInstance;
 use crate::rng::{GameRng, RngKey};
@@ -140,11 +144,15 @@ pub struct GameState {
     /// Tags offered for skipping this ante's Small and Big blind (rolled at ante start on
     /// `RngKey::Tags`, notes.md §4.1c).
     pub blind_tags: [TagId; 2],
-    /// PLACEHOLDER boss id of this ante (0 = none). TODO(Phase 4): `Option<BossId>` chosen at
-    /// ante start on `RngKey::Bosses`, plus per-boss state.
-    pub boss_id: u16,
-    /// The boss effect was disabled (Chicot, Luchador).
+    /// Boss of this ante, chosen at ante start on `RngKey::Bosses` (`boss::choose_boss`).
+    /// `None` only if no boss is defined.
+    pub boss: Option<BossId>,
+    /// The boss effect was disabled (Chicot, Luchador, Verdant Leaf). Reset at ante start.
     pub boss_disabled: bool,
+    /// Times each boss was chosen this run (least-seen rule), indexed by `BossId::index()`.
+    pub boss_seen: [u32; BossId::COUNT],
+    /// Boss bookkeeping (per ante / per round / per hand; see [`BossState`]).
+    pub boss_state: BossState,
 
     // --- economy ---------------------------------------------------------------------------
     /// Money in dollars (may be negative only with debt allowance, `Modifiers::debt_limit`).
@@ -184,8 +192,13 @@ pub struct GameState {
     /// Passive modifiers of `jokers` (cache of `collect_modifiers(&jokers)`; recomputed whenever
     /// jokers change).
     pub mods: Modifiers,
-    /// Held consumables. PLACEHOLDER type until Phase 4 (`ConsumableInstance`).
-    pub consumables: Vec<ConsumableView>,
+    /// Held consumables, left to right.
+    pub consumables: Vec<ConsumableInstance>,
+    /// Times each consumable was used this run, indexed by `ConsumableId::index()` (length
+    /// `ConsumableId::COUNT`). Read with [`GameState::consumable_uses`].
+    pub consumable_use_counts: Vec<u32>,
+    /// Last Tarot or Planet used this run, The Fool excluded (The Fool copies it).
+    pub last_tarot_planet: Option<ConsumableId>,
     /// All playing cards of the run, in their piles. Outside a round every card is in
     /// `deck.draw_pile`; during a round: draw / hand / discard (`played` only inside a step).
     pub deck: Deck,
@@ -234,8 +247,10 @@ impl GameState {
             blind: BlindKind::Small,
             target: 0.0,
             blind_tags: [0; 2],
-            boss_id: 0,
+            boss: None,
             boss_disabled: false,
+            boss_seen: [0; BossId::COUNT],
+            boss_state: BossState::default(),
             money: STARTING_MONEY,
             interest_cap: INTEREST_CAP_BASE,
             hands_left: base_hands,
@@ -252,6 +267,8 @@ impl GameState {
             jokers: Vec::new(),
             mods: Modifiers::default(),
             consumables: Vec::new(),
+            consumable_use_counts: vec![0; ConsumableId::COUNT],
+            last_tarot_planet: None,
             deck: Deck::standard(),
             starting_deck_size: STANDARD_DECK_SIZE,
             hand_levels: [1; HandType::COUNT],
@@ -269,8 +286,8 @@ impl GameState {
         s
     }
 
-    /// Ante setup: roll the Small/Big skip tags (and, from Phase 4, the boss), reset the blind
-    /// to Small and refresh the target.
+    /// Ante setup: roll the Small/Big skip tags and the boss, clear the Pillar's
+    /// played-this-ante flags, reset the blind to Small and refresh the target.
     pub(crate) fn start_ante(&mut self) {
         for t in &mut self.blind_tags {
             *t = self
@@ -278,9 +295,23 @@ impl GameState {
                 .range(RngKey::Tags, 0, usize::from(TAG_POOL_PLACEHOLDER))
                 as TagId;
         }
-        // TODO(Phase 4): choose the boss on `RngKey::Bosses` (least-seen rule, notes.md §4.1c).
-        self.boss_id = 0;
+        self.boss = boss::choose_boss(
+            self.ante,
+            SHOWDOWN_ANTE_INTERVAL,
+            &mut self.boss_seen,
+            &mut self.rng,
+        );
         self.boss_disabled = false;
+        let d = &mut self.deck;
+        for c in d
+            .draw_pile
+            .iter_mut()
+            .chain(d.hand.iter_mut())
+            .chain(d.discard_pile.iter_mut())
+        {
+            c.played_ante = false;
+        }
+        boss::ante_start(self);
         self.blind = BlindKind::Small;
         self.refresh_target();
     }
@@ -295,21 +326,30 @@ impl GameState {
         );
     }
 
-    /// Boss blind multiplier. A disabled boss (Chicot, Luchador) uses the standard multiplier
-    /// instead of its special one.
+    /// Boss blind multiplier: the boss's `mult` (Wall x4, Violet Vessel x6, Needle x1, else x2).
+    /// A disabled boss (Chicot, Luchador) uses the standard x2, except The Needle
+    /// (`keep_mult_when_disabled`, notes.md §4.2).
     pub fn boss_mult(&self) -> f64 {
-        if self.boss_disabled {
-            return MULT_BOSS_DEFAULT;
+        match self.boss.and_then(try_boss_def) {
+            Some(d) if !self.boss_disabled || d.keep_mult_when_disabled => d.mult,
+            _ => MULT_BOSS_DEFAULT,
         }
-        self.special_boss_mult().unwrap_or(MULT_BOSS_DEFAULT)
     }
 
-    /// Requirement multiplier of the current boss when it differs from the standard x2.
-    /// TODO(Phase 4): Wall x4 / Violet Vessel x6 / Needle x1, keyed on `boss_id` (the Needle
-    /// keeps x1 even when Chicot disables it; wave5.rs Chicot note, so the Needle will need an
-    /// exception in `boss_mult`).
-    fn special_boss_mult(&self) -> Option<f64> {
-        None
+    /// The boss's effects apply now: boss blind, a boss chosen, not disabled, round in play.
+    pub fn boss_in_effect(&self) -> bool {
+        self.phase == Phase::Play
+            && self.blind == BlindKind::Boss
+            && self.boss.is_some()
+            && !self.boss_disabled
+    }
+
+    /// Times `id` was used this run.
+    pub fn consumable_uses(&self, id: ConsumableId) -> u32 {
+        self.consumable_use_counts
+            .get(id.index())
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The current boss is a Showdown boss (ante % 8 == 0).
@@ -323,11 +363,17 @@ impl GameState {
         self.mods = collect_modifiers(&self.jokers);
     }
 
-    /// Effective hand size: base + joker modifiers, clamped to `[MIN_HAND_SIZE, MAX_HAND_SIZE]`.
+    /// Effective hand size: base + joker modifiers + boss (The Manacle, while in effect),
+    /// clamped to `[MIN_HAND_SIZE, MAX_HAND_SIZE]`.
     pub fn hand_size(&self) -> u32 {
+        let boss = if self.boss_in_effect() {
+            self.boss.and_then(try_boss_def).map_or(0, |d| d.hand_size)
+        } else {
+            0
+        };
         clamp_delta(
             self.base_hand_size,
-            self.mods.hand_size,
+            self.mods.hand_size.saturating_add(boss),
             MIN_HAND_SIZE,
             MAX_HAND_SIZE,
         )
@@ -416,12 +462,20 @@ impl GameState {
         u
     }
 
-    /// Boss facts for hooks. Placeholder until Phase 4 (no boss has an effect yet).
+    /// Boss facts for hooks. `active` = boss blind with an enabled boss (also in the shop /
+    /// blind select before it: check `in_round`); the per-hand flags come from `boss_state`.
     pub fn boss_view(&self) -> BossView {
+        let active = self.blind == BlindKind::Boss && self.boss.is_some() && !self.boss_disabled;
         BossView {
-            id: self.boss_id,
-            active: self.blind == BlindKind::Boss && self.boss_id != 0 && !self.boss_disabled,
-            ..BossView::default()
+            id: self.boss,
+            active,
+            halve_base: active
+                && self
+                    .boss
+                    .and_then(try_boss_def)
+                    .is_some_and(|d| d.halve_base),
+            triggered: active && self.boss_state.triggered,
+            hand_invalid: active && self.boss_state.hand_invalid,
         }
     }
 
@@ -441,7 +495,7 @@ impl GameState {
     ///
     /// Count conventions (hooks.md §5.3) hold if the caller pays the action first: during
     /// scoring `hands_left` is already decremented and the play counters include the hand.
-    pub fn run_view_with<'a>(&self, consumables: &'a [ConsumableView]) -> RunView<'a> {
+    pub fn run_view_with<'a>(&self, consumables: &'a [ConsumableInstance]) -> RunView<'a> {
         RunView {
             money: self.money,
             ante: u32::try_from(self.ante).unwrap_or(0),
@@ -534,14 +588,19 @@ impl GameState {
                 self.outcome, self.phase
             ));
         }
-        // Money: purchases never go below the debt floor; nothing in Phase 2 spends money.
-        // TODO(Phase 4): The Tooth / The Ox can push money below the floor; relax this then.
-        if self.money < self.money_floor() {
-            return Err(format!(
-                "money {} below floor {}",
-                self.money,
-                self.money_floor()
-            ));
+        // Money: purchases never go below the debt floor (`can_afford`), but The Tooth may push
+        // it lower (notes.md §4.1c), so there is no money invariant.
+        if self.consumable_use_counts.len() != ConsumableId::COUNT {
+            return Err("consumable use counts have the wrong length".into());
+        }
+        if !matches!(self.phase, Phase::Play | Phase::GameOver | Phase::Won)
+            && self.deck.iter_all().any(|c| c.face_down || c.debuffed)
+        {
+            return Err("face-down or debuffed card outside a round".into());
+        }
+        if !self.boss_in_effect() && !self.is_terminal() && self.deck.iter_all().any(|c| c.debuffed)
+        {
+            return Err("debuffed card without a boss in effect".into());
         }
         if self.round_score.is_nan() || self.round_score < 0.0 {
             return Err("round score negative or NaN".into());

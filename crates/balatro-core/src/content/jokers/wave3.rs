@@ -281,14 +281,10 @@ fn gift_card_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundE
         target: SellTarget::AllJokers,
         amount: GIFT_CARD_SELL_GAIN,
     });
-    // Only when something is held: the game layer cannot apply this effect to consumables yet
-    // (Phase 4) and drops it, so an empty queue entry would only inflate `effects_dropped`.
-    if !ctx.run().consumables.is_empty() {
-        ctx.push_effect(SideEffect::AddSellValue {
-            target: SellTarget::AllConsumables,
-            amount: GIFT_CARD_SELL_GAIN,
-        });
-    }
+    ctx.push_effect(SideEffect::AddSellValue {
+        target: SellTarget::AllConsumables,
+        amount: GIFT_CARD_SELL_GAIN,
+    });
 }
 
 // --- Reserved Parking: https://balatrowiki.org/w/Reserved_Parking ---------------------------
@@ -355,7 +351,8 @@ fn to_the_moon_modifiers(_: &JokerInstance, m: &mut Modifiers) {
 const TRADING_CARD_MONEY: i32 = 3;
 
 fn trading_card_discard(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, d: &DiscardInfo<'_>) {
-    if ctx.run().discards_used_round == 1
+    if !d.forced
+        && ctx.run().discards_used_round == 1
         && let [card] = d.cards
     {
         ctx.push_effect(SideEffect::DestroyCard { uid: card.uid });

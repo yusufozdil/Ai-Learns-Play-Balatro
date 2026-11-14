@@ -8,6 +8,8 @@
 //! Shared file: owned by the orchestrator; content agents request new hooks via their report.
 
 use crate::card::{Card, RuleFlags};
+use crate::consumable::ConsumableInstance;
+use crate::content::ids::{BossId, ConsumableId};
 use crate::content::jokers::try_def;
 use crate::deck::{Deck, Pile};
 use crate::enums::{Enhancement, HandType, Rank, Rarity, Seal, Suit};
@@ -180,11 +182,12 @@ impl Hooks {
 /// Kind of the current blind (defined in `blinds`, re-exported for hook authors).
 pub use crate::blinds::BlindKind;
 
-/// Boss-blind facts relevant to jokers and scoring. Placeholder until Phase 4 (`BossId`).
+/// Boss-blind facts relevant to jokers and scoring (built by `GameState::boss_view`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BossView {
-    /// Placeholder boss id (0 = none). TODO(orchestrator): `Option<BossId>` in Phase 4.
-    pub id: u16,
+    /// The ante's boss (`None` only if no boss is defined). Set in every blind of the ante; check
+    /// `blind == BlindKind::Boss` / `active` before reacting to it.
+    pub id: Option<BossId>,
     /// The current blind is a boss whose effect is active (not disabled by Chicot/Luchador).
     pub active: bool,
     /// The Flint: base chips and mult are halved, rounded up (scoring step 1).
@@ -311,30 +314,12 @@ impl DeckCounts {
     }
 }
 
-/// Kind of consumable. Placeholder until Phase 4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ConsumableKind {
-    /// Tarot card.
-    Tarot,
-    /// Planet card.
-    Planet,
-    /// Spectral card.
-    Spectral,
-}
+/// Kind of consumable (defined in `consumable`, re-exported for hook authors).
+pub use crate::consumable::ConsumableKind;
 
-/// What jokers/scoring may know about one consumable. Placeholder until Phase 4 defines the
-/// consumable ids; Phase 4 maps its types onto this view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConsumableView {
-    /// Tarot / Planet / Spectral.
-    pub kind: ConsumableKind,
-    /// Placeholder id within its kind. TODO(orchestrator): typed id in Phase 4.
-    pub id: u16,
-    /// For Planets: the hand type it levels (Observatory, Satellite, Constellation).
-    pub planet_hand: Option<HandType>,
-    /// Negative edition (does not take a slot).
-    pub negative: bool,
-}
+/// What hooks see of one held consumable: the run's own [`ConsumableInstance`] (`id`,
+/// `negative`, `sell_value`; `kind()` / `planet_hand()` derive from the id).
+pub type ConsumableView = ConsumableInstance;
 
 /// Booster pack kind. Placeholder until Phase 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -368,7 +353,7 @@ pub struct RunView<'a> {
     pub round: u32,
     /// Current (or just selected) blind kind.
     pub blind: BlindKind,
-    /// Boss facts (placeholder).
+    /// Boss facts.
     pub boss: BossView,
     /// A round is being played (`Phase::Play`). `false` in the shop and at blind select, where
     /// `blind` already names the next blind (Luchador, Chicot: disable the boss only inside it).
@@ -505,6 +490,13 @@ pub enum SideEffect {
     CreateConsumable {
         /// Tarot / Planet / Spectral.
         kind: ConsumableKind,
+        /// Negative edition (needs no slot).
+        negative: bool,
+    },
+    /// Create a specific consumable (The Fool). Non-negative ones need a free slot.
+    AddConsumable {
+        /// Which card.
+        id: ConsumableId,
         /// Negative edition (needs no slot).
         negative: bool,
     },
@@ -686,6 +678,11 @@ pub struct DiscardInfo<'a> {
     /// Hand type of the discarded cards (`hand_eval::evaluate`, computed by the game layer;
     /// Burnt Joker levels it).
     pub hand_type: HandType,
+    /// The cards were discarded by a boss (The Hook), not by a discard action: no discard was
+    /// used (`discards_used_round` unchanged). "First discard" effects (Burnt Joker, Trading
+    /// Card) must ignore it; per-card discard effects (Green Joker, Ramen, Castle, Mail-In
+    /// Rebate, Hit the Road, Yorick, Faceless) still apply (notes.md §4.2, bosses.md).
+    pub forced: bool,
 }
 
 /// Payload of the end-of-round event.

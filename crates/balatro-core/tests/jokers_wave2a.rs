@@ -12,14 +12,15 @@
 use balatro_core::actions::Action;
 use balatro_core::blinds::BlindKind;
 use balatro_core::card::Card;
+use balatro_core::content::ConsumableId;
 use balatro_core::content::jokers::{JokerId, try_def};
 use balatro_core::deck::{Deck, Pile};
 use balatro_core::enums::{Enhancement, HandType, Rank, Rarity, Seal, Suit};
 use balatro_core::game::{Game, StepInfo, apply_side_effects};
 use balatro_core::hand_eval::HandEval;
 use balatro_core::hooks::{
-    ConsumableKind, ConsumableView, DiscardInfo, EventInput, EventResult, PackKind, RoundEndInfo,
-    RunFlag, RunStats, RunView, SideEffect, fire_acquire, fire_blind_select, fire_cards_added,
+    ConsumableView, DiscardInfo, EventInput, EventResult, PackKind, RoundEndInfo, RunFlag,
+    RunStats, RunView, SideEffect, fire_acquire, fire_blind_select, fire_cards_added,
     fire_consumable_used, fire_discard, fire_pack_open, fire_pack_skip, fire_round_end,
 };
 use balatro_core::joker::JokerInstance;
@@ -194,30 +195,15 @@ fn round_end(js: &mut [JokerInstance], run: &RunView<'_>, seed: u64) -> Vec<Side
 }
 
 fn planet() -> ConsumableView {
-    ConsumableView {
-        kind: ConsumableKind::Planet,
-        id: 0,
-        planet_hand: Some(HandType::Pair),
-        negative: false,
-    }
+    ConsumableView::new(ConsumableId::planet_for(HandType::Pair))
 }
 
 fn tarot() -> ConsumableView {
-    ConsumableView {
-        kind: ConsumableKind::Tarot,
-        id: 0,
-        planet_hand: None,
-        negative: false,
-    }
+    ConsumableView::new(ConsumableId::TAROTS[0])
 }
 
 fn spectral() -> ConsumableView {
-    ConsumableView {
-        kind: ConsumableKind::Spectral,
-        id: 0,
-        planet_hand: None,
-        negative: false,
-    }
+    ConsumableView::new(ConsumableId::SPECTRALS[0])
 }
 
 // ----- game-level helpers -----
@@ -660,6 +646,7 @@ fn discard_event(js: &mut [JokerInstance], n_cards: usize) {
     let info = DiscardInfo {
         cards: &cards,
         hand_type: HandType::HighCard,
+        forced: false,
     };
     event(js, &RunView::default(), 1, |inp| fire_discard(inp, &info));
 }

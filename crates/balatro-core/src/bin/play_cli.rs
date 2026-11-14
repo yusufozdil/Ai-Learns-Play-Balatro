@@ -65,6 +65,9 @@ fn card_str(c: &Card) -> String {
     if c.debuffed {
         s.push_str("[debuffed]");
     }
+    if c.face_down {
+        s.push_str("[face down]");
+    }
     s
 }
 
@@ -76,6 +79,10 @@ fn summary(s: &GameState) -> String {
     ));
     if let Some(o) = s.outcome {
         out.push_str(&format!(" | outcome {o:?}"));
+    }
+    if let Some(b) = s.boss {
+        let off = if s.boss_disabled { " (disabled)" } else { "" };
+        out.push_str(&format!(" | boss {b:?}{off}"));
     }
     out.push_str(&format!(
         "\nscore {} / target {} | money ${} | hands {} discards {}\n",
@@ -89,6 +96,14 @@ fn summary(s: &GameState) -> String {
         out.push_str(&format!(" [{i}] {:?} (${})", j.id, j.sell_value));
     }
     out.push('\n');
+    if !s.consumables.is_empty() {
+        out.push_str("consumables:");
+        for (i, c) in s.consumables.iter().enumerate() {
+            let neg = if c.negative { " Negative" } else { "" };
+            out.push_str(&format!(" [{i}] {:?}{neg} (${})", c.id, c.sell_value));
+        }
+        out.push('\n');
+    }
     if s.phase == Phase::Play {
         out.push_str("hand:");
         for (i, c) in s.deck.hand.iter().enumerate() {
@@ -173,8 +188,9 @@ fn do_action(sess: &mut Session, action: Action) -> String {
     }
 }
 
-const HELP: &str = "commands: select | skip | play <pos..> | discard <pos..> | sell <i> | end | \
-legal | state | save <file> | load <file> | replay-save <file> | help | quit";
+const HELP: &str = "commands: select | skip | play <pos..> | discard <pos..> | sell <i> | \
+use <slot> [pos..] | sellc <slot> | end | legal | state | save <file> | load <file> | \
+replay-save <file> | help | quit";
 
 /// Handle one line. Returns `None` to quit, else the text to print.
 fn handle(sess: &mut Session, line: &str) -> Option<String> {
@@ -201,6 +217,30 @@ fn handle(sess: &mut Session, line: &str) -> Option<String> {
                 Err(_) => format!("error: not a joker slot: {a:?}"),
             },
             _ => "error: usage: sell <joker slot>".to_string(),
+        },
+        "use" => match args.split_first() {
+            Some((a, rest)) => match a.parse::<u8>() {
+                Ok(slot) => {
+                    let targets = if rest.is_empty() {
+                        Ok(0)
+                    } else {
+                        parse_mask(rest, hand_len)
+                    };
+                    match targets {
+                        Ok(t) => do_action(sess, Action::UseConsumable { slot, targets: t }),
+                        Err(e) => format!("error: {e}"),
+                    }
+                }
+                Err(_) => format!("error: not a consumable slot: {a:?}"),
+            },
+            None => "error: usage: use <consumable slot> [hand positions..]".to_string(),
+        },
+        "sellc" => match args {
+            [a] => match a.parse::<u8>() {
+                Ok(i) => do_action(sess, Action::SellConsumable(i)),
+                Err(_) => format!("error: not a consumable slot: {a:?}"),
+            },
+            _ => "error: usage: sellc <consumable slot>".to_string(),
         },
         "legal" => {
             let v = sess.game.legal_actions();

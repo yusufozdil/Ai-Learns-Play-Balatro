@@ -14,11 +14,15 @@
 
 use crate::actions::{self, Action, ActionError};
 use crate::blinds::BlindKind;
+use crate::boss::{self, DrawKind};
 use crate::card::Card;
+use crate::consumable::{self, ConsumableInstance, ConsumableKind, UseCtx};
+use crate::content::ids::ConsumableId;
+use crate::content::try_consumable_def;
 use crate::data::run_rules::{MAX_EFFECT_CASCADE, WIN_ANTE};
 use crate::deck::Pile;
 use crate::economy::{self, CashOut, CashOutInput};
-use crate::enums::{Edition, HandType, Phase};
+use crate::enums::{Edition, HandType, Phase, Seal};
 use crate::hand_eval;
 use crate::hooks::{
     self, DiscardInfo, EventInput, EventResult, RoundEndInfo, SellTarget, SideEffect, SoldItem,
@@ -88,8 +92,10 @@ pub struct StepInfo {
     pub round: Option<RoundReport>,
     /// Tag gained by `SkipBlind`.
     pub tag: Option<TagId>,
-    /// Price of a sold joker.
+    /// Price of a sold joker or consumable.
     pub sold_for: Option<i32>,
+    /// Consumable used by `UseConsumable`.
+    pub used: Option<ConsumableId>,
     /// Playing cards destroyed during the step.
     pub cards_destroyed: u32,
     /// Playing cards added during the step.
@@ -219,6 +225,51 @@ impl Game {
         view.hand_plays_round[ht.index()] += 1;
         let mut jokers = s.jokers.clone();
         let mut rng = s.rng.clone();
+        // Boss pre-play effects on copies, exactly as `play` applies them to the state.
+        if s.boss_in_effect() {
+            let mut bs = s.boss_state;
+            let mut hooked = Vec::new();
+            boss::pre_play(
+                s.boss,
+                &played,
+                ht,
+                &mut held,
+                &mut hooked,
+                &mut view.money,
+                &mut view.hand_levels,
+                &view.hand_plays_round,
+                &mut bs,
+                &mut rng,
+            );
+            view.boss.triggered = bs.triggered;
+            view.boss.hand_invalid = bs.hand_invalid;
+            if !hooked.is_empty() {
+                let d = DiscardInfo {
+                    cards: &hooked,
+                    hand_type: hand_eval::evaluate(&hooked, &s.mods.rules).hand_type,
+                    forced: true,
+                };
+                let mut fx = Vec::new();
+                let r = hooks::fire_discard(
+                    EventInput {
+                        jokers: &mut jokers,
+                        run: &view,
+                        deck: &s.deck,
+                        rng: &mut rng,
+                        effects: &mut fx,
+                    },
+                    &d,
+                );
+                view.money = view.money.saturating_add(r.money_delta);
+                // Jokers the discard destroyed (Ramen) are gone before scoring in `play`.
+                jokers.retain(|j| {
+                    j.stickers.eternal
+                        || !fx
+                            .iter()
+                            .any(|e| matches!(e, SideEffect::DestroyJoker { uid } if *uid == j.uid))
+                });
+            }
+        }
         let r = scorer.score_hand(ScoreInput {
             played: &mut played,
             held: &held,
@@ -252,6 +303,7 @@ impl Game {
             round: None,
             tag: None,
             sold_for: None,
+            used: None,
             cards_destroyed: 0,
             cards_added: 0,
         };
@@ -261,6 +313,10 @@ impl Game {
             Action::Play(mask) => self.play(mask, &mut info)?,
             Action::Discard(mask) => self.discard(mask, &mut info)?,
             Action::SellJoker(i) => self.sell_joker(usize::from(i), &mut info),
+            Action::UseConsumable { slot, targets } => {
+                self.use_consumable(usize::from(slot), targets, &mut info)
+            }
+            Action::SellConsumable(i) => self.sell_consumable(usize::from(i), &mut info),
             Action::EndShop => self.end_shop(),
             // `validate` rejects these; nothing has been mutated yet.
             other => {
@@ -269,6 +325,10 @@ impl Game {
                     phase_of_plan: 5,
                 });
             }
+        }
+        if self.state.phase == Phase::Play {
+            // Debuffs follow suit/rank/joker changes made by the action (hooks.md §15).
+            boss::refresh_debuffs(&mut self.state);
         }
         let s = &self.state;
         info.phase_after = s.phase;
@@ -302,7 +362,21 @@ impl Game {
         let slot = s.jokers.len() - 1;
         fire_paid(s, &mut self.fx, |inp| hooks::fire_acquire(inp, slot));
         self.resolve_fx();
+        if self.state.phase == Phase::Play {
+            boss::refresh_debuffs(&mut self.state);
+        }
         Some(slot)
+    }
+
+    /// Add a consumable (packs/shop in Phase 5, tests). Returns its slot, or `None` without room
+    /// (Negative ones always fit).
+    pub fn add_consumable(&mut self, c: ConsumableInstance) -> Option<usize> {
+        let s = &mut self.state;
+        if !c.negative && !s.has_consumable_room() {
+            return None;
+        }
+        s.consumables.push(c);
+        Some(s.consumables.len() - 1)
     }
 
     // ----- actions --------------------------------------------------------------------------
@@ -318,17 +392,18 @@ impl Game {
         s.discards_left = s.round_discards();
         s.refresh_target();
         s.deck.reset_for_round(&mut s.rng);
-        // TODO(Phase 4): boss set-up here, after the reset (debuffs, face-down, The Water /
-        // Needle / Manacle count changes, Crimson Heart joker debuff, then refresh_modifiers).
+        // The round is on from here (`in_round`), so the boss is in effect for its set-up and
+        // for joker `on_blind_select` (Chicot's disable reverts the set-up).
+        s.phase = Phase::Play;
+        boss::blind_start(s);
         fire_paid(s, &mut self.fx, hooks::fire_blind_select);
         self.resolve_fx();
         let s = &mut self.state;
-        s.phase = Phase::Play;
-        let hs = s.hand_size() as usize;
-        s.deck.draw_to_hand_size(hs);
+        boss::refresh_debuffs(s);
+        boss::draw(s, DrawKind::RoundStart);
         fire_paid(s, &mut self.fx, hooks::fire_first_hand_drawn);
         self.resolve_fx();
-        self.settle(info);
+        self.settle(info, DrawKind::Refill);
     }
 
     fn skip_blind(&mut self, info: &mut StepInfo) {
@@ -358,18 +433,40 @@ impl Game {
             .take_from_hand(mask)
             .map_err(|_| ActionError::SelectionOutOfRange { mask, hand_len })?;
         s.deck.played = played;
+        for c in &mut s.deck.played {
+            c.played_ante = true; // The Pillar
+        }
         // Pay the hand (RunView conventions, hooks.md §5.3).
         s.hands_left -= 1;
         s.hands_played_round += 1;
         s.stats.hands_played += 1;
-        // TODO(Phase 4): boss pre-effects (The Hook, Tooth, Ox, Arm, Pillar, Psychic/Eye/Mouth
-        // validity -> BossView.hand_invalid/triggered).
         let eval = hand_eval::evaluate(&s.deck.played, &s.mods.rules);
         let ht = eval.hand_type;
         s.hand_plays_run[ht.index()] += 1;
         s.hand_plays_round[ht.index()] += 1;
         s.last_hand = Some(ht);
 
+        // Boss pre-play effects (validity, The Hook, Tooth, Ox, Arm; `Game::preview_play`
+        // mirrors this on copies).
+        let boss_id = if s.boss_in_effect() { s.boss } else { None };
+        let mut hooked = Vec::new();
+        boss::pre_play(
+            boss_id,
+            &s.deck.played,
+            ht,
+            &mut s.deck.hand,
+            &mut hooked,
+            &mut s.money,
+            &mut s.hand_levels,
+            &s.hand_plays_round,
+            &mut s.boss_state,
+            &mut s.rng,
+        );
+        if !hooked.is_empty() {
+            self.forced_discard(hooked);
+        }
+
+        let s = &mut self.state;
         let view = s.run_view_with(&s.consumables);
         let r = self.scorer.score_hand(ScoreInput {
             played: &mut s.deck.played,
@@ -395,9 +492,28 @@ impl Game {
         s.refresh_modifiers();
         self.fx.extend_from_slice(self.scorer.effects());
         self.resolve_fx();
-        self.state.deck.move_played_to_discard();
-        self.settle(info);
+        let s = &mut self.state;
+        s.deck.move_played_to_discard();
+        if s.round_score < s.target && s.hands_left > 0 {
+            boss::after_play(s); // e.g. Crimson Heart picks the joker for the next hand
+        }
+        self.settle(info, DrawKind::AfterPlay);
         Ok(())
+    }
+
+    /// Cards discarded by a boss before scoring (The Hook): to the discard pile, then a forced
+    /// discard event (no discard is used) and Purple Seals.
+    fn forced_discard(&mut self, cards: Vec<Card>) {
+        let s = &mut self.state;
+        s.deck.discard_pile.extend_from_slice(&cards);
+        let d = DiscardInfo {
+            cards: &cards,
+            hand_type: hand_eval::evaluate(&cards, &s.mods.rules).hand_type,
+            forced: true,
+        };
+        fire_paid(s, &mut self.fx, |inp| hooks::fire_discard(inp, &d));
+        push_purple_seals(&cards, &mut self.fx);
+        self.resolve_fx();
     }
 
     fn discard(&mut self, mask: u16, info: &mut StepInfo) -> Result<(), ActionError> {
@@ -414,10 +530,12 @@ impl Game {
         let d = DiscardInfo {
             cards: &cards,
             hand_type,
+            forced: false,
         };
         fire_paid(s, &mut self.fx, |inp| hooks::fire_discard(inp, &d));
+        push_purple_seals(&cards, &mut self.fx);
         self.resolve_fx();
-        self.settle(info);
+        self.settle(info, DrawKind::AfterDiscard);
         Ok(())
     }
 
@@ -440,7 +558,60 @@ impl Game {
         s.refresh_modifiers();
         info.sold_for = Some(price);
         self.resolve_fx();
+        boss::joker_sold(&mut self.state); // Verdant Leaf
         // A sale cannot normally end a round, but effects (e.g. AddHands(-n)) could.
+        if self.state.phase == Phase::Play {
+            self.settle_without_draw(info);
+        }
+    }
+
+    /// Use a consumable (validated): out of its slot, effect (immediate writes + queued side
+    /// effects, applied with their follow-up events), run counters and The Fool's record, then
+    /// `on_consumable_used` (hooks see the counters including this use).
+    fn use_consumable(&mut self, slot: usize, targets: u16, info: &mut StepInfo) {
+        let s = &mut self.state;
+        if slot >= s.consumables.len() {
+            return; // rejected by `validate`
+        }
+        let used = s.consumables.remove(slot);
+        let Some(def) = try_consumable_def(used.id) else {
+            return; // rejected by `validate`
+        };
+        let mut ctx = UseCtx::new(s, &mut self.fx, used, targets);
+        (def.effect)(&mut ctx);
+        s.refresh_modifiers(); // joker editions may have changed
+        self.resolve_fx();
+        let s = &mut self.state;
+        record_use(s, used.id);
+        info.used = Some(used.id);
+        fire_paid(s, &mut self.fx, |inp| {
+            hooks::fire_consumable_used(inp, &used)
+        });
+        self.resolve_fx();
+        let s = &mut self.state;
+        if s.phase == Phase::Play {
+            s.deck.sort_hand(); // ranks may have changed (Strength, Death, Ouija)
+            if s.deck.hand.is_empty() {
+                self.settle(info, DrawKind::Refill);
+            } else {
+                self.settle_without_draw(info);
+            }
+        }
+    }
+
+    fn sell_consumable(&mut self, slot: usize, info: &mut StepInfo) {
+        let s = &mut self.state;
+        let Some(&sold) = s.consumables.get(slot) else {
+            return; // rejected by `validate`
+        };
+        fire_paid(s, &mut self.fx, |inp| {
+            hooks::fire_sell_other(inp, &SoldItem::Consumable(sold), None)
+        });
+        // Event effects are only queued, so `slot` still names the sold card.
+        s.consumables.remove(slot);
+        s.money = s.money.saturating_add(sold.sell_value);
+        info.sold_for = Some(sold.sell_value);
+        self.resolve_fx();
         if self.state.phase == Phase::Play {
             self.settle_without_draw(info);
         }
@@ -457,15 +628,14 @@ impl Game {
 
     // ----- round flow -----------------------------------------------------------------------
 
-    /// After a Play phase action: end the round if it is decided, else refill the hand and end
-    /// it if nothing is left to play (blinds.md §6.4-§6.6).
-    fn settle(&mut self, info: &mut StepInfo) {
+    /// After a Play phase action: end the round if it is decided, else refill the hand (boss
+    /// draw rules for `kind`) and end it if nothing is left to play (blinds.md §6.4-§6.6).
+    fn settle(&mut self, info: &mut StepInfo, kind: DrawKind) {
         if self.settle_without_draw(info) {
             return;
         }
         let s = &mut self.state;
-        let hs = s.hand_size() as usize;
-        s.deck.draw_to_hand_size(hs);
+        boss::draw(s, kind);
         if s.deck.hand.is_empty() {
             self.finish_round(false, true, info);
         }
@@ -522,6 +692,8 @@ impl Game {
         debug_assert_eq!(saved, end.saved);
 
         let s = &mut self.state;
+        // The boss's joker debuff lasted through the round end (Crimson Heart, bosses.md).
+        boss::round_end(s);
         let mut report = RoundReport {
             won: won || saved,
             saved,
@@ -680,7 +852,7 @@ fn gather_deck(s: &mut GameState) {
 ///
 /// Rules: eternal jokers are never destroyed; creations that need a slot are dropped when there
 /// is no room; effects whose systems do not exist yet are dropped and counted in
-/// `stats.effects_dropped` (consumables: Phase 4; random jokers: Phase 5). Never panics.
+/// `stats.effects_dropped` (random jokers: Phase 5). Never panics.
 pub fn apply_side_effects(s: &mut GameState, effects: &[SideEffect]) -> EffectReport {
     let mut rep = EffectReport::default();
     let mut pending: Vec<SideEffect> = effects.to_vec();
@@ -736,10 +908,44 @@ fn apply_one(
             let l = &mut s.hand_levels[hand.index()];
             *l = (i64::from(*l) + i64::from(levels)).clamp(1, i64::from(u32::MAX)) as u32;
         }
-        // TODO(Phase 4): consumables (random Tarot/Planet/Spectral, Blue Seal planet, Perkeo).
-        SideEffect::CreateConsumable { .. }
-        | SideEffect::CreatePlanetFor { .. }
-        | SideEffect::CopyConsumable { .. } => drop_effect(s, rep),
+        SideEffect::CreateConsumable { kind, negative } => {
+            if !negative && !s.has_consumable_room() {
+                return drop_effect(s, rep);
+            }
+            let id = consumable::random_consumable(
+                kind,
+                &s.consumables,
+                &s.hand_plays_run,
+                s.mods.allow_duplicates,
+                &mut s.rng,
+            );
+            s.consumables
+                .push(ConsumableInstance::new(id).with_negative(negative));
+        }
+        SideEffect::AddConsumable { id, negative } => {
+            if !negative && !s.has_consumable_room() {
+                return drop_effect(s, rep);
+            }
+            s.consumables
+                .push(ConsumableInstance::new(id).with_negative(negative));
+        }
+        SideEffect::CreatePlanetFor { hand } => {
+            if !s.has_consumable_room() {
+                return drop_effect(s, rep);
+            }
+            s.consumables
+                .push(ConsumableInstance::new(ConsumableId::planet_for(hand)));
+        }
+        SideEffect::CopyConsumable { index, negative } => {
+            let Some(src) = s.consumables.get(index).copied() else {
+                return drop_effect(s, rep);
+            };
+            if !negative && !s.has_consumable_room() {
+                return drop_effect(s, rep);
+            }
+            s.consumables
+                .push(ConsumableInstance::new(src.id).with_negative(negative));
+        }
         // TODO(Phase 5): random joker of a rarity (shop pools, Showman, Gros Michel flag).
         SideEffect::CreateJoker { .. } => drop_effect(s, rep),
         SideEffect::CopyJoker {
@@ -809,25 +1015,59 @@ fn apply_one(
                     j.sell_value = j.sell_value.saturating_add(amount);
                 }
             }
-            // TODO(Phase 4): consumables carry a sell value.
-            SellTarget::AllConsumables => drop_effect(s, rep),
+            SellTarget::AllConsumables => {
+                for c in &mut s.consumables {
+                    c.sell_value = c.sell_value.saturating_add(amount);
+                }
+            }
         },
         SideEffect::AddHands(n) => s.hands_left = add_clamped(s.hands_left, n),
         SideEffect::AddDiscards(n) => s.discards_left = add_clamped(s.discards_left, n),
         SideEffect::ClearDiscards => s.discards_left = 0,
         SideEffect::CreateTag { id } => s.tags.push(id),
-        SideEffect::DisableBoss => {
-            s.boss_disabled = true;
-            // Wall / Violet Vessel fall back to the standard boss multiplier (Phase 4 adds the
-            // special ones); the target is recomputed with it.
-            s.refresh_target();
-        }
+        // Reverts the boss set-up mid-round; Wall/Violet Vessel fall back to x2 (Needle keeps
+        // x1) and the target is recomputed.
+        SideEffect::DisableBoss => boss::disable(s),
         SideEffect::PreventDeath => rep.prevent_death = true,
         SideEffect::SetRunFlag(f) => {
             if !s.run_flags.contains(&f) {
                 s.run_flags.push(f);
             }
         }
+    }
+}
+
+/// Purple Seal: each discarded (non-debuffed) Purple Seal card creates a Tarot (cards.md).
+fn push_purple_seals(cards: &[Card], fx: &mut Vec<SideEffect>) {
+    for c in cards {
+        if c.seal == Seal::Purple && !c.debuffed {
+            fx.push(SideEffect::CreateConsumable {
+                kind: ConsumableKind::Tarot,
+                negative: false,
+            });
+        }
+    }
+}
+
+/// Run counters after a use: per-id count, Tarot/Planet/unique-Planet stats (Fortune Teller,
+/// Satellite) and The Fool's last Tarot/Planet (never The Fool, never a Spectral).
+fn record_use(s: &mut GameState, id: ConsumableId) {
+    let first = s.consumable_uses(id) == 0;
+    if let Some(n) = s.consumable_use_counts.get_mut(id.index()) {
+        *n += 1;
+    }
+    match id.kind() {
+        ConsumableKind::Tarot => s.stats.run.tarots_used += 1,
+        ConsumableKind::Planet => {
+            s.stats.run.planets_used += 1;
+            if first {
+                s.stats.run.unique_planets_used += 1;
+            }
+        }
+        ConsumableKind::Spectral => {}
+    }
+    if id.kind() != ConsumableKind::Spectral && id != ConsumableId::TheFool {
+        s.last_tarot_planet = Some(id);
     }
 }
 

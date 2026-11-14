@@ -3,10 +3,11 @@
 //! built by hand (hand_eval::evaluate is implemented elsewhere).
 
 use balatro_core::card::Card;
+use balatro_core::content::ConsumableId;
 use balatro_core::deck::Pile;
 use balatro_core::enums::{Edition, Enhancement, HandType, Rank, Seal, Suit};
 use balatro_core::hand_eval::HandEval;
-use balatro_core::hooks::{ConsumableKind, ConsumableView, RunView, SideEffect};
+use balatro_core::hooks::{ConsumableView, RunView, SideEffect};
 use balatro_core::joker::JokerInstance;
 use balatro_core::rng::GameRng;
 use balatro_core::scoring::{
@@ -558,12 +559,7 @@ fn invalid_hand_scores_zero_and_fires_nothing() {
 fn observatory_multiplies_per_matching_planet() {
     // Two Pair-Planets held + Observatory: 2 x 1.5 x 1.5 = 4.5 -> 24 x 4.5 = 108.
     // Without the voucher: 48.
-    let planet = |h| ConsumableView {
-        kind: ConsumableKind::Planet,
-        id: 0,
-        planet_hand: Some(h),
-        negative: false,
-    };
+    let planet = |h| ConsumableView::new(ConsumableId::planet_for(h));
     let cons = [
         planet(HandType::Pair),
         planet(HandType::Flush),

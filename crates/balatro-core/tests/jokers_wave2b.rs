@@ -10,14 +10,16 @@
 use balatro_core::actions::Action;
 use balatro_core::blinds::BlindKind;
 use balatro_core::card::{Card, RuleFlags};
+use balatro_core::content::BossId;
+use balatro_core::content::ConsumableId;
 use balatro_core::content::jokers::{JokerId, try_def};
 use balatro_core::deck::Deck;
 use balatro_core::enums::{Enhancement, HandType, Phase, Rank, Rarity, Suit};
 use balatro_core::game::{Game, StepInfo};
 use balatro_core::hand_eval::HandEval;
 use balatro_core::hooks::{
-    ConsumableKind, ConsumableView, DiscardInfo, EventInput, EventResult, RoundEndInfo, RunStats,
-    RunView, SideEffect, SoldItem, fire_acquire, fire_cards_destroyed, fire_discard, fire_reroll,
+    ConsumableView, DiscardInfo, EventInput, EventResult, RoundEndInfo, RunStats, RunView,
+    SideEffect, SoldItem, fire_acquire, fire_cards_destroyed, fire_discard, fire_reroll,
     fire_round_end, fire_sell_other,
 };
 use balatro_core::joker::JokerInstance;
@@ -157,6 +159,7 @@ fn discard(js: &mut [JokerInstance], cards: &[Card]) -> Vec<SideEffect> {
     let info = DiscardInfo {
         cards,
         hand_type: HandType::HighCard,
+        forced: false,
     };
     fire(js, &RunView::default(), |inp| fire_discard(inp, &info))
 }
@@ -198,12 +201,7 @@ fn sell_joker_other(js: &mut [JokerInstance], slot: usize) {
 }
 
 fn tarot() -> SoldItem {
-    SoldItem::Consumable(ConsumableView {
-        kind: ConsumableKind::Tarot,
-        id: 0,
-        planet_hand: None,
-        negative: false,
-    })
+    SoldItem::Consumable(ConsumableView::new(ConsumableId::TAROTS[0]))
 }
 
 /// A deck holding exactly these cards (all in the draw pile).
@@ -233,6 +231,10 @@ fn new_game(seed: u64) -> Game {
 }
 
 fn select(g: &mut Game) -> StepInfo {
+    // Boss blinds get The Wall: no ability that could stop a one-card win (The Psychic).
+    if g.state().blind == BlindKind::Boss {
+        g.state_mut().boss = Some(BossId::TheWall);
+    }
     g.step(Action::SelectBlind).expect("select blind")
 }
 

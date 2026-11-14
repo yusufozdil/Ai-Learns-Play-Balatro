@@ -6,6 +6,8 @@
 
 use balatro_core::actions::Action;
 use balatro_core::card::{Card, RuleFlags};
+use balatro_core::content::BossId;
+use balatro_core::content::ConsumableId;
 use balatro_core::content::jokers::{JokerId, def_count, try_def};
 use balatro_core::deck::{Deck, Pile};
 use balatro_core::enums::{Edition, Enhancement, HandType, Rank, Rarity, Seal, Suit};
@@ -151,12 +153,7 @@ fn tarot() -> SideEffect {
 }
 
 fn cons(id: u16) -> ConsumableView {
-    ConsumableView {
-        kind: ConsumableKind::Tarot,
-        id,
-        planet_hand: None,
-        negative: false,
-    }
+    ConsumableView::new(ConsumableId::TAROTS[usize::from(id)])
 }
 
 fn round_end_info() -> RoundEndInfo {
@@ -180,6 +177,10 @@ fn add(g: &mut Game, id: JokerId) -> usize {
 }
 
 fn select(g: &mut Game) {
+    // Boss blinds get The Wall: no ability that could stop a one-card win (The Psychic).
+    if g.state().blind == BlindKind::Boss {
+        g.state_mut().boss = Some(BossId::TheWall);
+    }
     g.step(Action::SelectBlind).expect("select blind");
 }
 

@@ -6,6 +6,7 @@
 use balatro_core::actions::{Action, ActionError};
 use balatro_core::blinds::BlindKind;
 use balatro_core::card::Card;
+use balatro_core::content::BossId;
 use balatro_core::content::jokers::JokerId;
 use balatro_core::deck::Pile;
 use balatro_core::enums::{Edition, Enhancement, HandType, Phase, Rank, Suit};
@@ -142,6 +143,8 @@ fn full_ante_small_big_boss_then_next_ante() {
     assert_eq!(g.state().blind, BlindKind::Boss);
     assert_eq!(g.state().target, 600.0); // 300 x 2
     assert_eq!(g.legal_actions(), vec![Action::SelectBlind]); // no boss skip
+    // A boss whose ability cannot stop a one-card win (the ante's real boss may be The Psychic).
+    g.state_mut().boss = Some(BossId::TheFlint);
 
     // Boss: interest floor(19/5) = 3, blind $5, hands $3 -> 19 + 11 = 30. Ante 2 begins.
     select(&mut g);
@@ -423,10 +426,7 @@ fn invalid_actions_are_rejected_without_changing_state() {
     assert_rejected(
         &mut g,
         use_c,
-        ActionError::NotImplemented {
-            action: use_c,
-            phase_of_plan: 4,
-        },
+        ActionError::InvalidConsumable { index: 0, len: 0 },
     );
     g.state_mut().discards_left = 0;
     assert_rejected(&mut g, Action::Discard(1), ActionError::NoDiscardsLeft);

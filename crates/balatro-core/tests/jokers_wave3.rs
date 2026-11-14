@@ -4,14 +4,16 @@
 
 use balatro_core::actions::Action;
 use balatro_core::card::Card;
+use balatro_core::content::BossId;
+use balatro_core::content::ConsumableId;
 use balatro_core::content::jokers::{JokerId, try_def};
 use balatro_core::deck::Deck;
 use balatro_core::enums::{Enhancement, HandType, Rank, Seal, Suit};
 use balatro_core::game::{Game, StepInfo};
 use balatro_core::hand_eval::HandEval;
 use balatro_core::hooks::{
-    BlindKind, BossView, ConsumableKind, ConsumableView, DiscardInfo, EventInput, RoundEndInfo,
-    RunView, SellTarget, SideEffect, collect_modifiers, fire_acquire, fire_discard, fire_round_end,
+    BlindKind, BossView, ConsumableView, DiscardInfo, EventInput, RoundEndInfo, RunView,
+    SellTarget, SideEffect, collect_modifiers, fire_acquire, fire_discard, fire_round_end,
     resolve_source,
 };
 use balatro_core::joker::JokerInstance;
@@ -149,6 +151,7 @@ fn discard_event(
         &DiscardInfo {
             cards,
             hand_type: HandType::HighCard,
+            forced: false,
         },
     );
     (r.money_delta, fx)
@@ -504,20 +507,23 @@ fn gift_card_adds_sell_value_to_jokers_and_consumables() {
     let mut js = jokers(&[J::GiftCard]);
     let (money, fx) = round_end(&mut js, &RunView::default());
     assert_eq!(money, 0);
-    // No consumables held: only the joker effect is queued.
+    // Both effects are always queued (Phase 4 applies the consumable one; nothing held is a no-op).
     assert_eq!(
         fx,
-        vec![SideEffect::AddSellValue {
-            target: SellTarget::AllJokers,
-            amount: 1
-        }]
+        vec![
+            SideEffect::AddSellValue {
+                target: SellTarget::AllJokers,
+                amount: 1
+            },
+            SideEffect::AddSellValue {
+                target: SellTarget::AllConsumables,
+                amount: 1
+            },
+        ]
     );
-    let held = [ConsumableView {
-        kind: ConsumableKind::Planet,
-        id: 0,
-        planet_hand: Some(HandType::Pair),
-        negative: false,
-    }];
+    let held = [ConsumableView::new(ConsumableId::planet_for(
+        HandType::Pair,
+    ))];
     let run = RunView {
         consumables: &held,
         ..RunView::default()
@@ -750,7 +756,7 @@ fn boss_run(triggered: bool, invalid: bool) -> RunView<'static> {
     RunView {
         blind: BlindKind::Boss,
         boss: BossView {
-            id: 1,
+            id: Some(BossId::ThePsychic),
             active: true,
             halve_base: false,
             triggered,

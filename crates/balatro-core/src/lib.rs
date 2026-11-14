@@ -6,7 +6,9 @@
 pub mod actions;
 pub mod agents;
 pub mod blinds;
+pub mod boss;
 pub mod card;
+pub mod consumable;
 pub mod content;
 pub mod data;
 pub mod deck;

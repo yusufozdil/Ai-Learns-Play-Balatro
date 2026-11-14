@@ -10,6 +10,7 @@
 use balatro_core::actions::Action;
 use balatro_core::blinds::BlindKind;
 use balatro_core::card::{Card, RuleFlags};
+use balatro_core::content::BossId;
 use balatro_core::content::jokers::{JokerId, try_def};
 use balatro_core::deck::Deck;
 use balatro_core::enums::{Edition, Enhancement, HandType, Phase, Rank, Rarity, Suit};
@@ -140,7 +141,7 @@ fn blind_view(blind: BlindKind, active: bool) -> RunView<'static> {
         blind,
         in_round: true,
         boss: BossView {
-            id: u16::from(active),
+            id: active.then_some(BossId::TheWall),
             active,
             ..BossView::default()
         },
@@ -395,8 +396,7 @@ fn luchador_in_the_game_disables_only_the_boss_being_played() {
     select(&mut g);
     beat_blind(&mut g);
     end_shop(&mut g);
-    // Placeholder boss id until Phase 4: give the boss an effect so it is "active".
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     select(&mut g);
     assert!(g.state().run_view().boss.active);
     g.step(Action::SellJoker(0)).expect("sell during the boss");
@@ -423,7 +423,7 @@ fn luchador_sold_in_the_shop_before_the_boss_does_not_disable_it() {
     beat_blind(&mut g);
     assert_eq!(g.state().phase, Phase::Shop);
     assert_eq!(g.state().blind, BlindKind::Boss);
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     g.step(Action::SellJoker(0)).expect("sell in the shop");
     assert!(!g.state().boss_disabled);
 }
@@ -523,7 +523,7 @@ fn mr_bones_in_the_game_saves_the_run_without_blind_reward() {
 /// Reach the Boss blind round (boss id 1 = placeholder with an active effect).
 fn start_boss_round(g: &mut Game) {
     advance_to_boss_select(g);
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     select(g);
     assert_eq!(g.state().blind, BlindKind::Boss);
     assert_eq!(g.state().phase, Phase::Play);
@@ -620,7 +620,7 @@ fn disable_boss_recomputes_the_target_with_the_standard_multiplier() {
     let mut g = new_game(73);
     add(&mut g, J::Chicot);
     advance_to_boss_select(&mut g);
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     let before = g.state().target;
     select(&mut g);
     assert!(g.state().boss_disabled);
@@ -968,6 +968,7 @@ fn smeared_with_castle_counts_the_whole_colour() {
         let info = DiscardInfo {
             cards: &cards,
             hand_type: HandType::HighCard,
+            forced: false,
         };
         fire(js, &run, |inp| fire_discard(inp, &info));
     };
@@ -1310,7 +1311,7 @@ fn chicot_in_the_game_disables_each_boss_and_only_bosses() {
     assert!(!g.state().boss_disabled, "Big blind");
     beat_blind(&mut g);
     end_shop(&mut g);
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     select(&mut g);
     assert!(g.state().boss_disabled);
     assert!(!g.state().run_view().boss.active);
@@ -1334,7 +1335,7 @@ fn chicot_in_the_game_added_in_the_shop_before_the_boss_does_not_disable_it() {
     beat_blind(&mut g);
     assert_eq!(g.state().phase, Phase::Shop);
     assert_eq!(g.state().blind, BlindKind::Boss);
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     add(&mut g, J::Chicot);
     assert!(!g.state().boss_disabled);
     // The blind-select path still disables it when the boss is selected.
@@ -1347,7 +1348,7 @@ fn chicot_in_the_game_added_in_the_shop_before_the_boss_does_not_disable_it() {
 fn chicot_in_the_game_added_mid_boss_disables_it() {
     let mut g = new_game(62);
     advance_to_boss_select(&mut g);
-    g.state_mut().boss_id = 1;
+    g.state_mut().boss = Some(BossId::TheWall);
     select(&mut g);
     assert!(g.state().run_view().boss.active);
     add(&mut g, J::Chicot);

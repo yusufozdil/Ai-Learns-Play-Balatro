@@ -808,7 +808,11 @@ fn discard(
             rng: &mut rng,
             effects: &mut fx,
         },
-        &DiscardInfo { cards, hand_type },
+        &DiscardInfo {
+            cards,
+            hand_type,
+            forced: false,
+        },
     );
     (r.money_delta, fx)
 }

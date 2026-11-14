@@ -158,9 +158,13 @@ each repeated by Red Seal and `held_retriggers` (Mime, and its copies).
 `jokers()`, `joker_def(slot)`, `slot()`, `exec_slot()`, `copied()`, `money()`, `add_money()`,
 `push_effect()`, `effects()`, `level_up_hand()`, `destroy_self()`, `destroy_joker(slot)`,
 `is_doomed(slot)`, `chance()`, `rng_range()`, `rng()`, `is_face()`, `has_suit()`.
-Payloads arrive as hook arguments: `DiscardInfo { cards, hand_type }`,
+Payloads arrive as hook arguments: `DiscardInfo { cards, hand_type, forced }` (`forced` = discarded
+by The Hook, not a discard action: "first discard" effects such as Burnt Joker and Trading Card
+must ignore it),
 `RoundEndInfo { won, saved, round_score, target }` (+ `boss_defeated(run)` = boss blind && (won || saved); `saved` = Mr. Bones' `PreventDeath`, probed by the game layer before the real dispatch), `SoldItem`, `PackKind`,
-`ConsumableView`, `&[Card]` for destroyed/added cards (snapshots before removal).
+`ConsumableView` (= `consumable::ConsumableInstance`: `id: ConsumableId`, `negative`,
+`sell_value`; `kind()`, `planet_hand()`), `&[Card]` for destroyed/added cards (snapshots before
+removal).
 
 ### 5.3 `RunView` fields (both contexts)
 
@@ -169,7 +173,7 @@ All counts are taken **after the triggering action is paid for**.
 | Field | Meaning |
 |---|---|
 | `money` | money before this hand/event (use `ctx.money()`) |
-| `ante`, `round`, `blind: BlindKind`, `boss: BossView` | progress; `boss.{active, halve_base, triggered, hand_invalid, id}` |
+| `ante`, `round`, `blind: BlindKind`, `boss: BossView` | progress; `boss.{id: Option<BossId>, active, halve_base, triggered, hand_invalid}` (`id` is the ante's boss in every blind; check `blind == Boss` / `active`) |
 | `in_round` | `phase == Play`. In the shop / at blind select `blind` already names the next blind; Luchador `on_sell_self` and Chicot `on_acquire` disable the boss only when `in_round` |
 | `hands_left` | hands left **excluding** the hand being scored (`is_final_hand()` = 0: Dusk, Acrobat) |
 | `discards_left` | discards left (Banner, Mystic Summit, Delayed Gratification) |
@@ -198,13 +202,16 @@ All counts are taken **after the triggering action is paid for**.
 | destroy another joker | `EventCtx::destroy_joker(slot)` | queued; refuses eternal; later hooks of the same event skip it |
 | everything else | `ctx.push_effect(SideEffect::…)` | queued; applied by the game layer after the call, in order |
 
-`SideEffect` variants: `LevelUpHand`, `CreateConsumable{kind, negative}`, `CreatePlanetFor{hand}`,
+`SideEffect` variants: `LevelUpHand`, `CreateConsumable{kind, negative}`,
+`AddConsumable{id, negative}`, `CreatePlanetFor{hand}`,
 `CopyConsumable{index, negative}`, `CreateJoker{rarity}`, `CopyJoker{uid, strip_negative}`,
 `DestroyJoker{uid}`, `DestroyCard{uid}`, `AddCard{card, to: Pile}` (uid reassigned),
 `AddSellValue{target, amount}`, `AddHands(n)`, `AddDiscards(n)`, `ClearDiscards`,
 `CreateTag{id}`, `DisableBoss`, `PreventDeath`, `SetRunFlag(RunFlag)`.
 Creation effects that need a slot are dropped by the game layer when there is no room at
-application time; you do not check room yourself.
+application time; you do not check room yourself. Consumable effects are implemented since
+Phase 4.0 (pool rules: `docs/design/consumables_bosses.md` §2.5); only `CreateJoker` is still
+dropped (Phase 5).
 
 Never mutate other jokers, held cards, the deck or the run directly. Never mutate state of another
 joker to "share" information.
@@ -492,10 +499,15 @@ fn four_fingers_modifiers(_: &JokerInstance, m: &mut Modifiers) { m.rules.four_f
 ## 15. Game-layer obligations (Phase 2A/4/5)
 
 - Before scoring: pay the hand (`hands_left -= 1`, increment `hands_played_*`, `hand_plays_*`),
-  apply boss pre-effects (The Hook discards, The Tooth/Ox money, The Arm level, debuffs incl.
-  Crimson Heart on jokers), recompute `collect_modifiers` if any joker debuff changed, call
-  `evaluate(played, &mods.rules)`, set `boss.hand_invalid/triggered`, fill `RunView`, then
-  `score_hand` with `&mut deck.played` (card mutations persist).
+  call `evaluate(played, &mods.rules)`, run the boss pre-play hook (`boss::pre_play`: validity,
+  The Hook's forced discard + its `fire_discard(forced: true)`, The Tooth/Ox money, The Arm
+  level, `boss.hand_invalid/triggered`), fill `RunView`, then `score_hand` with
+  `&mut deck.played` (card mutations persist). `Game::preview_play` runs the same pre-play hook
+  and forced-discard event on copies. Card debuffs come from the boss (`boss::refresh_debuffs`,
+  after every Play-phase action); Crimson Heart's joker debuff is set between hands.
+- Consumables (Phase 4.0): `UseConsumable` runs the card's effect, applies its side effects,
+  updates `stats.run.{tarots,planets,unique_planets}_used` and then fires
+  `fire_consumable_used`; `SellConsumable` fires `fire_sell_other(SoldItem::Consumable)` first.
 - After scoring: add `money_delta`; apply `scorer.effects()` in order (eternal jokers are never
   destroyed; creation needs room); fire `fire_cards_destroyed` with pre-removal snapshots and
   `fire_cards_added` with the added cards; persist level-ups.
