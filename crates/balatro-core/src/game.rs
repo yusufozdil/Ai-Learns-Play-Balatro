@@ -30,7 +30,9 @@ use crate::hooks::{
 use crate::joker::JokerInstance;
 use crate::rng::RngKey;
 use crate::scoring::{ScoreInput, Scorer};
-use crate::state::{GameConfig, GameState, Outcome, ShopState, TagId, transition_allowed};
+use crate::shop::{self, ShopState};
+use crate::state::{GameConfig, GameState, Outcome, TagId, transition_allowed};
+use crate::tag;
 
 /// Result of one played hand.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -94,6 +96,8 @@ pub struct StepInfo {
     pub tag: Option<TagId>,
     /// Price of a sold joker or consumable.
     pub sold_for: Option<i32>,
+    /// Money spent by a purchase (card, pack, voucher, reroll, boss reroll).
+    pub spent: Option<i32>,
     /// Consumable used by `UseConsumable`.
     pub used: Option<ConsumableId>,
     /// Playing cards destroyed during the step.
@@ -111,16 +115,16 @@ pub struct EffectReport {
     pub added: u32,
     /// A `PreventDeath` was applied.
     pub prevent_death: bool,
-    /// Effects dropped (no room, not implemented yet, eternal target, cascade cap).
+    /// Effects dropped (no room, eternal target, empty pool, cascade cap).
     pub dropped: u32,
 }
 
 /// One run: the state plus reusable scratch buffers.
 #[derive(Debug)]
 pub struct Game {
-    state: GameState,
+    pub(crate) state: GameState,
     scorer: Scorer,
-    fx: Vec<SideEffect>,
+    pub(crate) fx: Vec<SideEffect>,
 }
 
 impl Clone for Game {
@@ -303,6 +307,7 @@ impl Game {
             round: None,
             tag: None,
             sold_for: None,
+            spent: None,
             used: None,
             cards_destroyed: 0,
             cards_added: 0,
@@ -318,13 +323,17 @@ impl Game {
             }
             Action::SellConsumable(i) => self.sell_consumable(usize::from(i), &mut info),
             Action::EndShop => self.end_shop(),
-            // `validate` rejects these; nothing has been mutated yet.
-            other => {
-                return Err(ActionError::NotImplemented {
-                    action: other,
-                    phase_of_plan: 5,
-                });
+            Action::MoveJoker { from, to } => self.move_joker(from, to),
+            Action::Buy(i) => self.buy(usize::from(i), &mut info),
+            Action::BuyAndUse(i) => self.buy_and_use(usize::from(i), &mut info),
+            Action::OpenPack(i) => self.open_pack_slot(usize::from(i), &mut info),
+            Action::BuyVoucher(i) => self.buy_voucher(usize::from(i), &mut info),
+            Action::Reroll => self.reroll(&mut info),
+            Action::PickPackItem { index, targets } => {
+                self.pick_pack_item(usize::from(index), targets, &mut info)
             }
+            Action::SkipPack => self.skip_pack(),
+            Action::RerollBoss => self.reroll_boss(&mut info),
         }
         if self.state.phase == Phase::Play {
             // Debuffs follow suit/rank/joker changes made by the action (hooks.md §15).
@@ -399,6 +408,9 @@ impl Game {
         fire_paid(s, &mut self.fx, hooks::fire_blind_select);
         self.resolve_fx();
         let s = &mut self.state;
+        tag::fire_round_start(s, &mut self.fx);
+        self.resolve_fx();
+        let s = &mut self.state;
         boss::refresh_debuffs(s);
         boss::draw(s, DrawKind::RoundStart);
         fire_paid(s, &mut self.fx, hooks::fire_first_hand_drawn);
@@ -414,14 +426,18 @@ impl Game {
             BlindKind::Boss => return, // rejected by `validate`
         };
         let tag = s.blind_tags[idx];
-        s.tags.push(tag);
+        let hand = s.blind_tag_hands[idx];
         info.tag = Some(tag);
-        // TODO(Phase 5C): tag effects (Economy, Speed, Handy, Garbage, Orbital, Double, pack
-        // tags -> PackOpen, next-shop tags).
         s.stats.run.blinds_skipped += 1;
+        // The tag takes effect first (Speed counts this skip), then the skip event.
+        tag::gain(s, tag, hand, &mut self.fx);
+        self.resolve_fx();
+        let s = &mut self.state;
         fire_paid(s, &mut self.fx, hooks::fire_blind_skip);
         self.resolve_fx();
         advance_blind(&mut self.state);
+        // Pack tags open their pack right away; the last one returns to BlindSelect.
+        self.open_next_pending_pack();
     }
 
     fn play(&mut self, mask: u16, info: &mut StepInfo) -> Result<(), ActionError> {
@@ -574,6 +590,18 @@ impl Game {
             return; // rejected by `validate`
         }
         let used = s.consumables.remove(slot);
+        self.apply_use(used, targets, info);
+    }
+
+    /// Run the effect of `used` (already out of its slot, or never in one: pack picks and
+    /// Buy & Use) with its counters and `on_consumable_used`; then, in `Play`, settle the round.
+    pub(crate) fn apply_use(
+        &mut self,
+        used: ConsumableInstance,
+        targets: u16,
+        info: &mut StepInfo,
+    ) {
+        let s = &mut self.state;
         let Some(def) = try_consumable_def(used.id) else {
             return; // rejected by `validate`
         };
@@ -675,6 +703,7 @@ impl Game {
 
         // 2. Jokers' end of round (also on a loss: Mr. Bones). Their money is a cash-out item.
         let s = &mut self.state;
+        s.round_hand_size = 0; // Juggle Tag lasts one round
         let mut end = RoundEndInfo {
             won,
             saved: false,
@@ -732,9 +761,13 @@ impl Game {
         report.cash_out = Some(co);
         info.round = Some(report);
         s.stats.rounds_won += 1;
+        s.stats.unused_discards += s.discards_left;
         if s.blind == BlindKind::Boss {
             s.stats.run.bosses_defeated += 1;
+            tag::fire_boss_defeated(s, &mut self.fx); // Investment, after the cash-out
+            self.resolve_fx();
         }
+        let s = &mut self.state;
         gather_deck(s);
 
         // 4. Win, or advance to the next blind and open the shop.
@@ -747,15 +780,17 @@ impl Game {
             }
         }
         advance_blind(s);
-        s.shop = ShopState::default();
         s.phase = Phase::Shop;
-        // TODO(Phase 5A): generate the shop here (RngKey::Shop).
+        let tag_fx = shop::enter_shop(s); // market + shop tags
+        self.fx.extend(tag_fx);
+        self.resolve_fx();
+        let s = &mut self.state;
         fire_paid(s, &mut self.fx, hooks::fire_shop_enter);
         self.resolve_fx();
     }
 
     /// Apply the queued effects in `self.fx` (and their follow-up events).
-    fn resolve_fx(&mut self) -> EffectReport {
+    pub(crate) fn resolve_fx(&mut self) -> EffectReport {
         if self.fx.is_empty() {
             return EffectReport::default();
         }
@@ -789,7 +824,7 @@ fn round_end_saves(s: &GameState, end: &RoundEndInfo) -> bool {
 
 /// Fire one joker event with the current [`RunView`]; side effects are appended to `fx`. Returns
 /// the money delta (not applied). Refreshes the modifier cache (hooks may change joker state).
-fn fire(
+pub(crate) fn fire(
     s: &mut GameState,
     fx: &mut Vec<SideEffect>,
     f: impl FnOnce(EventInput<'_>) -> EventResult,
@@ -807,7 +842,7 @@ fn fire(
 }
 
 /// [`fire`] and add the money delta to the run's money.
-fn fire_paid(
+pub(crate) fn fire_paid(
     s: &mut GameState,
     fx: &mut Vec<SideEffect>,
     f: impl FnOnce(EventInput<'_>) -> EventResult,
@@ -817,7 +852,7 @@ fn fire_paid(
 }
 
 /// Next blind: Small -> Big -> Boss -> next ante's Small (with a fresh ante set-up).
-fn advance_blind(s: &mut GameState) {
+pub(crate) fn advance_blind(s: &mut GameState) {
     match s.blind {
         BlindKind::Small => s.blind = BlindKind::Big,
         BlindKind::Big => s.blind = BlindKind::Boss,
@@ -831,7 +866,7 @@ fn advance_blind(s: &mut GameState) {
 
 /// Return every card to the draw pile (end of round), clearing round-only flags. Canonical uid
 /// order; the next `reset_for_round` shuffles.
-fn gather_deck(s: &mut GameState) {
+pub(crate) fn gather_deck(s: &mut GameState) {
     let d = &mut s.deck;
     let mut hand = std::mem::take(&mut d.hand);
     let mut played = std::mem::take(&mut d.played);
@@ -851,8 +886,8 @@ fn gather_deck(s: &mut GameState) {
 /// created jokers) and apply what they queue, up to `MAX_EFFECT_CASCADE` rounds.
 ///
 /// Rules: eternal jokers are never destroyed; creations that need a slot are dropped when there
-/// is no room; effects whose systems do not exist yet are dropped and counted in
-/// `stats.effects_dropped` (random jokers: Phase 5). Never panics.
+/// is no room. Every drop is counted in `stats.effects_no_room`; `stats.effects_unimplemented`
+/// stays 0 (every `SideEffect` is implemented). Never panics.
 pub fn apply_side_effects(s: &mut GameState, effects: &[SideEffect]) -> EffectReport {
     let mut rep = EffectReport::default();
     let mut pending: Vec<SideEffect> = effects.to_vec();
@@ -861,7 +896,7 @@ pub fn apply_side_effects(s: &mut GameState, effects: &[SideEffect]) -> EffectRe
         if depth >= MAX_EFFECT_CASCADE {
             let n = pending.len() as u32;
             rep.dropped += n;
-            s.stats.effects_dropped += n;
+            s.stats.effects_no_room += n;
             break;
         }
         depth += 1;
@@ -890,9 +925,10 @@ pub fn apply_side_effects(s: &mut GameState, effects: &[SideEffect]) -> EffectRe
     rep
 }
 
+/// An effect that produced nothing in normal play (no slot, eternal target, empty pool).
 fn drop_effect(s: &mut GameState, rep: &mut EffectReport) {
     rep.dropped += 1;
-    s.stats.effects_dropped += 1;
+    s.stats.effects_no_room += 1;
 }
 
 fn apply_one(
@@ -946,8 +982,21 @@ fn apply_one(
             s.consumables
                 .push(ConsumableInstance::new(src.id).with_negative(negative));
         }
-        // TODO(Phase 5): random joker of a rarity (shop pools, Showman, Gros Michel flag).
-        SideEffect::CreateJoker { .. } => drop_effect(s, rep),
+        SideEffect::CreateJoker { rarity } => {
+            // Needs a free slot (checked before rolling; the shop pools exclude owned jokers
+            // unless Showman, Gros Michel / Cavendish follow the extinction flag).
+            if !s.has_joker_room() {
+                return drop_effect(s, rep);
+            }
+            match shop::roll_joker(s, RngKey::Jokers, rarity, &[]) {
+                Some(mut j) => {
+                    j.uid = s.alloc_joker_uid();
+                    s.jokers.push(j);
+                    new_jokers.push(j.uid);
+                }
+                None => drop_effect(s, rep),
+            }
+        }
         SideEffect::CopyJoker {
             uid,
             strip_negative,

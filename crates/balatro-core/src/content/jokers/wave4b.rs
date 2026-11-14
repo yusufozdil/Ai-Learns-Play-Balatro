@@ -4,6 +4,7 @@
 //! next to the joker. Tests: `tests/jokers_wave4b.rs`.
 
 use crate::card::Card;
+use crate::content::ids::TagId;
 use crate::content::jokers::JokerId;
 use crate::deck::Pile;
 use crate::enums::{Rank, Rarity, Seal, Suit};
@@ -177,9 +178,8 @@ fn drunkard_modifiers(_: &JokerInstance, m: &mut Modifiers) {
 // --- Diet Cola: https://balatrowiki.org/w/Diet_Cola ------------------------------------------
 // Selling it creates a free Double Tag. A sold Blueprint/Brainstorm that copies it creates one
 // too (`fire_sell_self` resolves copiers). Not Eternal-compatible.
-// PLACEHOLDER id (Phase 5C replaces it with the typed TagId): index of "Double" in the table
-// of docs/mechanics/tags.md.
-const DOUBLE_TAG_ID: u16 = 17;
+// The Double Tag (typed id).
+const DOUBLE_TAG_ID: TagId = TagId::Double;
 
 fn diet_cola_sell(_: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
     ctx.push_effect(SideEffect::CreateTag { id: DOUBLE_TAG_ID });

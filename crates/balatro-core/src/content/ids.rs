@@ -263,3 +263,145 @@ impl BossId {
         self.index() >= BossId::AmberAcorn.index()
     }
 }
+
+typed_ids! {
+    /// One voucher: the 16 base vouchers each followed by their upgrade, in the wiki table order
+    /// (docs/mechanics/vouchers.md). `requires()` names the base of an upgrade.
+    VoucherId {
+        /// +1 shop card slot.
+        Overstock,
+        /// +1 more shop card slot (needs Overstock).
+        OverstockPlus,
+        /// 25% off.
+        ClearanceSale,
+        /// 50% off (needs Clearance Sale).
+        Liquidation,
+        /// Foil/Holo/Poly 2x as likely.
+        Hone,
+        /// Foil/Holo/Poly 4x as likely (needs Hone).
+        GlowUp,
+        /// Rerolls start at $3.
+        RerollSurplus,
+        /// Rerolls start at $1 (needs Reroll Surplus).
+        RerollGlut,
+        /// +1 consumable slot.
+        CrystalBall,
+        /// Spectrals may appear in Arcana packs (needs Crystal Ball).
+        OmenGlobe,
+        /// Celestial packs hold the Planet of the most played hand.
+        Telescope,
+        /// Planets held give x1.5 Mult for their hand (needs Telescope).
+        Observatory,
+        /// +1 hand per round.
+        Grabber,
+        /// +1 more hand per round (needs Grabber).
+        NachoTong,
+        /// +1 discard per round.
+        Wasteful,
+        /// +1 more discard per round (needs Wasteful).
+        Recyclomancy,
+        /// Tarot weight 9.6.
+        TarotMerchant,
+        /// Tarot weight 32 (needs Tarot Merchant).
+        TarotTycoon,
+        /// Planet weight 9.6.
+        PlanetMerchant,
+        /// Planet weight 32 (needs Planet Merchant).
+        PlanetTycoon,
+        /// Interest cap $10.
+        SeedMoney,
+        /// Interest cap $20 (needs Seed Money).
+        MoneyTree,
+        /// Does nothing.
+        Blank,
+        /// +1 joker slot (needs Blank).
+        Antimatter,
+        /// Playing cards in the shop.
+        MagicTrick,
+        /// Shop playing cards may be enhanced/edition/sealed (needs Magic Trick).
+        Illusion,
+        /// -1 ante, -1 hand per round.
+        Hieroglyph,
+        /// -1 ante, -1 discard per round (needs Hieroglyph).
+        Petroglyph,
+        /// Reroll the boss once per ante for $10.
+        DirectorsCut,
+        /// Reroll the boss without limit for $10 each (needs Director's Cut).
+        Retcon,
+        /// +1 hand size.
+        PaintBrush,
+        /// +1 more hand size (needs Paint Brush).
+        Palette,
+    }
+}
+
+impl VoucherId {
+    /// The base voucher an upgrade needs (`None` for the 16 base vouchers). Upgrades are the
+    /// odd positions of the table, so the base is the id just before.
+    pub const fn requires(self) -> Option<VoucherId> {
+        if self.index() % 2 == 1 {
+            Some(Self::ALL[self.index() - 1])
+        } else {
+            None
+        }
+    }
+
+    /// An upgrade of a base voucher.
+    pub const fn is_upgrade(self) -> bool {
+        self.requires().is_some()
+    }
+}
+
+typed_ids! {
+    /// One skip tag, in the wiki table order (docs/mechanics/tags.md). `Double` is index 17.
+    TagId {
+        /// Free Uncommon Joker in the next shop.
+        Uncommon,
+        /// Free Rare Joker in the next shop.
+        Rare,
+        /// Next base-edition shop Joker is free and Negative (min ante 2).
+        Negative,
+        /// Same, Foil.
+        Foil,
+        /// Same, Holographic.
+        Holographic,
+        /// Same, Polychrome.
+        Polychrome,
+        /// +$25 after the next Boss Blind.
+        Investment,
+        /// One extra voucher in the next shop.
+        Voucher,
+        /// Rerolls the Boss Blind.
+        Boss,
+        /// Free Mega Standard Pack (min ante 2).
+        Standard,
+        /// Free Mega Arcana Pack.
+        Charm,
+        /// Free Mega Celestial Pack (min ante 2).
+        Meteor,
+        /// Free Mega Buffoon Pack (min ante 2).
+        Buffoon,
+        /// $1 per hand played this run (min ante 2).
+        Handy,
+        /// $1 per unused discard this run (min ante 2).
+        Garbage,
+        /// Free Spectral Pack (min ante 2).
+        Ethereal,
+        /// Cards and packs of the next shop are free.
+        Coupon,
+        /// Copies the next tag gained.
+        Double,
+        /// +3 hand size next round.
+        Juggle,
+        /// Rerolls start at $0 in the next shop.
+        D6,
+        /// Create up to 2 Common Jokers (min ante 2).
+        TopUp,
+        /// $5 per blind skipped this run.
+        Speed,
+        /// Upgrade a random hand by 3 levels (min ante 2).
+        Orbital,
+        /// Double the money, gain at most $40.
+        Economy,
+    }
+}

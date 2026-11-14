@@ -33,11 +33,6 @@ pub const MIN_HAND_SIZE: u32 = 1;
 /// Hands per round never drop below this (assumption: Troubadour & co. cannot zero them).
 pub const MIN_HANDS_PER_ROUND: u32 = 1;
 
-/// PLACEHOLDER until Phase 5C (`content/tags.rs`): skip tags are drawn uniformly from
-/// `0..TAG_POOL_PLACEHOLDER` (24 tags exist, tags.md). Ids have no effect yet and no min-ante
-/// filtering is applied.
-pub const TAG_POOL_PLACEHOLDER: u16 = 24;
-
 /// Safety cap on side-effect cascades (an effect fires an event that queues effects, ...).
 /// Base-game chains are at most 2-3 deep; leftovers beyond the cap are dropped and counted.
 pub const MAX_EFFECT_CASCADE: u32 = 8;

@@ -252,8 +252,8 @@ impl JokerDef {
 
     /// Sell value of a base-edition copy bought at full price:
     /// [`economy::sell_value`]`(base_cost, 0)` = `max(1, floor(base_cost / 2))`.
-    /// TODO(Phase 5): the shop stores `economy::sell_value(price_paid, 0)` at purchase instead
-    /// (edition surcharge and discounts included, notes.md §4.1d).
+    /// The shop stores `economy::sell_value(price_paid, 0)` at purchase instead (edition
+    /// surcharge and discounts included, notes.md §4.1d).
     pub fn default_sell_value(&self) -> i32 {
         economy::sell_value(i32::try_from(self.base_cost).unwrap_or(i32::MAX), 0)
     }

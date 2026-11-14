@@ -133,6 +133,17 @@ simple_enum!(
     default = HighCard
 );
 
+impl HandType {
+    /// Secret hands (Five of a Kind, Flush House, Flush Five): their Planet and Orbital tag only
+    /// appear once the hand was played.
+    pub fn is_secret(self) -> bool {
+        matches!(
+            self,
+            HandType::FiveOfAKind | HandType::FlushHouse | HandType::FlushFive
+        )
+    }
+}
+
 simple_enum!(
     /// Card enhancement.
     Enhancement {

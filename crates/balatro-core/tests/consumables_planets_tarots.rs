@@ -406,7 +406,7 @@ fn high_priestess_and_emperor_create_up_to_two_cards_limited_by_free_slots() {
             use_c(&mut g, 1, 0).expect("use");
             assert_eq!(g.state().consumables.len(), 2, "{id:?}");
             assert_eq!(g.state().consumables[1].kind(), kind);
-            assert_eq!(g.state().stats.effects_dropped, 0);
+            assert_eq!(g.state().stats.effects_no_room, 0);
         }
         // Capacity 3 (a Negative copy) with 2 normal cards held: using the Negative card
         // removes its own slot, nothing is free.
@@ -643,7 +643,7 @@ fn temperance_pays_the_total_joker_sell_value_up_to_fifty() {
 // ----- Judgement ----------------------------------------------------------------------------------
 
 #[test]
-fn judgement_needs_a_free_joker_slot_and_its_creation_is_dropped_until_phase_5() {
+fn judgement_needs_a_free_joker_slot_and_creates_a_joker() {
     let mut g = in_play(22);
     give(&mut g, C::Judgement);
     for _ in 0..5 {
@@ -651,10 +651,10 @@ fn judgement_needs_a_free_joker_slot_and_its_creation_is_dropped_until_phase_5()
     }
     assert_eq!(use_c(&mut g, 0, 0), Err(ActionError::CannotUse));
     g.state_mut().jokers.pop();
-    let dropped = g.state().stats.effects_dropped;
+    let dropped = g.state().stats.effects_no_room;
     use_c(&mut g, 0, 0).expect("Judgement");
-    assert_eq!(g.state().stats.effects_dropped, dropped + 1);
-    assert_eq!(g.state().jokers.len(), 4);
+    assert_eq!(g.state().stats.effects_no_room, dropped);
+    assert_eq!(g.state().jokers.len(), 5); // 4 left + the new one
     assert_eq!(tarot_count(&g), 1);
     assert!(g.state().check_invariants().is_ok());
 }

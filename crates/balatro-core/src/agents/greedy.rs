@@ -4,10 +4,13 @@
 use super::Agent;
 use crate::actions::Action;
 use crate::card::Card;
+use crate::consumable::ConsumableKind;
 use crate::enums::{HandType, Phase, Suit};
 use crate::game::Game;
 use crate::hand_eval;
+use crate::packs::PackItem;
 use crate::scoring::Scorer;
+use crate::shop::{self, ShopCardKind};
 
 /// Deterministic (no RNG) one-ply greedy agent.
 #[derive(Debug, Default)]
@@ -151,6 +154,69 @@ fn best_straight_window(hand: &[Card]) -> (usize, u16) {
     best
 }
 
+impl GreedyAgent {
+    /// Minimal shop policy (the full heuristic team is Phase 5D): buy the most expensive joker
+    /// that fits and that the money covers, then Buy & Use affordable Planets, then leave.
+    fn shop_action(game: &Game) -> Action {
+        let s = game.state();
+        let legal = game.legal_actions();
+        let mut best_joker: Option<(i32, Action)> = None;
+        let mut planet: Option<Action> = None;
+        for a in &legal {
+            match *a {
+                Action::Buy(i) => {
+                    if let Some(Some(c)) = s.shop.cards.get(usize::from(i))
+                        && matches!(c.kind, ShopCardKind::Joker(_))
+                    {
+                        let price = shop::card_price(s, c);
+                        if price <= s.money && best_joker.is_none_or(|(p, _)| price > p) {
+                            best_joker = Some((price, *a));
+                        }
+                    }
+                }
+                Action::BuyAndUse(i) => {
+                    if let Some(Some(c)) = s.shop.cards.get(usize::from(i))
+                        && let ShopCardKind::Consumable(id) = c.kind
+                        && id.kind() == ConsumableKind::Planet
+                        && shop::card_price(s, c) <= s.money
+                        && planet.is_none()
+                    {
+                        planet = Some(*a);
+                    }
+                }
+                _ => {}
+            }
+        }
+        best_joker
+            .map(|(_, a)| a)
+            .or(planet)
+            .unwrap_or(Action::EndShop)
+    }
+
+    /// Take the first joker or Planet of an open pack, otherwise skip it.
+    fn pack_action(game: &Game) -> Action {
+        let s = game.state();
+        let Some(pack) = &s.pack else {
+            return Action::SkipPack;
+        };
+        for a in game.legal_actions() {
+            if let Action::PickPackItem { index, .. } = a
+                && let Some(Some(item)) = pack.items.get(usize::from(index))
+            {
+                let good = match item {
+                    PackItem::Joker(_) => true,
+                    PackItem::Consumable(id) => id.kind() == ConsumableKind::Planet,
+                    PackItem::Card(_) => false,
+                };
+                if good {
+                    return a;
+                }
+            }
+        }
+        Action::SkipPack
+    }
+}
+
 impl Agent for GreedyAgent {
     fn act(&mut self, game: &Game) -> Action {
         let s = game.state();
@@ -175,7 +241,8 @@ impl Agent for GreedyAgent {
                     _ => Action::Play(mask),
                 }
             }
-            Phase::Shop => Action::EndShop,
+            Phase::Shop => Self::shop_action(game),
+            Phase::PackOpen => Self::pack_action(game),
             _ => game
                 .legal_actions()
                 .into_iter()

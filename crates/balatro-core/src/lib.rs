@@ -15,6 +15,7 @@ pub mod deck;
 pub mod economy;
 pub mod enums;
 pub mod game;
+mod game_shop;
 pub mod hand_eval;
 pub mod hooks;
 pub mod joker;
@@ -24,6 +25,8 @@ pub mod scoring;
 pub mod serialize;
 pub mod shop;
 pub mod state;
+pub mod tag;
+pub mod voucher;
 
 /// Crate version, exposed to Python as a smoke test.
 pub fn version() -> &'static str {

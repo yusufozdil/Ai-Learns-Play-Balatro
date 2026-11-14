@@ -9,7 +9,7 @@
 
 use crate::card::{Card, RuleFlags};
 use crate::consumable::ConsumableInstance;
-use crate::content::ids::{BossId, ConsumableId};
+use crate::content::ids::{BossId, ConsumableId, TagId};
 use crate::content::jokers::try_def;
 use crate::deck::{Deck, Pile};
 use crate::enums::{Enhancement, HandType, Rank, Rarity, Seal, Suit};
@@ -321,8 +321,8 @@ pub use crate::consumable::ConsumableKind;
 /// `negative`, `sell_value`; `kind()` / `planet_hand()` derive from the id).
 pub type ConsumableView = ConsumableInstance;
 
-/// Booster pack kind. Placeholder until Phase 5.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Booster pack kind (the size is [`crate::packs::PackSize`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PackKind {
     /// Tarots.
     Arcana,
@@ -334,6 +334,23 @@ pub enum PackKind {
     Standard,
     /// Jokers.
     Buffoon,
+}
+
+impl PackKind {
+    /// All kinds in declaration order.
+    pub const ALL: [PackKind; 5] = [
+        PackKind::Arcana,
+        PackKind::Celestial,
+        PackKind::Spectral,
+        PackKind::Standard,
+        PackKind::Buffoon,
+    ];
+    /// Number of kinds.
+    pub const COUNT: usize = Self::ALL.len();
+    /// Stable 0-based index.
+    pub const fn index(self) -> usize {
+        self as usize
+    }
 }
 
 /// Read-only facts about the run that every hook can see (`ctx.run()`). A plain struct of
@@ -512,7 +529,8 @@ pub enum SideEffect {
         /// Copy is Negative.
         negative: bool,
     },
-    /// Create a random joker (Riff-raff: Common). Needs a free joker slot; dropped otherwise.
+    /// Create a random joker (Riff-raff: Common). Needs a free joker slot; dropped (counted in
+    /// `effects_no_room`) otherwise.
     CreateJoker {
         /// Rarity, `None` = normal shop odds.
         rarity: Option<Rarity>,
@@ -557,10 +575,11 @@ pub enum SideEffect {
     AddDiscards(i32),
     /// Set the current round's discards to 0 (Burglar).
     ClearDiscards,
-    /// Create a tag (Diet Cola: Double Tag). Placeholder id until Phase 5.
+    /// Create a tag (Diet Cola: Double Tag).
     CreateTag {
-        /// Placeholder tag id. TODO(orchestrator): typed `TagId` in Phase 5.
-        id: u16,
+        /// Tag to add. Only pushed onto the held list (its `on_gain` does not run; Diet Cola
+        /// only creates Double, which has none).
+        id: TagId,
     },
     /// Disable the current boss blind (Chicot, Luchador).
     DisableBoss,

@@ -505,16 +505,17 @@ fn aura_refuses_a_card_that_already_has_an_edition() {
 // ----- Wraith / The Soul -------------------------------------------------------------------------------
 
 #[test]
-fn wraith_sets_money_to_zero_and_queues_a_rare_joker() {
+fn wraith_sets_money_to_zero_and_creates_a_rare_joker() {
     for money in [37, 0, -3] {
         let mut g = in_play(30);
         g.state_mut().money = money;
         give(&mut g, C::Wraith);
         use_c(&mut g, 0, 0).expect("Wraith");
         assert_eq!(g.state().money, 0, "money {money}");
-        // Joker creation is dropped until Phase 5.
-        assert_eq!(g.state().stats.effects_dropped, 1);
-        assert!(g.state().jokers.is_empty());
+        assert_eq!(g.state().stats.effects_no_room, 0);
+        assert_eq!(g.state().jokers.len(), 1);
+        let d = g.state().jokers[0].def().expect("defined");
+        assert_eq!(d.rarity, balatro_core::enums::Rarity::Rare);
         invariants(&g);
     }
 }
@@ -542,13 +543,16 @@ fn wraith_and_the_soul_need_a_free_joker_slot() {
 }
 
 #[test]
-fn the_soul_queues_a_legendary_joker_and_changes_nothing_else() {
+fn the_soul_creates_a_legendary_joker_and_changes_nothing_else() {
     let mut g = in_play(32);
     g.state_mut().money = 12;
     give(&mut g, C::TheSoul);
     let hand = g.state().deck.hand.clone();
     use_c(&mut g, 0, 0).expect("The Soul");
-    assert_eq!(g.state().stats.effects_dropped, 1);
+    assert_eq!(g.state().stats.effects_no_room, 0);
+    assert_eq!(g.state().jokers.len(), 1);
+    let d = g.state().jokers[0].def().expect("defined");
+    assert_eq!(d.rarity, balatro_core::enums::Rarity::Legendary);
     assert_eq!(g.state().money, 12);
     assert_eq!(g.state().deck.hand, hand);
     assert!(g.state().consumables.is_empty());

@@ -411,12 +411,25 @@ pub fn choose_boss(
     seen: &mut [u32; BossId::COUNT],
     rng: &mut GameRng,
 ) -> Option<BossId> {
+    choose_boss_excluding(ante, showdown_interval, seen, rng, None)
+}
+
+/// [`choose_boss`] that never returns `exclude` (boss rerolls). If `exclude` is the only
+/// eligible boss it is returned anyway.
+pub fn choose_boss_excluding(
+    ante: i32,
+    showdown_interval: i32,
+    seen: &mut [u32; BossId::COUNT],
+    rng: &mut GameRng,
+    exclude: Option<BossId>,
+) -> Option<BossId> {
     let showdown = ante > 0 && showdown_interval > 0 && ante % showdown_interval == 0;
     let eff_ante = ante.max(1);
     let eligible = |want_showdown: bool| {
         BossId::ALL.into_iter().filter(move |&id| {
             try_boss_def(id).is_some_and(|d| d.min_ante <= eff_ante)
                 && id.is_showdown() == want_showdown
+                && Some(id) != exclude
         })
     };
     let pool_showdown = if eligible(showdown).next().is_some() {
@@ -424,7 +437,7 @@ pub fn choose_boss(
     } else if eligible(!showdown).next().is_some() {
         !showdown
     } else {
-        return None;
+        return exclude.filter(|&id| try_boss_def(id).is_some());
     };
     let min_seen = eligible(pool_showdown)
         .map(|id| seen[id.index()])
@@ -457,6 +470,30 @@ fn active_def(s: &GameState) -> Option<&'static BossDef> {
     } else {
         None
     }
+}
+
+/// Reroll the current ante's boss (Boss tag, Director's Cut, Retcon): a different boss from the
+/// same pool (the old one counts as unseen again), boss state reset, requirement recomputed.
+/// Only meant for the phases between rounds. Returns true if the boss changed.
+pub(crate) fn reroll_boss(s: &mut GameState) -> bool {
+    let Some(old) = s.boss else {
+        return false;
+    };
+    let seen = &mut s.boss_seen[old.index()];
+    *seen = seen.saturating_sub(1);
+    let new = choose_boss_excluding(
+        s.ante,
+        crate::data::run_rules::SHOWDOWN_ANTE_INTERVAL,
+        &mut s.boss_seen,
+        &mut s.rng,
+        Some(old),
+    )
+    .unwrap_or(old);
+    s.boss = Some(new);
+    s.boss_disabled = false;
+    ante_start(s);
+    s.refresh_target();
+    new != old
 }
 
 /// Ante start: reset the boss state and run `on_ante_start` of the chosen boss (it runs even

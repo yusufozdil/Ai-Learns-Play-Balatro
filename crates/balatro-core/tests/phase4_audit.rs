@@ -1,7 +1,6 @@
-//! Phase 4.R closing audit: registry integrity (consumables, bosses), `effects_dropped`
-//! provenance, and natural coverage of every boss in full games.
+//! Phase 4.R closing audit: registry integrity (consumables, bosses), side-effect
+//! counters, and natural coverage of every boss in full games.
 
-use balatro_core::actions::Action;
 use balatro_core::agents::{Agent, RandomAgent};
 use balatro_core::consumable::{ConsumableInstance, MAX_CONSUMABLE_TARGETS};
 use balatro_core::content::jokers::JokerId;
@@ -86,23 +85,15 @@ fn every_boss_id_has_exactly_one_def_with_the_documented_min_ante() {
     }
 }
 
-// ----- effects_dropped provenance ------------------------------------------------------------
+// ----- side-effect counters --------------------------------------------------------------------
 //
-// `stats.effects_dropped` is one aggregate counter: it cannot tell a dropped `CreateJoker`
-// (Judgement, Wraith, The Soul, Riff-raff; Phase 5 stub) from a creation refused because a slot
-// area was full, an eternal joker that could not be destroyed, or a cascade overflow. So the
-// strongest test removes the other causes (huge slot areas, no eternal) and requires every step
-// that grows the counter to be explained by a CreateJoker source.
+// Phase 5.0 split `effects_dropped` into `effects_unimplemented` (must always be 0: every
+// `SideEffect` has an implementation) and `effects_no_room` (normal: full slot areas, eternal
+// targets, an exhausted pool). The strongest test removes the normal causes (huge slot areas, no
+// eternal jokers) and still plays shops and packs with random actions.
 
-fn is_joker_source(id: ConsumableId) -> bool {
-    matches!(
-        id,
-        ConsumableId::Judgement | ConsumableId::Wraith | ConsumableId::TheSoul
-    )
-}
-
-fn run_dropped_games(games: u64, allow_riff_raff: bool) -> (u64, u64) {
-    let (mut explained, mut total_steps) = (0u64, 0u64);
+fn run_counter_games(games: u64, allow_riff_raff: bool) -> u64 {
+    let mut total_steps = 0u64;
     for seed in 0..games {
         let mut g = Game::new(seed, GameConfig::default());
         g.state_mut().consumable_slots = 40;
@@ -129,41 +120,39 @@ fn run_dropped_games(games: u64, allow_riff_raff: bool) -> (u64, u64) {
                 }
             }
             let a = agent.act(&g);
-            let used = match a {
-                Action::UseConsumable { slot, .. } => {
-                    g.state().consumables.get(usize::from(slot)).map(|c| c.id)
-                }
-                _ => None,
-            };
-            let before = g.state().stats.effects_dropped;
-            let riff = g.state().jokers.iter().any(|j| j.id == JokerId::RiffRaff);
+            let no_room = g.state().stats.effects_no_room;
+            let legendary_left = JokerId::ALL
+                .into_iter()
+                .filter(|&id| {
+                    balatro_core::content::jokers::try_def(id)
+                        .is_some_and(|d| d.rarity == balatro_core::enums::Rarity::Legendary)
+                        && !g.state().jokers.iter().any(|j| j.id == id)
+                })
+                .count();
             g.step(a).expect("legal");
-            let delta = g.state().stats.effects_dropped - before;
-            if delta > 0 {
-                let by_consumable = used.is_some_and(is_joker_source);
-                assert!(
-                    by_consumable || riff,
-                    "seed {seed}: {delta} dropped by {a:?} ({used:?}) without a CreateJoker source"
+            assert_eq!(g.state().stats.effects_unimplemented, 0, "seed {seed}");
+            // Nothing may be dropped for lack of room when the areas are huge, except an
+            // exhausted Legendary pool (The Soul with every Legendary owned).
+            if legendary_left > 0 {
+                assert_eq!(
+                    g.state().stats.effects_no_room,
+                    no_room,
+                    "seed {seed}: {a:?} produced nothing"
                 );
-                explained += u64::from(delta);
             }
             steps += 1;
             total_steps += 1;
         }
     }
-    (explained, total_steps)
+    total_steps
 }
 
 #[test]
-fn effects_dropped_only_come_from_joker_creating_effects() {
-    let (explained, steps) = run_dropped_games(1500, false);
-    assert!(steps > 10_000);
-    // The CreateJoker consumables are in the random pool: the counter must actually move.
-    assert!(explained > 0, "no joker-creating consumable was ever used");
+fn nothing_is_unimplemented_or_dropped_with_huge_slot_areas() {
+    assert!(run_counter_games(1500, false) > 10_000);
 }
 
 #[test]
-fn effects_dropped_with_riff_raff_in_the_pool_stay_explained() {
-    let (_, steps) = run_dropped_games(600, true);
-    assert!(steps > 4_000);
+fn riff_raff_boards_stay_clean_too() {
+    assert!(run_counter_games(600, true) > 4_000);
 }

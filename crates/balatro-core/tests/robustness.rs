@@ -182,6 +182,97 @@ fn hundred_thousand_random_joker_board_games() {
     assert!(steps > 400_000);
 }
 
+// ----- Phase 5.0: market, packs, vouchers and tags under random play -----------------------------------
+
+/// Action-kind counters of the shop-heavy runs.
+#[derive(Default, Debug)]
+struct ShopTally {
+    steps: u64,
+    buy: u64,
+    buy_use: u64,
+    open_pack: u64,
+    pick: u64,
+    skip_pack: u64,
+    voucher: u64,
+    reroll: u64,
+    reroll_boss: u64,
+    move_joker: u64,
+    skip_blind: u64,
+}
+
+/// Every game takes the score shortcut on Play (so shops come round after round) and a random
+/// agent chooses among ALL legal actions. `effects_unimplemented` must stay 0.
+fn shop_heavy_run(first_seed: u64, games: u64) -> ShopTally {
+    let mut t = ShopTally::default();
+    for seed in first_seed..first_seed + games {
+        let mut g = Game::new(seed, GameConfig::default());
+        // Start rich enough to buy things; every 4th game gets the boss-reroll vouchers.
+        g.state_mut().money = 40;
+        if seed % 4 == 0 {
+            balatro_core::voucher::redeem(g.state_mut(), balatro_core::content::VoucherId::Retcon);
+        }
+        let mut agent = RandomAgent::with_play_weight(seed, 3.0);
+        let mut steps = 0usize;
+        while !g.is_terminal() {
+            assert!(steps < MAX_STEPS * 4, "seed {seed}: no termination");
+            let a = agent.act(&g);
+            if matches!(a, Action::Play(_)) {
+                let tg = g.state().target;
+                g.state_mut().round_score = tg - 1.0;
+            }
+            if let Err(e) = g.step(a) {
+                panic!("seed {seed}: legal-looking {a:?} rejected: {e}");
+            }
+            g.state()
+                .check_invariants()
+                .unwrap_or_else(|e| panic!("seed {seed} after {a:?}: {e}"));
+            assert_eq!(g.state().stats.effects_unimplemented, 0);
+            match a {
+                Action::Buy(_) => t.buy += 1,
+                Action::BuyAndUse(_) => t.buy_use += 1,
+                Action::OpenPack(_) => t.open_pack += 1,
+                Action::PickPackItem { .. } => t.pick += 1,
+                Action::SkipPack => t.skip_pack += 1,
+                Action::BuyVoucher(_) => t.voucher += 1,
+                Action::Reroll => t.reroll += 1,
+                Action::RerollBoss => t.reroll_boss += 1,
+                Action::MoveJoker { .. } => t.move_joker += 1,
+                Action::SkipBlind => t.skip_blind += 1,
+                _ => {}
+            }
+            steps += 1;
+        }
+        t.steps += steps as u64;
+    }
+    t
+}
+
+#[test]
+fn ten_thousand_shop_heavy_games() {
+    let t = shop_heavy_run(5_000_000, 2_000);
+    for (name, n) in [
+        ("buy", t.buy),
+        ("buy_use", t.buy_use),
+        ("open_pack", t.open_pack),
+        ("pick", t.pick),
+        ("skip_pack", t.skip_pack),
+        ("voucher", t.voucher),
+        ("reroll", t.reroll),
+        ("move_joker", t.move_joker),
+        ("skip_blind", t.skip_blind),
+    ] {
+        assert!(n > 0, "{name} was never used: {t:?}");
+    }
+}
+
+#[test]
+#[ignore = "100k shop-heavy games; run with `cargo test --release -- --ignored`"]
+fn hundred_thousand_shop_heavy_games() {
+    let t = shop_heavy_run(6_000_000, 100_000);
+    eprintln!("100k shop-heavy games: {t:?}");
+    assert!(t.pick > 100_000 && t.buy > 100_000 && t.reroll_boss > 0);
+}
+
 fn run_recorded(seed: u64, agent_seed: u64, jokers: bool) -> (Vec<Action>, GameState) {
     let mut g = new_game(seed, jokers);
     let mut agent = RandomAgent::with_play_weight(agent_seed, 4.0);

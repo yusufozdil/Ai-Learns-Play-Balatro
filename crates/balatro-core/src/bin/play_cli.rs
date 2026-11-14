@@ -71,6 +71,44 @@ fn card_str(c: &Card) -> String {
     s
 }
 
+fn shop_text(s: &GameState) -> String {
+    use balatro_core::shop::{self, ShopCardKind};
+    let mut out = String::from("shop cards:");
+    for (i, c) in s.shop.cards.iter().enumerate() {
+        if let Some(c) = c {
+            let what = match &c.kind {
+                ShopCardKind::Joker(j) => format!("{:?} {:?}", j.id, j.edition),
+                ShopCardKind::Consumable(id) => format!("{id:?}"),
+                ShopCardKind::PlayingCard(card) => card_str(card),
+            };
+            out.push_str(&format!(" [{i}] {what} ${}", shop::card_price(s, c)));
+        }
+    }
+    out.push_str("\npacks:");
+    for (i, p) in s.shop.packs.iter().enumerate() {
+        if let Some(p) = p {
+            out.push_str(&format!(
+                " [{i}] {:?} {:?} ${}",
+                p.spec.kind,
+                p.spec.size,
+                shop::pack_price_of(s, p)
+            ));
+        }
+    }
+    out.push_str("\nvouchers:");
+    for (i, v) in s.shop.vouchers.iter().enumerate() {
+        if let Some(v) = v {
+            out.push_str(&format!(
+                " [{i}] {:?} ${}",
+                v.id,
+                shop::voucher_price(s, v.id)
+            ));
+        }
+    }
+    out.push_str(&format!("\nreroll ${}\n", shop::reroll_price(s)));
+    out
+}
+
 fn summary(s: &GameState) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -104,7 +142,37 @@ fn summary(s: &GameState) -> String {
         }
         out.push('\n');
     }
-    if s.phase == Phase::Play {
+    if s.phase == Phase::Shop {
+        out.push_str(&shop_text(s));
+    }
+    if let Some(p) = &s.pack {
+        out.push_str(&format!(
+            "pack {:?} {:?}, {} pick(s) left:",
+            p.spec.kind, p.spec.size, p.picks_left
+        ));
+        for (i, it) in p.items.iter().enumerate() {
+            match it {
+                Some(balatro_core::packs::PackItem::Consumable(id)) => {
+                    out.push_str(&format!(" [{i}] {id:?}"))
+                }
+                Some(balatro_core::packs::PackItem::Joker(j)) => {
+                    out.push_str(&format!(" [{i}] {:?} {:?}", j.id, j.edition))
+                }
+                Some(balatro_core::packs::PackItem::Card(c)) => {
+                    out.push_str(&format!(" [{i}] {}", card_str(c)))
+                }
+                None => {}
+            }
+        }
+        out.push('\n');
+    }
+    if !s.tags.is_empty() {
+        out.push_str(&format!("tags: {:?}\n", s.tags));
+    }
+    if !s.vouchers.is_empty() {
+        out.push_str(&format!("vouchers: {:?}\n", s.vouchers));
+    }
+    if matches!(s.phase, Phase::Play | Phase::PackOpen) && !s.deck.hand.is_empty() {
         out.push_str("hand:");
         for (i, c) in s.deck.hand.iter().enumerate() {
             out.push_str(&format!(" {i}:{}", card_str(c)));
@@ -128,7 +196,7 @@ fn report(info: &StepInfo) -> String {
         ));
     }
     if let Some(t) = info.tag {
-        out.push_str(&format!("took skip tag {t}\n"));
+        out.push_str(&format!("took skip tag {t:?}\n"));
     }
     if let Some(p) = info.sold_for {
         out.push_str(&format!("sold for ${p}\n"));
@@ -189,8 +257,9 @@ fn do_action(sess: &mut Session, action: Action) -> String {
 }
 
 const HELP: &str = "commands: select | skip | play <pos..> | discard <pos..> | sell <i> | \
-use <slot> [pos..] | sellc <slot> | end | legal | state | save <file> | load <file> | \
-replay-save <file> | help | quit";
+use <slot> [pos..] | sellc <slot> | buy <i> | buyuse <i> | pack <i> | pick <i> [pos..] | \
+skippack | voucher <i> | reroll | rerollboss | move <from> <to> | end | legal | state | \
+save <file> | load <file> | replay-save <file> | help | quit";
 
 /// Handle one line. Returns `None` to quit, else the text to print.
 fn handle(sess: &mut Session, line: &str) -> Option<String> {
@@ -235,6 +304,34 @@ fn handle(sess: &mut Session, line: &str) -> Option<String> {
             },
             None => "error: usage: use <consumable slot> [hand positions..]".to_string(),
         },
+        "buy" | "buyuse" | "pack" | "voucher" | "move" | "pick" => {
+            let nums: Result<Vec<u8>, _> = args
+                .iter()
+                .take(if cmd == "move" { 2 } else { 1 })
+                .map(|a| a.parse::<u8>())
+                .collect();
+            match (cmd, nums.as_deref()) {
+                ("buy", Ok([i])) => do_action(sess, Action::Buy(*i)),
+                ("buyuse", Ok([i])) => do_action(sess, Action::BuyAndUse(*i)),
+                ("pack", Ok([i])) => do_action(sess, Action::OpenPack(*i)),
+                ("voucher", Ok([i])) => do_action(sess, Action::BuyVoucher(*i)),
+                ("move", Ok([a, b])) => do_action(sess, Action::MoveJoker { from: *a, to: *b }),
+                ("pick", Ok([i])) => match parse_mask(&args[1..], hand_len) {
+                    Ok(t) => do_action(
+                        sess,
+                        Action::PickPackItem {
+                            index: *i,
+                            targets: t,
+                        },
+                    ),
+                    Err(e) => format!("error: {e}"),
+                },
+                _ => format!("error: bad arguments for {cmd}"),
+            }
+        }
+        "skippack" => do_action(sess, Action::SkipPack),
+        "reroll" => do_action(sess, Action::Reroll),
+        "rerollboss" => do_action(sess, Action::RerollBoss),
         "sellc" => match args {
             [a] => match a.parse::<u8>() {
                 Ok(i) => do_action(sess, Action::SellConsumable(i)),

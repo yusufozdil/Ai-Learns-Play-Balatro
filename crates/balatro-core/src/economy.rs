@@ -8,7 +8,19 @@ use crate::data::prices::{
 };
 
 /// Shop discount from vouchers (shop.md §6). Applies to cards, packs and vouchers (notes.md §4.1d).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Discount {
     /// No discount.
     #[default]
@@ -20,7 +32,8 @@ pub enum Discount {
 }
 
 impl Discount {
-    fn percent(self) -> i32 {
+    /// Discount in percent (0, 25, 50).
+    pub fn percent(self) -> i32 {
         match self {
             Discount::None => 0,
             Discount::Clearance => CLEARANCE_PERCENT,

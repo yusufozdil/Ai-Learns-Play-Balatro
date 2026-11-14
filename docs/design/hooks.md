@@ -515,5 +515,12 @@ fn four_fingers_modifiers(_: &JokerInstance, m: &mut Modifiers) { m.rules.four_f
   `money_delta` and new effects. `fire_sell_self` + `fire_sell_other` before removing a sold joker.
   `fire_acquire` after adding a joker. End of round: `Scorer::round_end_held`, then
   `fire_round_end` (also on a lost round with `won: false`; `PreventDeath` saves the run).
+- Phase 5.0: `fire_shop_enter` runs after the market was generated and the shop tags ran;
+  `fire_reroll` after every reroll (free ones too: Chaos the Clown, Flash Card);
+  `fire_pack_open` when a pack opens (shop purchase or tag), `fire_pack_skip` once per
+  `SkipPack`. `SideEffect::CreateJoker` creates a real joker (needs a free slot; shop pools;
+  Wraith Rare, The Soul Legendary, Riff-raff Common, Judgement shop odds) and fires
+  `on_acquire`. `SideEffect::CreateTag` only adds the tag. Market contract:
+  `docs/design/shop_packs_vouchers_tags.md`.
 - Keep `JokerInstance::uid` unique per run; side effects address jokers and cards by uid.
 - Recompute `collect_modifiers(&jokers)` whenever jokers, their order, editions or debuffs change.

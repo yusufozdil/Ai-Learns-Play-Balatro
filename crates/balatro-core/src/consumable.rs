@@ -209,7 +209,7 @@ impl<'a> Targets<'a> {
 }
 
 /// What a [`CanUseFn`] sees: the state before the use, the selection, and the slot the card is
-/// used from (`None` for a card picked from a pack, Phase 5).
+/// used from (`None` for a card picked from a pack or bought with Buy & Use).
 pub struct UseCheck<'a> {
     state: &'a GameState,
     targets: Targets<'a>,
@@ -497,7 +497,7 @@ impl<'a> UseCtx<'a> {
     }
 
     /// Create a random joker (Judgement: `None` = shop odds, Wraith: Rare, The Soul:
-    /// Legendary). Queued `CreateJoker`; Phase 5 implements joker pools (dropped until then).
+    /// Legendary). Queued `CreateJoker`; needs a free joker slot when applied (shop pools).
     pub fn create_joker(&mut self, rarity: Option<Rarity>) {
         self.fx.push(SideEffect::CreateJoker { rarity });
     }
@@ -595,6 +595,34 @@ pub fn random_consumable(
         return fallback(kind);
     }
     let k = rng.range(RngKey::Consumables, 0, n);
+    pool.iter()
+        .filter(ok)
+        .nth(k)
+        .copied()
+        .unwrap_or(fallback(kind))
+}
+
+/// Like [`random_consumable`] but the exclusion list is explicit and the roll key is the
+/// caller's (shop: `RngKey::Shop`, packs: `RngKey::Packs`). Uniform over [`in_random_pool`] ids
+/// not in `excluded` (everything allowed when `allow_duplicates`); [`fallback`] if none is left.
+/// One roll when the pool is non-empty.
+pub fn random_consumable_excluding(
+    kind: ConsumableKind,
+    excluded: &[ConsumableId],
+    hand_plays_run: &[u32; HandType::COUNT],
+    allow_duplicates: bool,
+    key: RngKey,
+    rng: &mut GameRng,
+) -> ConsumableId {
+    let ok = |id: &&ConsumableId| {
+        in_random_pool(**id, hand_plays_run) && (allow_duplicates || !excluded.contains(*id))
+    };
+    let pool = ConsumableId::of_kind(kind);
+    let n = pool.iter().filter(ok).count();
+    if n == 0 {
+        return fallback(kind);
+    }
+    let k = rng.range(key, 0, n);
     pool.iter()
         .filter(ok)
         .nth(k)

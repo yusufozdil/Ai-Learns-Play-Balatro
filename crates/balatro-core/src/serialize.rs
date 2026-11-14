@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current [`Replay`] format version.
-pub const REPLAY_VERSION: u32 = 2;
+pub const REPLAY_VERSION: u32 = 3;
 
 /// JSON (de)serialization failure.
 #[derive(Debug, Error)]

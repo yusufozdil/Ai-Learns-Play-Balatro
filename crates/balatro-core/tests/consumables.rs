@@ -216,12 +216,9 @@ fn hand_targeting_cards_need_a_drawn_hand() {
     give(&mut g, C::Death);
     assert_eq!(use_c(&mut g, 0, 1), Err(ActionError::NeedsHand));
     assert_eq!(use_c(&mut g, 1, 0b11), Err(ActionError::NeedsHand));
-    // Not in BlindSelect at all.
+    // BlindSelect has no hand either (Phase 5.0 allows using cards there at all).
     g.step(Action::EndShop).expect("end shop");
-    assert!(matches!(
-        use_c(&mut g, 0, 1),
-        Err(ActionError::WrongPhase { .. })
-    ));
+    assert_eq!(use_c(&mut g, 0, 1), Err(ActionError::NeedsHand));
 }
 
 #[test]
@@ -276,7 +273,7 @@ fn full_slots_drop_creations_and_negative_cards_add_a_slot() {
             .is_none()
     );
     let s = g.state_mut();
-    let d0 = s.stats.effects_dropped;
+    let d0 = s.stats.effects_no_room;
     apply_side_effects(
         s,
         &[
@@ -290,7 +287,7 @@ fn full_slots_drop_creations_and_negative_cards_add_a_slot() {
         ],
     );
     assert_eq!(s.consumables.len(), 2);
-    assert_eq!(s.stats.effects_dropped, d0 + 2);
+    assert_eq!(s.stats.effects_no_room, d0 + 2);
     // A Negative card always fits and raises the capacity by one.
     apply_side_effects(
         s,
@@ -342,7 +339,7 @@ fn creation_side_effects_fill_free_slots() {
     assert_eq!(s.consumables[2].id, C::Death);
     assert!(s.consumables[2].negative);
     assert!(s.consumables.iter().all(|c| c.sell_value == 3));
-    assert_eq!(s.stats.effects_dropped, 0);
+    assert_eq!(s.stats.effects_no_room, 0);
 }
 
 #[test]
@@ -366,7 +363,7 @@ fn gift_card_raises_consumable_sell_values_at_round_end() {
     g.state_mut().round_score = t - 1.0;
     g.step(Action::Play(1)).expect("win");
     assert_eq!(g.state().consumables[0].sell_value, 2);
-    assert_eq!(g.state().stats.effects_dropped, 0);
+    assert_eq!(g.state().stats.effects_no_room, 0);
 }
 
 #[test]

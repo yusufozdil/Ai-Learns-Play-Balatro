@@ -7,6 +7,7 @@ use balatro_core::actions::{Action, ActionError};
 use balatro_core::blinds::BlindKind;
 use balatro_core::card::Card;
 use balatro_core::content::BossId;
+use balatro_core::content::TagId;
 use balatro_core::content::jokers::JokerId;
 use balatro_core::deck::Pile;
 use balatro_core::enums::{Edition, Enhancement, HandType, Phase, Rank, Suit};
@@ -128,7 +129,7 @@ fn full_ante_small_big_boss_then_next_ante() {
     assert_eq!(s.blind, BlindKind::Big); // next blind already set up
     assert_eq!(s.target, 450.0); // 300 x 1.5
     assert_eq!(s.deck.draw_pile.len(), 52); // all cards back in the deck
-    assert_eq!(g.legal_actions(), vec![Action::EndShop]);
+    assert_eq!(g.legal_actions()[0], Action::EndShop);
     let info = g.step(Action::EndShop).expect("end shop");
     assert_eq!(
         (info.phase_before, info.phase_after),
@@ -208,6 +209,8 @@ fn played_cards_are_taken_left_to_right_in_hand_order() {
 #[test]
 fn skip_gives_tag_and_moves_to_next_blind() {
     let mut g = new_game(6);
+    // Tags that stay held until a boss / the next shop (the rolled ones may act at once).
+    g.state_mut().blind_tags = [TagId::Investment, TagId::Coupon];
     let tags = g.state().blind_tags;
     let info = g.step(Action::SkipBlind).expect("skip small");
     assert_eq!(info.tag, Some(tags[0]));
@@ -382,17 +385,17 @@ fn invalid_actions_are_rejected_without_changing_state() {
         Action::Play(1),
         Action::Discard(1),
         Action::EndShop,
-        Action::SellJoker(0),
+        Action::Reroll,
+        Action::Buy(0),
+        Action::SkipPack,
     ] {
         assert_rejected(&mut g, a, wrong(a, Phase::BlindSelect));
     }
+    // Selling is allowed in every phase (Phase 5.0): with no joker the slot is just invalid.
     assert_rejected(
         &mut g,
-        Action::Reroll,
-        ActionError::NotImplemented {
-            action: Action::Reroll,
-            phase_of_plan: 5,
-        },
+        Action::SellJoker(0),
+        ActionError::InvalidJoker { index: 0, len: 0 },
     );
 
     select(&mut g);
@@ -714,16 +717,17 @@ fn side_effects_apply_to_state() {
         },
         SideEffect::AddHands(2),
         SideEffect::ClearDiscards,
-        SideEffect::CreateTag { id: 7 },
+        SideEffect::CreateTag { id: TagId::Voucher },
         SideEffect::SetRunFlag(RunFlag::GrosMichelExtinct),
         SideEffect::SetRunFlag(RunFlag::GrosMichelExtinct),
         SideEffect::PreventDeath,
-        SideEffect::CreateJoker { rarity: None }, // Phase 5: dropped
+        SideEffect::CreateJoker { rarity: None },
     ];
     let rep = apply_side_effects(s, &fx);
     assert_eq!(s.hand_levels[HandType::Flush.index()], 3);
     assert_eq!(s.hand_levels[HandType::Pair.index()], 1); // never below 1
-    assert_eq!(s.jokers.len(), 1);
+    // The eternal joker survived, the created joker came last.
+    assert_eq!(s.jokers.len(), 2);
     assert_eq!(s.jokers[0].uid, eternal_uid);
     assert_eq!(s.jokers[0].sell_value, 1 + 3);
     assert!(s.deck.iter_all().all(|c| c.uid != card_uid));
@@ -737,11 +741,11 @@ fn side_effects_apply_to_state() {
     assert_eq!(s.deck.len(), 52); // -1 destroyed +1 added
     assert_eq!((s.stats.cards_destroyed, s.stats.cards_added), (1, 1));
     assert_eq!((s.hands_left, s.discards_left), (6, 0));
-    assert_eq!(s.tags, vec![7]);
+    assert_eq!(s.tags, vec![TagId::Voucher]);
     assert_eq!(s.run_flags, vec![RunFlag::GrosMichelExtinct]);
     assert!(rep.prevent_death);
     assert_eq!((rep.destroyed, rep.added), (1, 1));
-    assert_eq!(rep.dropped, 2); // eternal refusal + CreateJoker
+    assert_eq!(rep.dropped, 1); // eternal refusal
     assert!(s.check_invariants().is_ok());
 }
 

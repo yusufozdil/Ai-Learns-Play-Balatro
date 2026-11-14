@@ -9,12 +9,13 @@ use crate::blinds::{self, BlindKind, MULT_BOSS_DEFAULT, StakeScaling};
 use crate::boss::{self, BossState};
 use crate::consumable::ConsumableInstance;
 use crate::content::ids::{BossId, ConsumableId};
-use crate::content::try_boss_def;
+pub use crate::content::ids::{TagId, VoucherId};
+use crate::content::{try_boss_def, try_tag_def};
 use crate::data::prices::{INTEREST_CAP_BASE, STARTING_MONEY};
 use crate::data::run_rules::{
     BASE_CONSUMABLE_SLOTS, BASE_DISCARDS, BASE_HAND_SIZE, BASE_HANDS, BASE_JOKER_SLOTS,
     MAX_HAND_SIZE, MIN_HAND_SIZE, MIN_HANDS_PER_ROUND, RED_DECK_EXTRA_DISCARDS,
-    SHOWDOWN_ANTE_INTERVAL, STANDARD_DECK_SIZE, STARTING_ANTE, TAG_POOL_PLACEHOLDER,
+    SHOWDOWN_ANTE_INTERVAL, STANDARD_DECK_SIZE, STARTING_ANTE,
 };
 use crate::deck::Deck;
 use crate::enums::{Edition, HandType, Phase};
@@ -22,7 +23,10 @@ use crate::hooks::{
     BossView, DeckCounts, Modifiers, RunFlag, RunStats, RunView, collect_modifiers,
 };
 use crate::joker::JokerInstance;
+use crate::packs::{OpenPack, PackSpec};
 use crate::rng::{GameRng, RngKey};
+pub use crate::shop::ShopState;
+use crate::voucher::ShopMods;
 use serde::{Deserialize, Serialize};
 
 /// Starting deck. Only Red is implemented (prd.md §1: Red Deck + White Stake).
@@ -80,12 +84,6 @@ pub enum Outcome {
     Loss,
 }
 
-/// Placeholder skip-tag id (no effect yet). TODO(Phase 5C): typed `TagId` from `content/tags.rs`
-/// (also `SideEffect::CreateTag`).
-pub type TagId = u16;
-/// Placeholder voucher id. TODO(Phase 5D): typed `VoucherId`.
-pub type VoucherId = u16;
-
 /// Bookkeeping counters (not all visible to hooks; [`RunStats`] is the hook-visible part).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameStats {
@@ -105,16 +103,16 @@ pub struct GameStats {
     pub jokers_sold: u32,
     /// Best single-hand score this run.
     pub best_hand: f64,
-    /// Side effects that were dropped: no room, not implemented yet, or past the cascade cap.
-    pub effects_dropped: u32,
-}
-
-/// Placeholder for the shop of the current Shop phase. TODO(Phase 5A): shop slots, vouchers,
-/// packs, reroll counter.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ShopState {
-    /// Rerolls bought in the current shop (reroll price; Phase 5A).
-    pub rerolls: u32,
+    /// Side effects that were not applied because they have no effect to run yet. Must stay 0
+    /// (Phase 5 implemented every `SideEffect`); a non-zero value is an engine bug.
+    pub effects_unimplemented: u32,
+    /// Side effects that produced nothing in normal play: no free slot, eternal target, no joker
+    /// left in the pool, or past the cascade cap.
+    pub effects_no_room: u32,
+    /// Discards left unused at the end of won rounds, summed over the run (Garbage Tag).
+    pub unused_discards: u32,
+    /// Shops entered this run (the first one opens with a Normal Buffoon Pack).
+    pub shops_entered: u32,
 }
 
 /// The whole run. Fields are public for observation encoding, tests and tools; only
@@ -144,6 +142,8 @@ pub struct GameState {
     /// Tags offered for skipping this ante's Small and Big blind (rolled at ante start on
     /// `RngKey::Tags`, notes.md §4.1c).
     pub blind_tags: [TagId; 2],
+    /// Orbital hand picked for each offered tag (`Some` only when that tag is Orbital).
+    pub blind_tag_hands: [Option<HandType>; 2],
     /// Boss of this ante, chosen at ante start on `RngKey::Bosses` (`boss::choose_boss`).
     /// `None` only if no boss is defined.
     pub boss: Option<BossId>,
@@ -157,7 +157,7 @@ pub struct GameState {
     // --- economy ---------------------------------------------------------------------------
     /// Money in dollars (may be negative only with debt allowance, `Modifiers::debt_limit`).
     pub money: i32,
-    /// Interest cap in dollars (Seed Money / Money Tree raise it). TODO(Phase 5D): vouchers.
+    /// Interest cap in dollars (Seed Money / Money Tree raise it).
     pub interest_cap: i32,
 
     // --- round -----------------------------------------------------------------------------
@@ -210,13 +210,27 @@ pub struct GameState {
     pub hand_plays_run: [u32; HandType::COUNT],
     /// Times each hand type was played this round.
     pub hand_plays_round: [u32; HandType::COUNT],
-    /// Vouchers owned. PLACEHOLDER until Phase 5D.
+    /// Vouchers owned, in the order bought.
     pub vouchers: Vec<VoucherId>,
-    /// Tags held, oldest first. PLACEHOLDER (no effects) until Phase 5C.
+    /// Passive modifiers of the owned vouchers (cache of `ShopMods` folded from `vouchers`;
+    /// recomputed on redeem, checked by `check_invariants`).
+    pub shop_mods: ShopMods,
+    /// The voucher of this ante's shops (rolled at ante start on `RngKey::Shop`); `None` once
+    /// bought or if nothing is eligible.
+    pub ante_voucher: Option<VoucherId>,
+    /// Tags held, oldest first.
     pub tags: Vec<TagId>,
+    /// Packs queued to open (pack tags), in order.
+    pub pending_packs: Vec<PackSpec>,
+    /// The pack being opened (`Some` exactly in `Phase::PackOpen`).
+    pub pack: Option<OpenPack>,
+    /// Paid boss rerolls used this ante (Director's Cut allows one).
+    pub boss_rerolls_ante: u32,
+    /// Hand size bonus for the current round only (Juggle Tag); cleared when the round ends.
+    pub round_hand_size: i32,
     /// Run flags set by jokers (unique, in the order they were set).
     pub run_flags: Vec<RunFlag>,
-    /// Shop state (Phase 5).
+    /// The market of the current Shop phase.
     pub shop: ShopState,
 
     // --- misc ------------------------------------------------------------------------------
@@ -246,7 +260,8 @@ impl GameState {
             round: 0,
             blind: BlindKind::Small,
             target: 0.0,
-            blind_tags: [0; 2],
+            blind_tags: [TagId::ALL[0]; 2],
+            blind_tag_hands: [None; 2],
             boss: None,
             boss_disabled: false,
             boss_seen: [0; BossId::COUNT],
@@ -275,7 +290,13 @@ impl GameState {
             hand_plays_run: [0; HandType::COUNT],
             hand_plays_round: [0; HandType::COUNT],
             vouchers: Vec::new(),
+            shop_mods: ShopMods::NONE,
+            ante_voucher: None,
             tags: Vec::new(),
+            pending_packs: Vec::new(),
+            pack: None,
+            boss_rerolls_ante: 0,
+            round_hand_size: 0,
             run_flags: Vec::new(),
             shop: ShopState::default(),
             stats: GameStats::default(),
@@ -289,12 +310,7 @@ impl GameState {
     /// Ante setup: roll the Small/Big skip tags and the boss, clear the Pillar's
     /// played-this-ante flags, reset the blind to Small and refresh the target.
     pub(crate) fn start_ante(&mut self) {
-        for t in &mut self.blind_tags {
-            *t = self
-                .rng
-                .range(RngKey::Tags, 0, usize::from(TAG_POOL_PLACEHOLDER))
-                as TagId;
-        }
+        self.roll_blind_tags();
         self.boss = boss::choose_boss(
             self.ante,
             SHOWDOWN_ANTE_INTERVAL,
@@ -302,6 +318,8 @@ impl GameState {
             &mut self.rng,
         );
         self.boss_disabled = false;
+        self.boss_rerolls_ante = 0;
+        self.ante_voucher = crate::shop::pick_voucher(self, &[]);
         let d = &mut self.deck;
         for c in d
             .draw_pile
@@ -314,6 +332,38 @@ impl GameState {
         boss::ante_start(self);
         self.blind = BlindKind::Small;
         self.refresh_target();
+    }
+
+    /// Offer a tag for the Small and the Big blind (notes.md §4.1d): uniformly among the
+    /// defined tags whose `min_ante <= ante` (all tags if none is defined), on `RngKey::Tags`.
+    /// An Orbital tag also picks its hand now (an open hand, or a secret one already played).
+    fn roll_blind_tags(&mut self) {
+        let eff = self.ante.max(1);
+        let mut pool: Vec<TagId> = TagId::ALL
+            .into_iter()
+            .filter(|&id| try_tag_def(id).is_some_and(|d| d.min_ante <= eff))
+            .collect();
+        if pool.is_empty() {
+            pool = TagId::ALL.to_vec();
+        }
+        for i in 0..2 {
+            let id = pool[self.rng.range(RngKey::Tags, 0, pool.len())];
+            self.blind_tags[i] = id;
+            self.blind_tag_hands[i] = None;
+            if id == TagId::Orbital {
+                let hands: Vec<HandType> = HandType::ALL
+                    .into_iter()
+                    .filter(|h| !h.is_secret() || self.hand_plays_run[h.index()] > 0)
+                    .collect();
+                let k = self.rng.range(RngKey::Tags, 0, hands.len());
+                self.blind_tag_hands[i] = Some(hands[k]);
+            }
+        }
+    }
+
+    /// Spectral cards appear in shop card slots (Ghost Deck only; no implemented deck).
+    pub fn deck_spectral_in_shop(&self) -> bool {
+        false
     }
 
     /// Recompute `target` for the current ante and blind.
@@ -373,7 +423,10 @@ impl GameState {
         };
         clamp_delta(
             self.base_hand_size,
-            self.mods.hand_size.saturating_add(boss),
+            self.mods
+                .hand_size
+                .saturating_add(boss)
+                .saturating_add(self.round_hand_size),
             MIN_HAND_SIZE,
             MAX_HAND_SIZE,
         )
@@ -517,8 +570,8 @@ impl GameState {
             deck: self.deck_counts(),
             rules: self.mods.rules,
             prob_mult: self.mods.prob_mult,
-            // TODO(Phase 5D): Observatory voucher. TODO(Phase 5E): Plasma Deck.
-            observatory: false,
+            observatory: self.shop_mods.observatory,
+            // TODO(Phase 5E): Plasma Deck.
             plasma_deck: false,
             stats: self.stats.run,
         }
@@ -570,9 +623,15 @@ impl GameState {
                     return Err("in Play with the blind already beaten".into());
                 }
             }
-            Phase::BlindSelect | Phase::Shop | Phase::PackOpen => {
+            Phase::BlindSelect | Phase::Shop => {
                 if !self.deck.hand.is_empty() || !self.deck.discard_pile.is_empty() {
                     return Err("cards outside the draw pile between rounds".into());
+                }
+            }
+            Phase::PackOpen => {
+                // Arcana/Spectral packs deal a hand; nothing else is out of the draw pile.
+                if !self.deck.discard_pile.is_empty() {
+                    return Err("discard pile not empty in a pack".into());
                 }
             }
             Phase::GameOver | Phase::Won => {}
@@ -605,6 +664,20 @@ impl GameState {
         if self.round_score.is_nan() || self.round_score < 0.0 {
             return Err("round score negative or NaN".into());
         }
+        if self.pack.is_some() != (self.phase == Phase::PackOpen) {
+            return Err("open pack does not match the phase".into());
+        }
+        if self.shop_mods != fold_shop_mods(&self.vouchers) {
+            return Err("voucher modifier cache out of date".into());
+        }
+        if self
+            .vouchers
+            .iter()
+            .enumerate()
+            .any(|(i, v)| self.vouchers[..i].contains(v))
+        {
+            return Err("duplicate voucher".into());
+        }
         if self.mods != collect_modifiers(&self.jokers) {
             return Err("modifier cache out of date".into());
         }
@@ -627,6 +700,17 @@ impl GameState {
         }
         Ok(())
     }
+}
+
+/// Fold the passive modifiers of `vouchers` (undefined ids contribute nothing).
+pub fn fold_shop_mods(vouchers: &[VoucherId]) -> ShopMods {
+    let mut m = ShopMods::NONE;
+    for &v in vouchers {
+        if let Some(d) = crate::content::try_voucher_def(v) {
+            m.merge(&d.passive);
+        }
+    }
+    m
 }
 
 /// `base + delta` clamped to `[lo, hi]`.

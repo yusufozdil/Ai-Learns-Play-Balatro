@@ -1235,7 +1235,7 @@ fn invisible_in_the_game_alone_just_sells() {
     two_rounds(&mut g);
     g.step(Action::SellJoker(0)).expect("sell");
     assert!(g.state().jokers.is_empty());
-    assert_eq!(g.state().stats.effects_dropped, 0);
+    assert_eq!(g.state().stats.effects_no_room, 0);
 }
 
 // =============================================================================================

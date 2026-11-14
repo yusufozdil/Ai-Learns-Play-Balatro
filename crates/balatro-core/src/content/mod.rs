@@ -17,10 +17,12 @@ pub mod tags;
 pub mod tarots;
 pub mod vouchers;
 
-pub use ids::{BossId, ConsumableId};
+pub use ids::{BossId, ConsumableId, TagId, VoucherId};
 
 use crate::boss::BossDef;
 use crate::consumable::ConsumableDef;
+use crate::tag::TagDef;
+use crate::voucher::VoucherDef;
 
 /// Every consumable definition table.
 pub static CONSUMABLE_SOURCES: &[&[ConsumableDef]] =
@@ -28,6 +30,16 @@ pub static CONSUMABLE_SOURCES: &[&[ConsumableDef]] =
 
 /// Every boss definition table.
 pub static BOSS_SOURCES: &[&[BossDef]] = &[bosses::DEFS];
+
+/// Every voucher definition table.
+pub static VOUCHER_SOURCES: &[&[VoucherDef]] = &[vouchers::DEFS];
+
+/// Every tag definition table.
+pub static TAG_SOURCES: &[&[TagDef]] = &[tags::DEFS];
+
+static VOUCHER_REGISTRY: [Option<&'static VoucherDef>; VoucherId::COUNT] = build_voucher_registry();
+
+static TAG_REGISTRY: [Option<&'static TagDef>; TagId::COUNT] = build_tag_registry();
 
 static CONSUMABLE_REGISTRY: [Option<&'static ConsumableDef>; ConsumableId::COUNT] =
     build_consumable_registry();
@@ -40,6 +52,36 @@ const fn build_consumable_registry() -> [Option<&'static ConsumableDef>; Consuma
     let mut s = 0;
     while s < CONSUMABLE_SOURCES.len() {
         let defs: &'static [ConsumableDef] = CONSUMABLE_SOURCES[s];
+        let mut i = 0;
+        while i < defs.len() {
+            table[defs[i].id.index()] = Some(&defs[i]);
+            i += 1;
+        }
+        s += 1;
+    }
+    table
+}
+
+const fn build_voucher_registry() -> [Option<&'static VoucherDef>; VoucherId::COUNT] {
+    let mut table: [Option<&'static VoucherDef>; VoucherId::COUNT] = [None; VoucherId::COUNT];
+    let mut s = 0;
+    while s < VOUCHER_SOURCES.len() {
+        let defs: &'static [VoucherDef] = VOUCHER_SOURCES[s];
+        let mut i = 0;
+        while i < defs.len() {
+            table[defs[i].id.index()] = Some(&defs[i]);
+            i += 1;
+        }
+        s += 1;
+    }
+    table
+}
+
+const fn build_tag_registry() -> [Option<&'static TagDef>; TagId::COUNT] {
+    let mut table: [Option<&'static TagDef>; TagId::COUNT] = [None; TagId::COUNT];
+    let mut s = 0;
+    while s < TAG_SOURCES.len() {
+        let defs: &'static [TagDef] = TAG_SOURCES[s];
         let mut i = 0;
         while i < defs.len() {
             table[defs[i].id.index()] = Some(&defs[i]);
@@ -92,6 +134,38 @@ pub fn consumable_def_count(id: ConsumableId) -> usize {
 /// Number of boss definitions of `id` (must be 0 or 1; 1 once Phase 4 is complete).
 pub fn boss_def_count(id: BossId) -> usize {
     BOSS_SOURCES
+        .iter()
+        .flat_map(|s| s.iter())
+        .filter(|d| d.id == id)
+        .count()
+}
+
+/// Definition of a voucher, `None` while no content file defines it (undefined vouchers are
+/// never offered).
+#[inline]
+pub fn try_voucher_def(id: VoucherId) -> Option<&'static VoucherDef> {
+    VOUCHER_REGISTRY[id.index()]
+}
+
+/// Definition of a tag, `None` while no content file defines it (an undefined tag can be
+/// offered only when no tag is defined; it has no effect).
+#[inline]
+pub fn try_tag_def(id: TagId) -> Option<&'static TagDef> {
+    TAG_REGISTRY[id.index()]
+}
+
+/// Number of voucher definitions of `id` (must be 0 or 1; 1 once Phase 5B/5C is complete).
+pub fn voucher_def_count(id: VoucherId) -> usize {
+    VOUCHER_SOURCES
+        .iter()
+        .flat_map(|s| s.iter())
+        .filter(|d| d.id == id)
+        .count()
+}
+
+/// Number of tag definitions of `id` (must be 0 or 1; 1 once Phase 5B/5C is complete).
+pub fn tag_def_count(id: TagId) -> usize {
+    TAG_SOURCES
         .iter()
         .flat_map(|s| s.iter())
         .filter(|d| d.id == id)

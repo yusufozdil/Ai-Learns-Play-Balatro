@@ -1054,7 +1054,7 @@ fn dna_and_sixth_sense_on_the_same_single_six() {
     g.step(Action::SelectBlind).expect("select");
     set_hand(&mut g, 0, c(0, Six, Spades));
     let six_uid = g.state().deck.hand[0].uid;
-    let dropped0 = g.state().stats.effects_dropped;
+    let dropped0 = g.state().stats.effects_no_room;
     let info = play(&mut g, 0b1);
     assert_eq!(info.hand.expect("hand").score, 11.0);
     assert_eq!((info.cards_added, info.cards_destroyed), (1, 1));
@@ -1073,7 +1073,7 @@ fn dna_and_sixth_sense_on_the_same_single_six() {
     );
     assert_eq!(joker_value(&g, J::Hologram), 1.25);
     // The Spectral is created (Phase 4 implements consumables).
-    assert_eq!(s.stats.effects_dropped, dropped0);
+    assert_eq!(s.stats.effects_no_room, dropped0);
     assert_eq!(s.consumables.len(), 1);
     assert_eq!(
         s.consumables[0].kind(),

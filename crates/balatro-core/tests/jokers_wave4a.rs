@@ -903,7 +903,7 @@ fn sixth_sense_requires_first_hand_one_card_and_a_six() {
 fn consumable_accounting(g: &Game, expected: u32) {
     let s = g.state();
     assert_eq!(
-        s.consumables.len() as u32 + s.stats.effects_dropped,
+        s.consumables.len() as u32 + s.stats.effects_no_room,
         expected,
         "consumables created + dropped"
     );
@@ -1086,7 +1086,7 @@ fn riff_raff_game_never_overfills_the_joker_area() {
     select(&mut g);
     let s = g.state();
     assert!(s.jokers.len() <= 3);
-    assert_eq!(s.jokers.len() as u32 - 1 + s.stats.effects_dropped, 2);
+    assert_eq!(s.jokers.len() as u32 - 1 + s.stats.effects_no_room, 2);
     s.check_invariants().expect("invariants");
     // A full joker area: nothing is added.
     let mut g = new_game(89);

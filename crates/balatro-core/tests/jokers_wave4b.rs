@@ -8,6 +8,7 @@ use balatro_core::actions::Action;
 use balatro_core::card::{Card, RuleFlags};
 use balatro_core::content::BossId;
 use balatro_core::content::ConsumableId;
+use balatro_core::content::TagId;
 use balatro_core::content::jokers::{JokerId, def_count, try_def};
 use balatro_core::deck::{Deck, Pile};
 use balatro_core::enums::{Edition, Enhancement, HandType, Rank, Rarity, Seal, Suit};
@@ -416,7 +417,7 @@ fn turtle_bean_decays_each_round_and_is_eaten_after_five() {
     assert_eq!(g.state().mods.hand_size, 0);
     select(&mut g);
     assert_eq!(g.state().deck.hand.len(), 8);
-    assert_eq!(g.state().stats.effects_dropped, 0);
+    assert_eq!(g.state().stats.effects_no_room, 0);
 }
 
 #[test]
@@ -717,7 +718,7 @@ fn seltzer_is_destroyed_after_ten_hands_at_game_level() {
     g.step(Action::Play(0b1)).expect("hand 2");
     assert!(g.state().jokers.is_empty(), "drank after the last hand");
     assert!(g.state().check_invariants().is_ok());
-    assert_eq!(g.state().stats.effects_dropped, 0);
+    assert_eq!(g.state().stats.effects_no_room, 0);
 }
 
 #[test]
@@ -953,7 +954,7 @@ fn perkeo_through_the_game_keeps_the_run_consistent() {
 
 // ----- Diet Cola -----
 
-const DOUBLE_TAG: SideEffect = SideEffect::CreateTag { id: 17 };
+const DOUBLE_TAG: SideEffect = SideEffect::CreateTag { id: TagId::Double };
 
 #[test]
 fn diet_cola_creates_a_double_tag_when_sold() {
@@ -1004,7 +1005,7 @@ fn diet_cola_sale_at_game_level() {
     assert_eq!(info.sold_for, Some(3));
     assert_eq!(g.state().money, money + 3);
     assert_eq!(g.state().tags.len(), tags + 1);
-    assert_eq!(g.state().tags.last(), Some(&17));
+    assert_eq!(g.state().tags.last(), Some(&TagId::Double));
     assert!(g.state().jokers.is_empty());
     assert!(g.state().check_invariants().is_ok());
 }
@@ -1100,7 +1101,7 @@ fn certificate_at_game_level_adds_a_card_to_hand_and_deck() {
         assert_eq!(s.deck.hand.len(), 9, "seed {seed}");
         assert_eq!(s.deck.len(), 53);
         assert_eq!(s.stats.cards_added, 1);
-        assert_eq!(s.stats.effects_dropped, 0);
+        assert_eq!(s.stats.effects_no_room, 0);
         let sealed: Vec<&Card> = s
             .deck
             .hand

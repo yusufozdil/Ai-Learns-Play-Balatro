@@ -92,7 +92,7 @@ to the hand as it is during the effect (deferred effects run afterwards).
 | joker edition | `set_joker_edition(slot, e)` (Negative = +1 joker slot) | immediate |
 | destroy a joker | `destroy_joker(slot)` (refuses Eternal, returns false, queues nothing) | deferred |
 | copy a joker | `copy_joker(slot, strip_negative)` → `CopyJoker` (needs room at application) | deferred |
-| random joker | `create_joker(rarity)` → `CreateJoker` (**dropped until Phase 5**, counted in `effects_dropped`) | deferred |
+| random joker | `create_joker(rarity)` → `CreateJoker` (needs a free joker slot at application, shop pools; Phase 5) | deferred |
 | random consumable of a kind | `create_consumable(kind)` (pool rules §2.5) | deferred |
 | specific consumable | `add_consumable(id)` (The Fool) | deferred |
 | free slots now | `free_consumable_slots()`, `free_joker_slots()` | read |
@@ -178,8 +178,8 @@ and `check_invariants()`. Set up positions with `g.state_mut()` (hand cards, mon
 8. Ectoplasm's hand-size penalty grows: `-(uses_of(Ectoplasm) + 1)`; Ouija is a flat -1.
 9. Ankh/Hex: queue the destructions **before** the copy (the copy's room check comes after).
 10. Do not touch `stats`, `last_tarot_planet` or fire joker events: the game layer does.
-11. Judgement / Wraith / The Soul queue `create_joker`; it is dropped until Phase 5 — test the
-    queued effect / `effects_dropped` and the money part (Wraith), not the joker.
+11. Judgement / Wraith / The Soul queue `create_joker`; since Phase 5.0 it creates a real joker
+    (Wraith Rare, The Soul Legendary): test the new joker's rarity and `effects_no_room == 0`.
 
 ## 3. Bosses
 

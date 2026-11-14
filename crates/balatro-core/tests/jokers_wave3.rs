@@ -949,7 +949,7 @@ fn game_egg_and_gift_card_raise_sell_values() {
     // Second round: Egg 6 + 3 + 1 = 10; Gift Card 5; Joker 3.
     assert_eq!(sells(&g), vec![10, 5, 3]);
     // Nothing was dropped for lack of consumables (no consumable effect queued).
-    assert_eq!(g.state().stats.effects_dropped, 0);
+    assert_eq!(g.state().stats.effects_no_room, 0);
 }
 
 #[test]
