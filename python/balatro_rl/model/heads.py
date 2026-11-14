@@ -120,7 +120,7 @@ class Head(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """``ctx (n, d)``, ``ptr (n, 49, d)``, ``hand (n, nh, d)``, masks ``m`` (prepared). Returns
         a dict with ``actions (n, 4)``, ``logp``, ``entropy`` (chain sums), and the per-part
-        ``lp_*`` / ``hit_*`` / ``ok`` used by behaviour cloning."""
+        ``lp_*`` / ``ent_*`` / ``hit_*`` / ``ok`` used by behaviour cloning and PPO."""
         n, nh, _ = hand.shape
         dev = ctx.device
         ar = torch.arange(n, device=dev)
@@ -190,6 +190,10 @@ class Head(nn.Module):
             "lp_arg0": lp_a0,
             "lp_arg1": lp_a1,
             "lp_cards": lp_c,
+            "ent_kind": ent_kind,
+            "ent_arg0": ent_a0,
+            "ent_arg1": ent_a1,
+            "ent_cards": ent_c,
             "hit_kind": hit_kind,
             "hit_arg0": hit_a0,
             "hit_arg1": hit_a1,

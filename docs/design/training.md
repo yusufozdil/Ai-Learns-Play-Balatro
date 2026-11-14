@@ -1,0 +1,201 @@
+# Training (Phase 10A): recurrent PPO, curriculum routing, evaluation protocol
+
+Code: `python/balatro_rl/train/{ppo,curriculum,evaluate}.py`, scripts `scripts/{train_ppo,evaluate,summarize_run}.py`,
+Makefile targets `ppo-e2e`, `ppo-s1`, `eval-ckpt`; tests `tests_py/test_ppo.py`. Model: `docs/design/model.md`;
+interface: `docs/design/rl_interface.md` (`INTERFACE_VERSION = 1`; checkpoints record it and `load_checkpoint` asserts it).
+All heads see the **same reward** (shared critic, shared advantage); only the log-probability comes from the head of
+the phase the action was taken in.
+
+## 1. PPO (`train/ppo.py`, CleanRL style)
+
+One update = rollout, GAE, `epochs` passes over recurrent minibatches.
+
+1. **Rollout** (`Trainer.collect`): `rollout_len` (T) steps in `num_envs` (N) envs (default 128 x 1024 = 131k rows). Per step:
+   `prepare` (H2D copy of the env buffers), store the prepared observation + masks in compact GPU buffers `(T, N, ...)`
+   (floats f32, categoricals u8, masks bool/i64: lossless, ~5 KB/row, 0.65 GB per default rollout), `model.act`
+   (sampling), the **route** of the curriculum stage (section 2) decides which action is executed, `env.step`.
+   The GRU state is stored at every `chunk`-th step (`h0`). `first[t]` = observation `t` starts an episode.
+2. **GAE** (`compute_gae`): `delta_t = r_t + gamma * V_{t+1} * (1 - first_{t+1}) - V_t`, `A_t = delta_t + gamma * lam *
+   (1 - first_{t+1}) * A_{t+1}`; the bootstrap value of the observation after the last step comes from `model.value`.
+   Defaults `gamma = 0.997`, `lam = 0.95`. Rewards are multiplied by the constant `reward_scale` (0.1: an ante-5 run
+   returns ~1.6, a win ~3; keeps the value loss on the scale of the policy loss, advantages are normalised anyway).
+   **Truncation** (`done == 3`, only after `max_episode_steps` = 3000, ~0.3% of BC games) is treated as terminal: the env
+   does not keep the last observation of the old episode (rl_interface section 8), so it cannot be bootstrapped.
+3. **Recurrent minibatches**: a minibatch is (a time chunk of `chunk` = 32 steps) x (a random group of `group` = 128
+   envs) = 4096 rows. Its GRU state is the stored `h0` of the rollout (detached; the old parameters computed it),
+   the chunk is scanned with `first` resets. Before any step `evaluate` therefore reproduces the rollout log-probability
+   exactly (ratio = 1, test `test_recurrent_minibatch_reproduces_rollout_logprobs`, max diff < 1e-4 incl. all chunks).
+   Env groups are re-drawn each epoch, the (chunk, group) pairs are shuffled. Since the GRU input is the observation only
+   (never the action), the hidden state does not depend on who chose the action: teacher steps in a curriculum keep
+   the memory consistent.
+4. **Loss**: `pg` (clipped PPO surrogate on the *chain* log-probability = kind + arg0 + arg1 + card steps of the head
+   of the row's phase) over model-controlled rows only; value MSE (0.5 x, optional PPO value clipping `clip_vloss`)
+   over **all** rows; entropy bonus `ent_coef * chain entropy` (a sample estimate of the joint entropy) over model rows;
+   Adam (`eps` 1e-5), grad-norm clip 0.5, LR linearly annealed to `lr_final_frac * lr`, advantage normalisation over the
+   model rows of the whole rollout. Rows whose action is not expressible by the model's chain (`ok = False`) never enter
+   the policy loss (`where`, not multiply: garbage-proof against NaN/inf, test with corrupted teacher rows).
+   `target_kl` (optional) stops the epochs early.
+5. **BC initialisation + KL to the BC policy**: `--init runs/bc/model.pt` loads the BC model (config included) instead of
+   a fresh one. `--kl-coef c --kl-anneal-updates K` adds `beta_u * KL(pi || pi_ref)` with `beta_u = c * max(0, 1 - u / K)`
+   (estimator `k3 = exp(d) - 1 - d`, `d = log pi_ref(a) - log pi(a)` on the sampled actions; the reference log-probs
+   come from a frozen copy of the init checkpoint, computed once per rollout without gradient and not at all once
+   `beta = 0`). `--critic-warmup W`: for the first `W` updates only the critic MLP is trained (the BC critic was fitted
+   to unscaled gamma = 0.99 teacher returns; letting its garbage advantages move the shared encoder in the first updates
+   would damage the BC policy). Test: encoder weights bit-identical after a warm-up update.
+6. **Logging** (`runs/<name>/log.jsonl`, one JSON per update + one per evaluation; console line per update):
+   steps/s, rollout/model/teacher/update seconds, teacher action count, mean reward, finished-episode statistics
+   (`drain_finished`: episodes, ante, win rate, steps, return, blinds beaten, invalid), PPO statistics (pg, vloss,
+   approx KL, clip fraction, explained variance, grad norm, LR, KL coefficient, KL to the reference), the entropy per
+   **head x part** (`ent/<blind|play|shop|pack>/<kind|arg0|arg1|cards>`) and the number of policy rows per head, and the
+   kind distribution of the executed model actions per head (`actions`). `scripts/summarize_run.py runs/<name>`
+   prints the learning curves as a table. No TensorBoard: it would add a dependency (tensorboard + protobuf) for what
+   JSONL + the table already give; `log.jsonl` loads into anything (pandas, matplotlib) if wanted.
+7. **Checkpoints** (`latest.pt` every `save_every` updates, `best.pt` when the periodic validation improves): model
+   `state_dict` + `config` (model), `interface_version`, `ppo_config`, optimiser, update counter, global step, best score.
+   `--resume` (same `--name`/`--out-dir`) continues from `latest.pt` (the env restarts with a new base seed derived from the
+   resume count: env state is not serialised, the first rollout after a resume starts new episodes).
+
+Memory (GPU): default rollout 0.65 GB + ~7 GB for the activations of a 4096-row minibatch (peak ~9 GB). The two runs of
+section 5 shared the GPU with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+
+## 2. Curriculum (`train/curriculum.py`)
+
+`--curriculum "play@5e6,play+pack+blind@10e6,all"`: stages separated by commas, each `phases[@global_env_steps]`
+(the last without a limit). Phases `blind play shop pack`; aliases `s1` = play, `s2` = play+pack+blind, `s3` = `s4` =
+all (the PRD's stage 3 adds SHOP; stage 4 "end to end" is the same routing, typically with KL/warm-up off). Per env step
+the phase (`global_i[:, 0]`) selects who acts: the model (`act`) or the teacher (`env.teacher_actions(select)`).
+Only model-chosen steps enter the policy loss, entropy and KL; the critic learns from every step. Consumable use, selling
+and joker moves are legal in every phase, so a phase route also routes them (a teacher-controlled shop also does the
+teacher's selling/moving; the model's Play phase can still use consumables).
+
+**Teacher cost.** `teacher_actions` computed every env in the original API (4-8k actions/s aggregate). Added a minimal
+Rust change (`EnvPool::teacher_actions_where`, optional `select` bool array of `VecEnv.teacher_actions`, interface
+version unchanged, Rust test): only the selected envs are computed, the others are not even consulted. Measured
+(1024 envs, 12 threads, aggregate over all threads): BlindSelect 150k actions/s, Play 30k/s, **Shop 2k/s**, PackOpen 3.8k/s.
+So stage 1 (the model plays PLAY only) is dominated by the teacher's shop: ~0.5 ms of wall time per shop action; in the
+runs below the teacher's share is reported as `teacher_seconds` per rollout.
+
+## 3. Evaluation protocol (`train/evaluate.py`, `scripts/evaluate.py`)
+
+* **Test set**: `TEST_SEED = 10_000_019`, 1000 games = the first episode of env `i = 0..999` (seed is a pure function of
+  `(TEST_SEED, i, 0)`, independent of the number of envs / threads). Training uses `train_seed(seed, resume) = 20_000_003 +
+  ...` (asserted `!= TEST_SEED`; episode seeds are hashes of `(base, env, episode)`), so test games are never trained on.
+  Red Deck, White Stake, `max_episode_steps = 3000` (same as the BC evaluation: the BC numbers are directly comparable).
+* **Validation during training**: the first `eval_games` (512) games of the *same* set (a literal prefix; test
+  `test_eval_protocol_prefix_and_determinism`), deterministic (argmax) and, optionally, sampled, every `eval_every`
+  updates. `best.pt` = best deterministic mean ante (ties: win rate) on the validation prefix. The model runs only
+  on the games that have not yet finished, so a validation costs 8-20 s.
+* **Metrics** (`EvalResult`): mean ante (std, standard error), win rate, ante histogram, invalid-action rate per step,
+  episode length, blinds beaten, truncation rate, per-game arrays. `compare(a, b)` gives the **paired** difference over
+  the shared games with its standard error (the standard error of a mean ante is ~0.06 at 1000 games, of the paired
+  difference to a baseline usually less).
+* `scripts/evaluate.py --checkpoint X [--route play]` evaluates deterministic and sampled on the 1000 games against the
+  cached baselines (random, teacher, BC det/sampled; `runs/eval/baselines_1000.json`) and writes `runs/eval/<name>.json`.
+  With `--route` the model plays only those phases and the teacher the rest (baselines: teacher / BC under the same routing).
+
+## 4. Hyper-parameters
+
+(see `PPOConfig`; every field is a CLI flag.)
+
+| | default | notes |
+|---|---|---|
+| envs x rollout | 1024 x 128 | 131k rows per update |
+| epochs / minibatch | 2 / 4096 rows (chunk 32 x 128 envs) | 64 minibatches per update; the update is compute-bound (~20k rows/s fwd+bwd, bigger batches do not help) |
+| gamma / lambda | 0.997 / 0.95 | |
+| clip / vf / ent | 0.2 / 0.5 / 0.003 | |
+| lr | 1e-4 (BC init), 3e-4 (scratch) | linear to 10%; 1.5e-4 from BC gave KL 0.02 and KL-to-reference spikes |
+| grad clip | 0.5 | |
+| reward scale | 0.1 | env reward: blind +1, boss ante +1, win +10, loss 0, invalid -0.05, shaping 0 (flag `--shaping`) |
+| BC KL | 0.3 -> 0 over 120-150 updates | only with `--init` |
+
+## 5. First results (Phase 10A; RTX 5060 Ti, Ryzen 5 7600; Red Deck, White Stake)
+
+Test = the fixed 1000-game set (section 3); baselines on the same games: random 1.00 / 0%, teacher (fair-info heuristic)
+**5.91 / 16.1%**, BC deterministic 5.29 / 6.5%, BC sampled 4.72 / 3.5% (standard error of a mean ante ~0.06).
+
+| run | env steps | wall time | 1000-game test (deterministic) | 1000-game test (sampled) |
+|---|---|---|---|---|
+| **(a) `a_e2e`**: BC init, end-to-end, KL 0.3 -> 0 (120 updates), lr 1e-4 | 24.0M | 72 min (alone on the GPU after the first 25 min; 2 other runs shared it for ~35 min) | `best.pt` (u160, picked on the validation prefix): **7.08 / 36.1%**; final `latest.pt` (u183, not selected): **7.04 / 37.9%** | best 6.95 / 34.4%; final **6.99 / 38.0%** |
+| (b) `b_s1`: scratch, stage 1 (model plays PLAY, teacher the rest), `--shaping 1`, lr 3e-4, ent 0.01 | 2.2M (stopped by hand, still rising) | 36 min (shared GPU) | 3.38 / 1.4% (`--route play`; 6.8% truncated) | 3.20 / 1.8% |
+
+(a) paired against the baselines (best.pt, deterministic): +1.77 ante / +29.6 pp win vs BC (+-0.07 / 1.7), **+1.17 ante /
++20.0 pp win vs the teacher** (+-0.07 / 1.8). Ante histogram: 1: 9, 2: 18, 3: 9, 4: 17, 5: 68, 6: 120, 7: 196, **8: 563**.
+For stage 1 the fair baselines are the same routing: teacher 5.91 / 16.1%, BC plays PLAY + teacher the rest 5.38 / 8.0%:
+(b) is far below both after 2.2M steps, but the curve is still climbing (see below).
+
+**(a) learning curve** (validation prefix, 512 games, deterministic / sampled; training episodes are sampled play):
+
+| updates | Msteps | det ante / win | sampled ante / win | train ep. ante / win | blinds/ep | explained var |
+|---|---|---|---|---|---|---|
+| BC (start) | 0 | 5.3 / 7% | 4.8 / 4% | 4.8 / 4% | 10.2 | |
+| 24 | 3.2 | 5.65 / 10% | 5.14 / 6% | 4.8 / 4% | 10.3 | 0.75 |
+| 64 | 8.4 | 5.93 / 14% | 5.28 / 7% | 5.2 / 6% | 11.4 | 0.81 |
+| 96 | 12.6 | 6.35 / 17% | 5.90 / 11% | 5.7 / 10% | 13.1 | 0.84 |
+| 120 | 15.7 | 6.72 / 29% | 6.40 / 19% | 6.1 / 15% | 15.6 | 0.86 |
+| 144 | 18.9 | 7.02 / 35% | 6.79 / 29% | 6.6 / 23% | 18.8 | 0.89 |
+| 176 | 23.1 | 7.10 / 39% | 6.98 / 36% | 7.0 / 36% | 20.6 | 0.91 |
+
+Roughly: ~3M steps to separate from BC (the first 3 updates are critic warm-up), parity with the teacher at ~10M steps,
+then a steep climb (win rate 17% -> 38% between 12M and 22M steps) that flattens near 7.1 at 22-24M. Behaviour changes
+(`actions` in the log, sampled model actions per head): SkipBlind 22% -> 2.6% of Blind-phase decisions (the reward pays
+every blind, skipping forfeits it), Reroll 4.6% -> 14% of Shop decisions, Buy 22% -> 14%, Discard 23% -> 20% of Play
+decisions, episode length 72 -> 184 steps; the chain entropy fell 0.65 -> 0.47 (kind entropy of the Play head 0.18 -> 0.13,
+card-set entropy 1.0 -> 0.75). KL to the BC policy (reference) stayed 0.03-0.15 with occasional k3 spikes (0.7-0.9) in the
+first 40 updates at lr 1.5e-4 (the reason for lr 1e-4).
+
+**(b) learning curve** (stage 1, validation 256 games): deterministic ante 1.77 (u15) -> 2.23 -> 2.62 -> 3.19 -> 3.41 (u135),
+blinds beaten per game 2.4 -> 6.7, training episodes 1.0 -> 3.2 ante; entropy 4.7 -> 2.0. **A from-scratch policy gets no
+signal without shaping**: the random policy beats 0.01 blinds (ante 1.00, value loss 1e-4, explained variance < 0), the
+first attempt without shaping sat at ante 1.00 for 26 updates. With `shaping = 1` (dense progress toward the blind target)
+learning starts after ~10 updates. The shaped reward is for this probe only (the (a) run uses the plain reward).
+
+### Throughput
+
+| | value |
+|---|---|
+| rollout (1024 envs, `prepare` + `act` + D2H + `step`) | 3.7-3.9 s per 128 steps = 33-35k env steps/s (the model, not the simulator) |
+| update (2 epochs x 32 minibatches x 4096 rows, + 2 s reference-policy pass while the KL is on) | 13-16 s (~20k rows/s fwd+bwd; compute-bound: batch 2048..8192 rows all give the same rows/s; bf16 autocast would be 1.4x but breaks the exact ratio = 1) |
+| overall (rollout + update) | 6.7k steps/s (7.8k once the KL reference pass is off), 131k steps per 17-20 s |
+| periodic validation (512 games det + sampled) | 10-45 s |
+| GPU memory | peak ~9 GB (default shapes); a second concurrent run needs `group 64, chunk 16` and expandable segments |
+| teacher (stage 1, from the log of (b)) | 2.8k actions/s aggregate (Shop dominates: 2k/s; Blind 150k/s, Play 30k/s, Pack 3.8k/s); the teacher was 41% of the steps and **41% of the rollout wall time**; (b) ran at 1.2-3k steps/s overall. Stage 1 costs ~5x more wall time per env step than an end-to-end run. |
+
+## 6. Long runs
+
+```bash
+# (a) end-to-end from BC, as above but longer (~55-70 min per 24M steps on an idle machine; resume-able)
+PYTORCH_ALLOC_CONF=expandable_segments:True uv run --no-sync python -u scripts/train_ppo.py \
+    --name e2e_long --init runs/bc/model.pt --lr 1e-4 --kl-coef 0.3 --kl-anneal-updates 120 \
+    --critic-warmup 2 --total-steps 100e6 --eval-every 8 --eval-games 512 > runs/e2e_long.log 2>&1 &
+# continue after an interruption (same name):   ... --name e2e_long --resume (all other flags as before)
+# curve:   uv run --no-sync python scripts/summarize_run.py runs/e2e_long
+# test:    uv run --no-sync python scripts/evaluate.py --checkpoint runs/e2e_long/best.pt --name e2e_long
+
+# (b) from scratch, stage 1 -> 2 -> end-to-end curriculum (the teacher plays what the model does not)
+uv run --no-sync python -u scripts/train_ppo.py --name cur --curriculum "play@10e6,play+pack+blind@20e6,all" \
+    --shaping 1 --lr 3e-4 --ent-coef 0.01 --num-envs 512 --rollout-len 64 --total-steps 60e6   # ~8-10 h, teacher-bound
+
+# memory ablation under RL: same recipe from the memoryless BC checkpoint (runs/bc_nomem/model.pt, 1.83M params)
+uv run --no-sync python -u scripts/train_ppo.py --name e2e_nomem --init runs/bc_nomem/model.pt \
+    --lr 1e-4 --kl-coef 0.3 --kl-anneal-updates 120 --critic-warmup 2 --total-steps 24e6
+```
+
+`make ppo-e2e NAME=.. STEPS=..`, `make ppo-s1`, `make eval-ckpt CKPT=..` wrap the first two and the evaluation.
+`best.pt` is chosen on the validation prefix of the test set, so its test score is slightly optimistic (section 5 also
+reports the unselected final checkpoint).
+
+## 7. Caveats and open points
+
+* **Deterministic truncation**: the greedy policy of (a) hits the 3000-step limit in 4.9% (best) / 8.7% (final) of the test
+  games (sampled play: 0%). It stalls in a loop (mean 322-430 steps per game vs 179-183 sampled); a truncated game
+  counts with the ante reached, no penalty. A loop-breaking mechanism is needed before the deterministic policy can be
+  trusted (small per-step cost, a repeat penalty, or sampling at low temperature at test time); the sampled score is the
+  one PPO actually optimises (6.99 / 38.0%).
+* **Simulator exploits**: a 2x win rate over the heuristic in 24M steps is large; nothing in the logs says it is
+  illegitimate (0 invalid actions, plausible shifts: no skipping, more rerolls), but the policy should be inspected game by
+  game (replay, joker/voucher choices, rerolling) before the number is believed, and the weak spots of the simulator
+  (UNVERIFIED items in notes section 4.1) are exactly what RL finds.
+* The value critic is shared and normalised only by the constant `reward_scale`; explained variance reached 0.91.
+* Truncation bootstrap is missing (treated as terminal); with the loops above this adds a small bias.
+* k3 KL estimator spikes (0.7-0.9) appear when a few sampled actions get probability collapses; harmless here, but watch it
+  with larger learning rates.

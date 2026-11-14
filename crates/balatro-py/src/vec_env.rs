@@ -16,7 +16,7 @@
 use crate::env::{DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, parse_config};
 use crate::layout::{Bufs, PyBufs};
 use balatro_core::state::GameConfig;
-use numpy::{PyReadonlyArray2, PyReadwriteArray2, PyUntypedArrayMethods};
+use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -179,27 +179,37 @@ impl EnvPool {
         }
     }
 
-    /// The heuristic agent's action in every env (`out.len() == 4 * num_envs`).
-    pub fn teacher_actions(&mut self, out: &mut [i64]) {
+    /// The heuristic agent's action in the envs with `select[i]` (every env for `None`;
+    /// `out.len() == 4 * num_envs`). The other rows of `out` are left untouched and their teacher
+    /// agents are not consulted: a curriculum asks the teacher about a fraction of the envs only
+    /// (a full call costs 4-8k actions/s).
+    pub fn teacher_actions_where(&mut self, out: &mut [i64], select: Option<&[bool]>) {
         let sh = self.shared;
+        let work = |e: &mut Env, o: &mut [i64], on: bool| {
+            if on {
+                o.copy_from_slice(&e.teacher_parts(&sh));
+            }
+        };
+        let on = |i: usize| select.is_none_or(|s| s[i]);
         // A teacher action costs from microseconds (Play) to milliseconds (market valuation):
         // hand out one env at a time so that work stealing balances the load.
-        let work = |e: &mut Env, o: &mut [i64]| o.copy_from_slice(&e.teacher_parts(&sh));
         match &self.pool {
             Some(pool) => pool.install(|| {
                 self.envs
                     .par_iter_mut()
                     .zip(out.par_chunks_mut(4))
+                    .enumerate()
                     .with_max_len(1)
-                    .for_each(|(e, o)| work(e, o));
+                    .for_each(|(i, (e, o))| work(e, o, on(i)));
             }),
             None => {
-                for (e, o) in self
+                for (i, (e, o)) in self
                     .envs
                     .iter_mut()
                     .zip(out.as_chunks_mut::<4>().0.iter_mut())
+                    .enumerate()
                 {
-                    work(e, o);
+                    work(e, o, on(i));
                 }
             }
         }
@@ -380,11 +390,14 @@ impl VecEnv {
     }
 
     /// Fill `out` (int64 `(n, 4)`) with the action of the fair-information heuristic team agent
-    /// for every env's current state (parallel, GIL released).
+    /// for every env's current state (parallel, GIL released). With `select` (bool `(n,)`) only
+    /// the envs where it is true are computed; the other rows of `out` are left untouched.
+    #[pyo3(signature = (out, select=None))]
     fn teacher_actions(
         &mut self,
         py: Python<'_>,
         mut out: PyReadwriteArray2<'_, i64>,
+        select: Option<PyReadonlyArray1<'_, bool>>,
     ) -> PyResult<()> {
         let n = self.pool.num_envs();
         if out.shape() != [n, 4] || !out.is_c_contiguous() {
@@ -393,8 +406,19 @@ impl VecEnv {
             )));
         }
         let o = out.as_slice_mut().map_err(|e| slice_err("out", e))?;
+        let sel = match &select {
+            Some(s) => {
+                if s.shape() != [n] || !s.is_c_contiguous() {
+                    return Err(val_err(format!(
+                        "`select` must be a C-contiguous bool array of shape ({n},)"
+                    )));
+                }
+                Some(s.as_slice().map_err(|e| slice_err("select", e))?)
+            }
+            None => None,
+        };
         let pool = &mut self.pool;
-        py.detach(|| pool.teacher_actions(o));
+        py.detach(|| pool.teacher_actions_where(o, sel));
         Ok(())
     }
 
@@ -497,7 +521,7 @@ mod tests {
             let mut acts = vec![0i64; n * 4];
             let mut log = Vec::new();
             for _ in 0..120 {
-                p.teacher_actions(&mut acts);
+                p.teacher_actions_where(&mut acts, None);
                 log.extend_from_slice(&acts);
                 let b = o.bufs();
                 p.step(&acts, &b).unwrap();
@@ -506,5 +530,51 @@ mod tests {
             log
         };
         assert_eq!(go(1), go(3));
+    }
+
+    #[test]
+    fn masked_teacher_actions_only_touch_selected_rows() {
+        let n = 6;
+        let mut p = EnvPool::new(
+            n,
+            3,
+            2,
+            GameConfig::default(),
+            2_000,
+            RewardConfig::default(),
+        )
+        .unwrap();
+        let mut o = Owned::new(n);
+        {
+            let b = o.bufs();
+            p.reset(None, &b);
+        }
+        let mut full = vec![0i64; n * 4];
+        p.teacher_actions_where(&mut full, None);
+        let mut q = EnvPool::new(
+            n,
+            3,
+            1,
+            GameConfig::default(),
+            2_000,
+            RewardConfig::default(),
+        )
+        .unwrap();
+        let mut o2 = Owned::new(n);
+        {
+            let b = o2.bufs();
+            q.reset(None, &b);
+        }
+        let sel = [true, false, true, false, false, true];
+        let mut part = vec![-7i64; n * 4];
+        q.teacher_actions_where(&mut part, Some(&sel));
+        for i in 0..n {
+            let row = &part[4 * i..4 * i + 4];
+            if sel[i] {
+                assert_eq!(row, &full[4 * i..4 * i + 4]);
+            } else {
+                assert_eq!(row, &[-7i64; 4]);
+            }
+        }
     }
 }

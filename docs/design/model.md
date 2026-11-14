@@ -100,6 +100,8 @@ value, new_hidden = model.value(obs, masks, hidden, first=None)         # bootst
   step 0, GRU scanned over `T` with resets. Store `hidden` of each rollout step *before* acting (or
   only at chunk starts for truncated BPTT); `evaluate_full(...)["hidden"]` is the state after the
   last step (carry it, detached, to the next chunk).
+* `evaluate_full` additionally returns the per-part entropies `ent_kind, ent_arg0, ent_arg1, ent_cards` (their sum is
+  `entropy`); PPO logs them per head (Phase 10A, `docs/design/training.md`).
 * `generator`: a `torch.Generator` (same device as the model) makes sampling reproducible
   (Gumbel-max over the masked logits). `evaluate_full` also returns `lp_kind, lp_arg0, lp_arg1,
   lp_cards`, `hit_*` (teacher-forced argmax equals the target), `has_*` and `ok` (the action is
@@ -199,6 +201,8 @@ reproducibility; canonical-order brute force and set-probability normalisation (
 end-to-end BC pipeline (collect -> train -> loss falls, all teacher actions expressible).
 
 ## 6. Notes for the PPO trainer
+
+(Implemented in Phase 10A: `docs/design/training.md`; the notes below are the design input.)
 
 * Per env step: `prepare` once (H2D copy of ~2.7 KB/env), `act`, `env.step(actions.cpu().numpy())`.
   Keep `first = done != 0` for the next `act`/`evaluate` call.

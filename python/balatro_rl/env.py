@@ -96,10 +96,14 @@ class BalatroVecEnv:
         self._env.random_actions(self._actions)
         return self._actions
 
-    def teacher_actions(self) -> np.ndarray:
+    def teacher_actions(self, select: np.ndarray | None = None) -> np.ndarray:
         """The action of the fair-information heuristic team agent in each env's current state
-        (buffer view; parallel, GIL released)."""
-        self._env.teacher_actions(self._actions)
+        (buffer view; parallel, GIL released). With ``select`` (bool ``(n,)``) only those envs
+        are computed (a curriculum asks the teacher about a fraction of the envs); the other
+        rows of the returned buffer are stale and must not be used."""
+        if select is not None:
+            select = np.ascontiguousarray(select, dtype=bool)
+        self._env.teacher_actions(self._actions, select)
         return self._actions
 
     def drain_finished(self) -> list[tuple[int, int, int, int, float, int, int]]:
