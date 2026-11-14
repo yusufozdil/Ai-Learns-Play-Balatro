@@ -22,3 +22,7 @@ harness = false
 [[bench]]
 name = "scoring"
 harness = false
+
+[[bench]]
+name = "game"
+harness = false
