@@ -58,6 +58,7 @@ dependencies = [
  "balatro-core",
  "numpy",
  "pyo3",
+ "rayon",
 ]
 
 [[package]]

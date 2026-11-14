@@ -8,6 +8,7 @@ license.workspace = true
 balatro-core = { version = "0.1.0", path = "../balatro-core" }
 numpy = "0.30.0"
 pyo3 = "0.30.1"
+rayon = "1.10"
 
 [lib]
 name = "_engine"
