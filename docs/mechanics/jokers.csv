@@ -75,7 +75,7 @@ n,id,name,rarity,cost,effect,timing,state,rng,copyable,wave,package,source,statu
 74,Rocket,Rocket,Uncommon,6,Earn $1 at round end; the payout increases by $2 each time a Boss Blind is defeated (increase applied before that round's payout),round_end,counter:payout,no,no,3.3,wave3,https://balatrowiki.org/w/Rocket,implemented
 75,Obelisk,Obelisk,Rare,8,"Gains X0.2 Mult for each consecutive hand played that is not the most-played hand type; resets to X1 when the played hand type is strictly the most played (play counts incremented first, so a tie does not reset) (starts X1)",before_scoring;joker_main,counter:xmult+reset,no,yes,3.2,wave2a,https://balatrowiki.org/w/Obelisk,implemented
 76,MidasMask,Midas Mask,Uncommon,7,All played scoring face cards become Gold cards (overwrites any Enhancement),before_scoring,none,no,no,3.4,wave4a,https://balatrowiki.org/w/Midas_Mask,implemented
-77,Luchador,Luchador,Uncommon,5,"Sell this Joker during a Boss Blind to disable it (wiki lists it as copyable, but it has no passive effect to copy)",sell,none,no,yes,3.5,wave5,https://balatrowiki.org/w/Luchador,todo
+77,Luchador,Luchador,Uncommon,5,"Sell this Joker during a Boss Blind to disable it (wiki lists it as copyable, but it has no passive effect to copy)",sell,none,no,yes,3.5,wave5,https://balatrowiki.org/w/Luchador,implemented
 78,Photograph,Photograph,Common,5,The first played scoring face card gives X2 Mult,card_scored,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Photograph,implemented
 79,GiftCard,Gift Card,Uncommon,6,At round end add $1 of sell value to every Joker and consumable owned,round_end,none,no,no,3.3,wave3,https://balatrowiki.org/w/Gift_Card,implemented
 80,TurtleBean,Turtle Bean,Uncommon,6,+5 hand size; shrinks by 1 at end of each round; destroyed at 0,passive_rule;round_end,counter:hand_size+decay,no,no,3.4,wave4b,https://balatrowiki.org/w/Turtle_Bean,implemented
@@ -105,13 +105,13 @@ n,id,name,rarity,cost,effect,timing,state,rng,copyable,wave,package,source,statu
 104,SmileyFace,Smiley Face,Common,4,+5 Mult for each played scoring face card,card_scored,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Smiley_Face,implemented
 105,Campfire,Campfire,Rare,9,Gains X0.25 Mult for each card sold; resets to X1 when a Boss Blind is defeated (starts X1),sell;round_end;joker_main,counter:xmult+reset,no,yes,3.2,wave2b,https://balatrowiki.org/w/Campfire,implemented
 106,GoldenTicket,Golden Ticket,Common,5,Earn $4 for each played scoring Gold card,card_scored,none,no,yes,3.3,wave3,https://balatrowiki.org/w/Golden_Ticket,implemented
-107,MrBones,Mr. Bones,Uncommon,5,"If chips scored on the final hand are at least 25% of the blind requirement and the round would be lost, prevent death: round counts as won (no blind reward money, interest still paid) and Mr. Bones is destroyed. Does not save when the deck runs out of cards",round_end;card_destroyed,none,no,no,3.5,wave5,https://balatrowiki.org/w/Mr._Bones,todo
+107,MrBones,Mr. Bones,Uncommon,5,"If chips scored on the final hand are at least 25% of the blind requirement and the round would be lost, prevent death: round counts as won (no blind reward money, interest still paid) and Mr. Bones is destroyed. Does not save when the deck runs out of cards",round_end;card_destroyed,none,no,no,3.5,wave5,https://balatrowiki.org/w/Mr._Bones,implemented
 108,Acrobat,Acrobat,Uncommon,6,X3 Mult on the final hand of the round,joker_main,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Acrobat,implemented
 109,SockAndBuskin,Sock and Buskin,Uncommon,6,Retriggers all played scoring face cards once,card_retrigger,none,no,yes,3.4,wave4b,https://balatrowiki.org/w/Sock_and_Buskin,implemented
 110,Swashbuckler,Swashbuckler,Common,4,Adds the total sell value of all other owned Jokers to Mult,joker_main,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Swashbuckler,implemented
 111,Troubadour,Troubadour,Uncommon,6,+2 hand size; -1 hand each round,passive_rule,none,no,no,3.4,wave4b,https://balatrowiki.org/w/Troubadour,implemented
 112,Certificate,Certificate,Uncommon,6,At round start add a random playing card with a random seal to hand (and deck),card_added,none,yes,yes,3.4,wave4b,https://balatrowiki.org/w/Certificate,implemented
-113,SmearedJoker,Smeared Joker,Uncommon,7,Hearts and Diamonds count as the same suit; Spades and Clubs count as the same suit,rule_flag,none,no,no,3.5,wave5,https://balatrowiki.org/w/Smeared_Joker,todo
+113,SmearedJoker,Smeared Joker,Uncommon,7,Hearts and Diamonds count as the same suit; Spades and Clubs count as the same suit,rule_flag,none,no,no,3.5,wave5,https://balatrowiki.org/w/Smeared_Joker,implemented
 114,Throwback,Throwback,Uncommon,6,Gains X0.25 Mult for each Blind skipped this run (starts X1),blind_skip;joker_main,counter:xmult,no,yes,3.2,wave2b,https://balatrowiki.org/w/Throwback,implemented
 115,HangingChad,Hanging Chad,Common,4,Retriggers the first played scoring card 2 additional times,card_retrigger,none,no,yes,3.4,wave4b,https://balatrowiki.org/w/Hanging_Chad,implemented
 116,RoughGem,Rough Gem,Uncommon,7,Earn $1 for each played scoring Diamond,card_scored,none,no,yes,3.3,wave3,https://balatrowiki.org/w/Rough_Gem,implemented
@@ -119,7 +119,7 @@ n,id,name,rarity,cost,effect,timing,state,rng,copyable,wave,package,source,statu
 118,Arrowhead,Arrowhead,Uncommon,7,+50 Chips for each played scoring Spade,card_scored,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Arrowhead,implemented
 119,OnyxAgate,Onyx Agate,Uncommon,7,+7 Mult for each played scoring Club,card_scored,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Onyx_Agate,implemented
 120,GlassJoker,Glass Joker,Uncommon,6,Gains X0.75 Mult for each Glass card destroyed (starts X1),card_destroyed;joker_main,counter:xmult,no,yes,3.2,wave2b,https://balatrowiki.org/w/Glass_Joker,implemented
-121,Showman,Showman,Uncommon,5,"Joker, Tarot, Planet and Spectral cards can appear multiple times in shops and packs (duplicates allowed)",passive_rule,none,no,no,3.5,wave5,https://balatrowiki.org/w/Showman,todo
+121,Showman,Showman,Uncommon,5,"Joker, Tarot, Planet and Spectral cards can appear multiple times in shops and packs (duplicates allowed)",passive_rule,none,no,no,3.5,wave5,https://balatrowiki.org/w/Showman,implemented
 122,FlowerPot,Flower Pot,Uncommon,6,"X3 Mult if the played scoring cards include a Diamond, Club, Heart and Spade (requires at least 4 scoring cards; Wild cards help)",joker_main,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Flower_Pot,implemented
 123,Blueprint,Blueprint,Rare,10,Copies the ability of the Joker to its right,copier,none,no,yes,3.5,prototypes,https://balatrowiki.org/w/Blueprint,implemented
 124,WeeJoker,Wee Joker,Rare,8,Gains +8 Chips for each played scoring 2 (starts +0),card_scored;joker_main,counter:chips,no,yes,3.2,wave2b,https://balatrowiki.org/w/Wee_Joker,implemented
@@ -135,7 +135,7 @@ n,id,name,rarity,cost,effect,timing,state,rng,copyable,wave,package,source,statu
 134,TheOrder,The Order,Rare,8,X3 Mult if the played hand contains a Straight,joker_main,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/The_Order,implemented
 135,TheTribe,The Tribe,Rare,8,X2 Mult if the played hand contains a Flush,joker_main,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/The_Tribe,implemented
 136,Stuntman,Stuntman,Rare,7,+250 Chips; -2 hand size,joker_main;passive_rule,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Stuntman,implemented
-137,InvisibleJoker,Invisible Joker,Rare,8,"After 2 rounds held, selling it duplicates a random other Joker (not itself)",round_end;sell;card_added,counter:rounds_held,yes,no,3.5,wave5,https://balatrowiki.org/w/Invisible_Joker,todo
+137,InvisibleJoker,Invisible Joker,Rare,8,"After 2 rounds held, selling it duplicates a random other Joker (not itself)",round_end;sell;card_added,counter:rounds_held,yes,no,3.5,wave5,https://balatrowiki.org/w/Invisible_Joker,implemented
 138,Brainstorm,Brainstorm,Rare,10,Copies the ability of the leftmost Joker,copier,none,no,yes,3.5,prototypes,https://balatrowiki.org/w/Brainstorm,implemented
 139,Satellite,Satellite,Uncommon,6,At round end earn $1 for each unique Planet card used this run,round_end,set:planets_used,no,no,3.3,wave3,https://balatrowiki.org/w/Satellite,implemented
 140,ShootTheMoon,Shoot the Moon,Common,5,Each Queen held in hand gives +13 Mult,held_in_hand,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Shoot_the_Moon,implemented
@@ -147,5 +147,5 @@ n,id,name,rarity,cost,effect,timing,state,rng,copyable,wave,package,source,statu
 146,Canio,Canio,Legendary,20,Gains X1 Mult for each face card destroyed (starts X1),card_destroyed;joker_main,counter:xmult,no,yes,3.2,wave2b,https://balatrowiki.org/w/Canio,implemented
 147,Triboulet,Triboulet,Legendary,20,Each played scoring King or Queen gives X2 Mult,card_scored,none,no,yes,3.1,wave1b,https://balatrowiki.org/w/Triboulet,implemented
 148,Yorick,Yorick,Legendary,20,Gains X1 Mult every 23 cards discarded (starts X1; counter of 23 resets),discard;joker_main,counter:xmult+discard_count,no,yes,3.2,wave2b,https://balatrowiki.org/w/Yorick,implemented
-149,Chicot,Chicot,Legendary,20,Disables the effect of every Boss Blind (Boss chips requirement then 2x base; The Needle unchanged),blind_select;passive_rule,none,no,no,3.5,wave5,https://balatrowiki.org/w/Chicot,todo
+149,Chicot,Chicot,Legendary,20,Disables the effect of every Boss Blind (Boss chips requirement then 2x base; The Needle unchanged),blind_select;passive_rule,none,no,no,3.5,wave5,https://balatrowiki.org/w/Chicot,implemented
 150,Perkeo,Perkeo,Legendary,20,When leaving the shop create a Negative copy of 1 random consumable owned,shop_enter;card_added,none,yes,yes,3.4,wave4b,https://balatrowiki.org/w/Perkeo,implemented
