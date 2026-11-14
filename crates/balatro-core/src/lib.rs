@@ -4,6 +4,7 @@
 //! non-negotiable rules (determinism, no copied game assets/code, errors instead of panics).
 
 pub mod actions;
+pub mod agents;
 pub mod blinds;
 pub mod card;
 pub mod content;

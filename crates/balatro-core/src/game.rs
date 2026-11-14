@@ -181,6 +181,61 @@ impl Game {
         actions::validate(&self.state, action)
     }
 
+    /// Score `Play(mask)` without changing the game: the result `step` would report for the
+    /// same state (jokers and the RNG are cloned, so probabilistic effects resolve exactly as
+    /// the real play would). Errors like `validate(Action::Play(mask))`.
+    pub fn preview_play(&self, mask: u16) -> Result<HandReport, ActionError> {
+        self.preview_play_with(&mut Scorer::new(), mask)
+    }
+
+    /// [`Game::preview_play`] with a caller-owned [`Scorer`] (reuse it across candidates to
+    /// avoid per-call allocations).
+    pub fn preview_play_with(
+        &self,
+        scorer: &mut Scorer,
+        mask: u16,
+    ) -> Result<HandReport, ActionError> {
+        actions::validate(&self.state, Action::Play(mask))?;
+        let s = &self.state;
+        let n = s.deck.hand.len();
+        let mut played: Vec<Card> = Vec::with_capacity(5);
+        let mut held: Vec<Card> = Vec::with_capacity(n);
+        for (i, c) in s.deck.hand.iter().enumerate() {
+            if i < 16 && (mask >> i) & 1 == 1 {
+                played.push(*c);
+            } else {
+                held.push(*c);
+            }
+        }
+        let eval = hand_eval::evaluate(&played, &s.mods.rules);
+        let ht = eval.hand_type;
+        // Same counters `play` has paid by the time scoring runs.
+        let mut view = s.run_view_with(&s.consumables);
+        view.hands_left = view.hands_left.saturating_sub(1);
+        view.hands_played_round += 1;
+        view.hands_played_run += 1;
+        view.hand_plays_run[ht.index()] += 1;
+        view.hand_plays_round[ht.index()] += 1;
+        let mut jokers = s.jokers.clone();
+        let mut rng = s.rng.clone();
+        let r = scorer.score_hand(ScoreInput {
+            played: &mut played,
+            held: &held,
+            eval,
+            jokers: &mut jokers,
+            run: &view,
+            rng: &mut rng,
+        });
+        Ok(HandReport {
+            hand_type: r.hand_type,
+            level: r.hand_level,
+            chips: r.chips,
+            mult: r.mult,
+            score: r.score,
+            invalid: r.invalid,
+        })
+    }
+
     /// Apply one action. On `Err` the state is unchanged.
     pub fn step(&mut self, action: Action) -> Result<StepInfo, ActionError> {
         actions::validate(&self.state, action)?;
