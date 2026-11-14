@@ -7,13 +7,31 @@
 
 pub mod ids;
 pub mod prototypes;
+pub mod wave1a;
+pub mod wave1b;
+pub mod wave2a;
+pub mod wave2b;
+pub mod wave3;
+pub mod wave4a;
+pub mod wave4b;
+pub mod wave5;
 
 pub use ids::JokerId;
 
 use crate::joker::JokerDef;
 
 /// Every per-file definition table. Phase 3: append `waveN::DEFS` here (one line per file).
-pub static SOURCES: &[&[JokerDef]] = &[prototypes::DEFS];
+pub static SOURCES: &[&[JokerDef]] = &[
+    prototypes::DEFS,
+    wave1a::DEFS,
+    wave1b::DEFS,
+    wave2a::DEFS,
+    wave2b::DEFS,
+    wave3::DEFS,
+    wave4a::DEFS,
+    wave4b::DEFS,
+    wave5::DEFS,
+];
 
 /// `REGISTRY[id.index()]` = the def of `id`, or `None` if no file defines it yet. If an id is
 /// defined twice the last one wins here; `tests/joker_prototypes.rs::registry_*` rejects that.
