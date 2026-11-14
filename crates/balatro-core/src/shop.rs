@@ -387,7 +387,8 @@ pub fn roll_card(s: &mut GameState) -> ShopCard {
         }
         3 => {
             let illusion = s.shop_mods.illusion;
-            let em = s.shop_mods.edition_mult;
+            // Wiki (Illusion): shop playing-card editions ignore Hone / Glow Up.
+            let em = 1;
             let c = if illusion {
                 random_playing_card(
                     &mut s.rng,

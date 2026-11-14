@@ -66,9 +66,9 @@ pub const STANDARD_ENHANCEMENT_CHANCE: f64 = 0.4;
 pub const STANDARD_SEAL_CHANCE: f64 = 0.2;
 /// Illusion: enhancement chance of a shop playing card (shop.md §5).
 pub const ILLUSION_ENHANCEMENT_CHANCE: f64 = 0.4;
-/// Illusion: seal chance of a shop playing card (UNVERIFIED; the original bugs it, we model the
-/// intended behaviour).
-pub const ILLUSION_SEAL_CHANCE: f64 = 0.2;
+/// Illusion: seal chance of a shop playing card. The real game (v1.0.1o) never puts seals on shop
+/// cards (wiki: Illusion, a known bug); we mirror it (notes.md §3, game-bug policy).
+pub const ILLUSION_SEAL_CHANCE: f64 = 0.0;
 /// Enhancements a random playing card can get: all 8 (UNVERIFIED that Stone is included).
 pub const CARD_ENHANCEMENTS: [Enhancement; 8] = [
     Enhancement::Bonus,
