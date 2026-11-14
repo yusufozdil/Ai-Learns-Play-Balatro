@@ -3,12 +3,14 @@
 //! An agent owns its own seeded RNG (never the game's `state.rng`) and only reads the game.
 
 pub mod greedy;
+pub mod heuristic;
 pub mod random;
 
 use crate::actions::Action;
 use crate::game::Game;
 
 pub use greedy::GreedyAgent;
+pub use heuristic::{HeuristicAgent, HeuristicConfig};
 pub use random::RandomAgent;
 
 /// A policy: picks one legal action for a non-terminal game.
