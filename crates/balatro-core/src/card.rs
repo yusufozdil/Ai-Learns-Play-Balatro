@@ -83,12 +83,16 @@ impl Card {
         }
     }
 
-    /// Face card: J/Q/K; with Pareidolia every non-Stone card is a face card. Stone never is.
+    /// Face card under the game's rules. This is the ONLY face-card predicate (jokers reach it
+    /// through `RunView::is_face` / `ctx.is_face`, which delegate here):
+    /// - a debuffed card is never a face card (balatrowiki.org/w/Ride_the_Bus: debuffed face
+    ///   cards do not reset it);
+    /// - with Pareidolia every card is a face card, Stone included (docs/mechanics/cards.md);
+    /// - otherwise J/Q/K that are not Stone.
+    ///
+    /// For the printed rank alone use `card.rank.is_face_rank()`.
     pub fn is_face(&self, flags: &RuleFlags) -> bool {
-        if self.is_stone() {
-            return false;
-        }
-        flags.pareidolia || self.rank.is_face_rank()
+        !self.debuffed && (flags.pareidolia || (!self.is_stone() && self.rank.is_face_rank()))
     }
 
     /// Suit membership: Stone -> never; Wild -> every suit (unless debuffed: a debuffed Wild

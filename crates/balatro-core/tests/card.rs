@@ -25,7 +25,13 @@ fn face() {
     stone.enhancement = Enhancement::Stone;
     assert!(k.is_face(&none) && !two.is_face(&none));
     assert!(k.is_face(&pareidolia) && two.is_face(&pareidolia));
-    assert!(!stone.is_face(&none) && !stone.is_face(&pareidolia));
+    // Pareidolia makes every card a face card, Stone included (docs/mechanics/cards.md).
+    assert!(!stone.is_face(&none) && stone.is_face(&pareidolia));
+    // A debuffed card is never a face card, even with Pareidolia.
+    let mut debuffed_k = k;
+    debuffed_k.debuffed = true;
+    assert!(!debuffed_k.is_face(&none) && !debuffed_k.is_face(&pareidolia));
+    assert!(debuffed_k.rank.is_face_rank());
 }
 
 #[test]

@@ -14,6 +14,7 @@ use crate::enums::{Enhancement, HandType, Rank, Rarity, Seal, Suit};
 use crate::joker::{JokerDef, JokerInstance};
 use crate::rng::{GameRng, RngKey};
 use crate::scoring::ScoreCtx;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------------------------
 // Hook signatures
@@ -196,7 +197,7 @@ pub struct BossView {
 }
 
 /// Run-long counters some jokers read (Throwback, Fortune Teller, Satellite, ...).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunStats {
     /// Blinds skipped this run (Throwback).
     pub blinds_skipped: u32,
@@ -311,7 +312,7 @@ impl DeckCounts {
 }
 
 /// Kind of consumable. Placeholder until Phase 4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConsumableKind {
     /// Tarot card.
     Tarot,
@@ -323,7 +324,7 @@ pub enum ConsumableKind {
 
 /// What jokers/scoring may know about one consumable. Placeholder until Phase 4 defines the
 /// consumable ids; Phase 4 maps its types onto this view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumableView {
     /// Tarot / Planet / Spectral.
     pub kind: ConsumableKind,
@@ -451,7 +452,7 @@ impl RunView<'_> {
     /// docs/mechanics/cards.md); debuffed cards are never face cards (balatrowiki.org/w/Ride_the_Bus:
     /// debuffed face cards do not reset it).
     pub fn is_face(&self, card: &Card) -> bool {
-        !card.debuffed && (self.rules.pareidolia || (!card.is_stone() && card.rank.is_face_rank()))
+        card.is_face(&self.rules)
     }
 
     /// Suit test with Wild/Smeared/Stone rules (`Card::has_suit`).
@@ -474,7 +475,7 @@ pub enum SellTarget {
 }
 
 /// Run-level flags set by jokers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RunFlag {
     /// Gros Michel went extinct: Cavendish may now appear in the shop.
     GrosMichelExtinct,
@@ -581,7 +582,7 @@ pub enum SideEffect {
 /// `prob_mult` at 1. The game layer recomputes this whenever the joker list, an edition or a
 /// debuff changes, and feeds `rules` to `hand_eval::evaluate` and `rules`/`prob_mult` to
 /// [`RunView`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modifiers {
     /// Four Fingers, Shortcut, Smeared, Pareidolia, Splash.
     pub rules: RuleFlags,

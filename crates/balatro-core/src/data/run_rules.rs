@@ -1,0 +1,43 @@
+//! Run-start values (Red Deck, White Stake) and per-round limits of the game loop.
+//! Sources: docs/mechanics/blinds.md §1, §5-§7; notes.md §4.1 / §4.1c ("Başlangıç").
+//! Starting money lives in [`crate::data::prices::STARTING_MONEY`].
+
+/// Ante a run starts at (blinds.md §1).
+pub const STARTING_ANTE: i32 = 1;
+/// Hands per round before deck/voucher/joker changes (notes.md §4.1).
+pub const BASE_HANDS: u32 = 4;
+/// Discards per round before deck/voucher/joker changes (notes.md §4.1).
+pub const BASE_DISCARDS: u32 = 3;
+/// Red Deck: +1 discard every round (blinds.md §7).
+pub const RED_DECK_EXTRA_DISCARDS: u32 = 1;
+/// Hand size (notes.md §4.1).
+pub const BASE_HAND_SIZE: u32 = 8;
+/// Joker slots (notes.md §4.1).
+pub const BASE_JOKER_SLOTS: u32 = 5;
+/// Consumable slots (notes.md §4.1).
+pub const BASE_CONSUMABLE_SLOTS: u32 = 2;
+/// Cards in the standard starting deck.
+pub const STANDARD_DECK_SIZE: u32 = 52;
+
+/// The run is won by defeating the boss of this ante (blinds.md §1).
+pub const WIN_ANTE: i32 = 8;
+/// Showdown (finisher) bosses appear when `ante % SHOWDOWN_ANTE_INTERVAL == 0` (blinds.md §1).
+pub const SHOWDOWN_ANTE_INTERVAL: i32 = 8;
+
+/// At most this many cards may be played or discarded at once (blinds.md §6.3).
+pub const MAX_SELECTED_CARDS: u32 = 5;
+/// Hand size is clamped to this (card selections are `u16` bitmasks; `hand_eval::MAX_HAND`).
+pub const MAX_HAND_SIZE: u32 = 16;
+/// Hand size never drops below this (assumption: a round always draws at least one card).
+pub const MIN_HAND_SIZE: u32 = 1;
+/// Hands per round never drop below this (assumption: Troubadour & co. cannot zero them).
+pub const MIN_HANDS_PER_ROUND: u32 = 1;
+
+/// PLACEHOLDER until Phase 5C (`content/tags.rs`): skip tags are drawn uniformly from
+/// `0..TAG_POOL_PLACEHOLDER` (24 tags exist, tags.md). Ids have no effect yet and no min-ante
+/// filtering is applied.
+pub const TAG_POOL_PLACEHOLDER: u16 = 24;
+
+/// Safety cap on side-effect cascades (an effect fires an event that queues effects, ...).
+/// Base-game chains are at most 2-3 deep; leftovers beyond the cap are dropped and counted.
+pub const MAX_EFFECT_CASCADE: u32 = 8;
