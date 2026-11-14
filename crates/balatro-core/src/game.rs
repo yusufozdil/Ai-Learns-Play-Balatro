@@ -24,6 +24,7 @@ use crate::hooks::{
     self, DiscardInfo, EventInput, EventResult, RoundEndInfo, SellTarget, SideEffect, SoldItem,
 };
 use crate::joker::JokerInstance;
+use crate::rng::RngKey;
 use crate::scoring::{ScoreInput, Scorer};
 use crate::state::{GameConfig, GameState, Outcome, ShopState, TagId, transition_allowed};
 
@@ -757,9 +758,19 @@ fn apply_one(
                 (Phase::Play, p) => p,
                 _ => Pile::Draw,
             };
-            s.deck.add_card(c, pile);
-            if pile == Pile::Hand {
-                s.deck.sort_hand();
+            match pile {
+                // Shuffled into the draw pile (Marble Joker, packs): a uniformly random position
+                // on `RngKey::Deck`, not the top, so the card is not guaranteed to be drawn next.
+                Pile::Draw => {
+                    let n = s.deck.draw_pile.len();
+                    let pos = s.rng.range(RngKey::Deck, 0, n + 1);
+                    s.deck.draw_pile.insert(pos, c);
+                }
+                Pile::Hand => {
+                    s.deck.add_card(c, pile);
+                    s.deck.sort_hand();
+                }
+                Pile::Played | Pile::Discard => s.deck.add_card(c, pile),
             }
             added.push(c);
             s.stats.cards_added += 1;

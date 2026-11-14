@@ -140,7 +140,6 @@ fn registry_no_id_defined_twice() {
 
 /// Phase 3 acceptance: every id has exactly one def. Un-ignore when all waves are merged.
 #[test]
-#[ignore = "enable at the end of Phase 3"]
 fn registry_every_id_has_exactly_one_def() {
     let missing: Vec<JokerId> = JokerId::ALL
         .into_iter()

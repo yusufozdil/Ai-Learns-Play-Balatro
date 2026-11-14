@@ -302,7 +302,8 @@ fn reserved_parking_held(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &C
 
 // --- Mail-In Rebate: https://balatrowiki.org/w/Mail-In_Rebate ------------------------------
 // aux_rank = target rank: a random non-Stone deck card's rank (weighted by frequency), Ace if
-// the deck has none. Re-picked on acquire and at every round end.
+// the deck has none. Re-picked on acquire and at every round end. Debuffed discarded cards pay
+// nothing (wiki: "debuffed cards do not have a rank"; balatrowiki.org/w/Debuffed).
 const MAIL_IN_MONEY: i32 = 5;
 const MAIL_IN_DEFAULT_RANK: Rank = Rank::Ace;
 
@@ -334,7 +335,7 @@ fn mail_in_discard(j: &mut JokerInstance, ctx: &mut EventCtx<'_>, d: &DiscardInf
     let hits = d
         .cards
         .iter()
-        .filter(|c| !c.is_stone() && c.rank == target)
+        .filter(|c| !c.is_stone() && !c.debuffed && c.rank == target)
         .count();
     let hits = i32::try_from(hits).unwrap_or(i32::MAX);
     if hits > 0 {

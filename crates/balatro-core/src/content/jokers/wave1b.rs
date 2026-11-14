@@ -341,12 +341,26 @@ fn assign_suits(ctx: &ScoreCtx<'_>, cards: &[usize], suit_idx: usize, used: u8) 
     false
 }
 
+/// Up to 8 scoring indices (the scoring mask is 8 bits wide).
+const MAX_SCORING: usize = 8;
+
+/// Non-debuffed scoring card indices in a fixed buffer (no allocation while scoring).
+fn live_scoring(ctx: &ScoreCtx<'_>) -> ([usize; MAX_SCORING], usize) {
+    let mut buf = [0usize; MAX_SCORING];
+    let mut n = 0;
+    for i in ctx.scoring_indices() {
+        if n < MAX_SCORING && !ctx.played()[i].debuffed {
+            buf[n] = i;
+            n += 1;
+        }
+    }
+    (buf, n)
+}
+
 fn flower_pot_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let cards: Vec<usize> = ctx
-        .scoring_indices()
-        .filter(|&i| !ctx.played()[i].debuffed)
-        .collect();
-    if cards.len() >= ALL_SUITS.len() && assign_suits(ctx, &cards, 0, 0) {
+    let (buf, n) = live_scoring(ctx);
+    let cards = &buf[..n];
+    if cards.len() >= ALL_SUITS.len() && assign_suits(ctx, cards, 0, 0) {
         ctx.x_mult(FLOWER_POT_XMULT);
     }
 }
@@ -357,10 +371,8 @@ fn flower_pot_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 const SEEING_DOUBLE_XMULT: f64 = 2.0;
 
 fn seeing_double_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let cards: Vec<usize> = ctx
-        .scoring_indices()
-        .filter(|&i| !ctx.played()[i].debuffed)
-        .collect();
+    let (buf, n) = live_scoring(ctx);
+    let cards = &buf[..n];
     let is_club = |i: usize| ctx.has_suit(&ctx.played()[i], Suit::Clubs);
     let is_other = |i: usize| {
         let c = &ctx.played()[i];

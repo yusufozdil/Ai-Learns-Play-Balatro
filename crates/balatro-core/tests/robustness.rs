@@ -1,9 +1,11 @@
 //! Robustness (Phase 2D): mass random games, determinism, clone-continuation and invalid-action
-//! fuzzing. The 100k run is `#[ignore]`: `cargo test --release -- --ignored`.
+//! fuzzing. Phase 3.R adds games that start with random boards of defined jokers. The 100k runs
+//! are `#[ignore]`: `cargo test --release -p balatro-core --test robustness -- --ignored`.
 
 use balatro_core::actions::Action;
 use balatro_core::agents::{Agent, GreedyAgent, RandomAgent};
-use balatro_core::content::jokers::JokerId;
+use balatro_core::content::jokers::{JokerId, all_defs};
+use balatro_core::enums::{Edition, Enhancement, Phase, Seal};
 use balatro_core::game::Game;
 use balatro_core::joker::JokerInstance;
 use balatro_core::rng::{GameRng, RngKey};
@@ -70,6 +72,113 @@ fn ten_thousand_random_games() {
 fn hundred_thousand_random_games() {
     let steps = mass_run(1_000_000, 100_000);
     eprintln!("100k games: {steps} steps");
+    assert!(steps > 400_000);
+}
+
+// ----- Phase 3.R: random boards of DEFINED jokers ------------------------------------------
+
+/// Every joker id with a definition, in index order.
+fn defined_ids() -> Vec<JokerId> {
+    let mut v: Vec<JokerId> = all_defs().map(|d| d.id).collect();
+    v.sort_by_key(|id| id.index());
+    v.dedup();
+    v
+}
+
+/// A run that starts with 0-5 random defined jokers (random editions, some Eternal), and for
+/// half the seeds a deck where about a quarter of the cards carry a random enhancement, seal
+/// and edition (Glass breaks, Lucky, Steel, Gold, Red/Gold/Blue/Purple seals, Stone cards).
+fn new_joker_board_game(seed: u64, ids: &[JokerId]) -> Game {
+    let mut g = Game::new(seed, GameConfig::default());
+    let mut p = GameRng::new(seed ^ 0x3A11_70C3);
+    let n = p.range(RngKey::Misc, 0, 6);
+    for _ in 0..n {
+        let mut j = JokerInstance::new(0, ids[p.range(RngKey::Misc, 0, ids.len())]);
+        j.edition = match p.range(RngKey::Misc, 0, 10) {
+            0 => Edition::Foil,
+            1 => Edition::Holographic,
+            2 => Edition::Polychrome,
+            3 => Edition::Negative,
+            _ => Edition::Base,
+        };
+        let eternal_ok = j.def().is_some_and(|d| d.eternal_compatible);
+        j.stickers.eternal = eternal_ok && p.range(RngKey::Misc, 0, 10) == 0;
+        let _ = g.add_joker(j);
+    }
+    if seed.is_multiple_of(2) {
+        for c in &mut g.state_mut().deck.draw_pile {
+            if p.range(RngKey::Misc, 0, 4) != 0 {
+                continue;
+            }
+            c.enhancement = Enhancement::ALL[p.range(RngKey::Misc, 0, Enhancement::COUNT)];
+            c.seal = Seal::ALL[p.range(RngKey::Misc, 0, Seal::COUNT)];
+            c.edition = [
+                Edition::Base,
+                Edition::Foil,
+                Edition::Holographic,
+                Edition::Polychrome,
+            ][p.range(RngKey::Misc, 0, 4)];
+        }
+    }
+    g.state().check_invariants().expect("start state");
+    g
+}
+
+/// Plays `games` random-joker games; returns (total steps, games that reached a shop).
+fn mass_run_jokers(first_seed: u64, games: u64) -> (u64, u64) {
+    let ids = defined_ids();
+    let (mut total, mut shops) = (0u64, 0u64);
+    for seed in first_seed..first_seed + games {
+        let mut g = new_joker_board_game(seed, &ids);
+        let mut agent = match seed % 3 {
+            0 => RandomAgent::new(seed),
+            1 => RandomAgent::with_play_weight(seed, 6.0),
+            _ => RandomAgent::with_play_weight(seed, 30.0),
+        };
+        // A third of the games take the score shortcut so round ends, cash-outs, shops,
+        // end-of-round joker hooks and later antes are reached.
+        let shortcut = seed % 3 == 2;
+        let mut steps = 0usize;
+        let mut saw_shop = false;
+        while !g.is_terminal() {
+            assert!(steps < MAX_STEPS, "seed {seed}: no termination");
+            let a = agent.act(&g);
+            if shortcut && matches!(a, Action::Play(_)) {
+                let t = g.state().target;
+                g.state_mut().round_score = t - 1.0;
+            }
+            if let Err(e) = g.step(a) {
+                panic!("seed {seed}: legal-looking {a:?} rejected: {e}");
+            }
+            let s = g.state();
+            s.check_invariants()
+                .unwrap_or_else(|e| panic!("seed {seed} after {a:?}: {e}"));
+            assert!(
+                s.jokers.iter().all(|j| j.value.is_finite()),
+                "seed {seed}: non-finite joker value"
+            );
+            saw_shop |= s.phase == Phase::Shop;
+            steps += 1;
+        }
+        assert!(g.outcome().is_some(), "seed {seed}");
+        total += steps as u64;
+        shops += u64::from(saw_shop);
+    }
+    (total, shops)
+}
+
+#[test]
+fn ten_thousand_random_joker_board_games() {
+    let (steps, shops) = mass_run_jokers(0, 10_000);
+    assert!(steps > 40_000, "{steps}");
+    assert!(shops > 3_000, "{shops} games reached a shop");
+}
+
+#[test]
+#[ignore = "100k games; run with `cargo test --release -- --ignored`"]
+fn hundred_thousand_random_joker_board_games() {
+    let (steps, shops) = mass_run_jokers(2_000_000, 100_000);
+    eprintln!("100k random-joker games: {steps} steps, {shops} reached a shop");
     assert!(steps > 400_000);
 }
 

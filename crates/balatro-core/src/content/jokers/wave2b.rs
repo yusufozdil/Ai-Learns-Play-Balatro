@@ -274,6 +274,8 @@ fn ancient_scored(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 const RAMEN_START: f64 = 2.0;
 const RAMEN_LOSS: f64 = 0.01;
 const RAMEN_FLOOR: f64 = 1.0;
+/// Values are kept at 2 decimals (hundredths).
+const RAMEN_PRECISION: f64 = 100.0;
 
 fn ramen_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     if j.value > RAMEN_FLOOR {
@@ -283,7 +285,7 @@ fn ramen_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 fn ramen_discard(j: &mut JokerInstance, ctx: &mut EventCtx<'_>, d: &DiscardInfo<'_>) {
     for _ in d.cards {
-        let next = ((j.value - RAMEN_LOSS) * 100.0).round() / 100.0;
+        let next = ((j.value - RAMEN_LOSS) * RAMEN_PRECISION).round() / RAMEN_PRECISION;
         if next <= RAMEN_FLOOR {
             ctx.destroy_self();
             return;
@@ -441,8 +443,9 @@ fn idol_scored(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 
 // --- Hit the Road: https://balatrowiki.org/w/Hit_the_Road -----------------------------------
 // value = current xmult (starts 1.0). +0.5 per Jack discarded this round (each Jack of a
-// multi-card discard counts; wiki is silent, the card text says "for every Jack"). Resets to
-// 1.0 at the end of every round.
+// multi-card discard counts; wiki is silent, the card text says "for every Jack"). Debuffed
+// Jacks do not count (wiki: The Plant "renders Hit the Road useless"; balatrowiki.org/w/Debuffed:
+// discard jokers do not activate from debuffed cards). Resets to 1.0 at the end of every round.
 const HIT_THE_ROAD_GAIN: f64 = 0.5;
 const HIT_THE_ROAD_RESET: f64 = 1.0;
 
@@ -450,7 +453,7 @@ fn hit_the_road_discard(j: &mut JokerInstance, _: &mut EventCtx<'_>, d: &Discard
     let jacks = d
         .cards
         .iter()
-        .filter(|c| c.rank == Rank::Jack && !c.is_stone())
+        .filter(|c| c.rank == Rank::Jack && !c.is_stone() && !c.debuffed)
         .count();
     j.value += HIT_THE_ROAD_GAIN * jacks as f64;
 }
