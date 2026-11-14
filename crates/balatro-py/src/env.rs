@@ -43,6 +43,10 @@ pub struct RewardConfig {
     pub shaping: f32,
     /// Reward of an invalid action.
     pub invalid: f32,
+    /// Reward (cost when negative) of every valid `MoveJoker` action. Reordering is the only
+    /// action that changes nothing but the joker order, so a policy can swap two jokers back and
+    /// forth forever; a small negative value breaks that loop (0 = off).
+    pub reorder: f32,
 }
 
 impl Default for RewardConfig {
@@ -54,6 +58,7 @@ impl Default for RewardConfig {
             loss: 0.0,
             shaping: 0.0,
             invalid: -0.05,
+            reorder: 0.0,
         }
     }
 }
@@ -68,6 +73,7 @@ impl RewardConfig {
             "loss" => self.loss = v,
             "shaping" => self.shaping = v,
             "invalid" => self.invalid = v,
+            "reorder" => self.reorder = v,
             _ => return false,
         }
         true
@@ -295,7 +301,11 @@ impl Env {
                 let info = self.game.step(a).map_err(|e| {
                     format!("env {}: validated action {a:?} rejected: {e}", self.idx)
                 })?;
-                (Self::reward_of(sh, &info, &self.game, before), false)
+                let mut x = Self::reward_of(sh, &info, &self.game, before);
+                if matches!(a, Action::MoveJoker { .. }) {
+                    x += sh.reward.reorder;
+                }
+                (x, false)
             }
         };
         self.steps += 1;
@@ -470,6 +480,27 @@ mod tests {
         }
         assert!(finished > 0);
         assert_eq!(e.finished.iter().map(|f| f.invalid).sum::<u32>(), 0);
+    }
+
+    #[test]
+    fn reorder_term_charges_only_valid_move_joker() {
+        let base = shared();
+        let mut sh = base;
+        sh.reward.reorder = -0.5;
+        let (mut a, mut b) = (Env::new(0, &base), Env::new(0, &sh));
+        let mut moves = 0;
+        for _ in 0..200_000 {
+            let p = a.random_parts();
+            let (ra, rb) = (
+                a.step_parts(p, &base, true).unwrap(),
+                b.step_parts(p, &sh, true).unwrap(),
+            );
+            assert!(!ra.invalid && ra.done == rb.done);
+            let is_move = p[0] == ActionKind::MoveJoker.index() as i64;
+            moves += i32::from(is_move);
+            assert_eq!(rb.reward - ra.reward, if is_move { -0.5 } else { 0.0 });
+        }
+        assert!(moves > 0, "no MoveJoker was ever played");
     }
 
     #[test]

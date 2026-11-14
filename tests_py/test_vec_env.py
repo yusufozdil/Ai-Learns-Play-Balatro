@@ -276,6 +276,23 @@ def test_reward_terms_are_configurable():
         assert -1e-4 <= ret <= won + 1 + 1e-4
 
 
+def test_reorder_reward_applies_to_valid_move_joker_only():
+    a = BalatroVecEnv(256, seed=4, num_threads=2, max_episode_steps=2000)
+    b = BalatroVecEnv(256, seed=4, num_threads=2, max_episode_steps=2000, reward={"reorder": -0.5})
+    a.reset()
+    b.reset()
+    moves = 0
+    for _ in range(1500):
+        acts = a.random_actions().copy()  # mask-conforming (never invalid), same for both envs
+        a.step(acts)
+        b.step(acts)
+        mv = acts[:, 0] == 8
+        moves += int(mv.sum())
+        assert np.allclose(b.reward - a.reward, np.where(mv, -0.5, 0.0), atol=1e-6)
+        assert (a.done == b.done).all() and (a.invalid == 0).all()
+    assert moves > 0  # the check above is not vacuous
+
+
 def test_default_reward_values():
     env = BalatroVecEnv(1, seed=0, num_threads=1)
     env.reset()
@@ -357,3 +374,17 @@ def test_gil_is_released_during_step():
     th.join()
     assert elapsed > 0.01, "step too fast to measure; raise num_envs"
     assert during > 1000, f"ticker made only {during} ticks during a {elapsed * 1e3:.0f} ms step"
+
+
+def test_game_env_index_matches_vec_env_env():
+    """``Game(seed, env_index=i)`` replays the first episode of env ``i`` (used by the audit)."""
+    env = BalatroVecEnv(4, seed=11, num_threads=1)
+    env.reset()
+    obs, _, _, _, _ = env.step(np.zeros((4, 4), dtype=np.int64))  # SelectBlind: deals a hand
+    for i in range(4):
+        g = Game(seed=11, env_index=i)
+        g.step_parts(0, 0, 0, 0)
+        gobs = g.observation()
+        for k in ("global_f", "hand_f", "hand_i"):
+            assert np.array_equal(obs[k][i], gobs[k]), (i, k)
+    assert not np.array_equal(obs["hand_i"][0], obs["hand_i"][1])

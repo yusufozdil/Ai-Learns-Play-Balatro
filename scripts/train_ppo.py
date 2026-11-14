@@ -53,6 +53,12 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="continue from <out-dir>/latest.pt")
     ap.add_argument("--shaping", type=float, default=0.0, help="env reward shaping coefficient")
     ap.add_argument("--loss-reward", type=float, default=0.0, help="env reward on losing a run")
+    ap.add_argument(
+        "--reorder-cost",
+        type=float,
+        default=0.0,
+        help="env reward of every MoveJoker action (negative = cost; breaks swap loops)",
+    )
     ap.add_argument("--memory", choices=["gru", "none"], default="gru")
     ap.add_argument("--d-model", type=int, default=128)
     ap.add_argument("--layers", type=int, default=4)
@@ -97,6 +103,8 @@ def main() -> None:
         kw["reward"]["shaping"] = args.shaping
     if args.loss_reward:
         kw["reward"]["loss"] = args.loss_reward
+    if args.reorder_cost:
+        kw["reward"]["reorder"] = args.reorder_cost
     cfg = PPOConfig(**kw)
     Trainer(cfg, resume=args.resume).train()
 

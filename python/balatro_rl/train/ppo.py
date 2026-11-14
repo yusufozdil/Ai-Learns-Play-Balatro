@@ -17,9 +17,10 @@ Data flow of one update (``Trainer.train``):
    linearly to 0: estimator ``k3 = exp(d) - 1 - d`` with ``d = log pi_ref(a) - log pi(a)`` on the
    sampled actions (reference log-probs are computed once per rollout, no-grad).
 
-Reward scaling is a constant (``reward_scale``); truncated episodes (``done == 3``, only after
-``max_episode_steps``) are treated as terminal because the env does not keep their last
-observation (see docs/design/rl_interface.md section 8); keep ``max_episode_steps`` high.
+Reward scaling is a constant (``reward_scale``). Truncated episodes (``done == 3``, only after
+``max_episode_steps``) are bootstrapped with the value of the observation the last action was
+taken in (the env does not keep the last observation of the old episode, docs/design/rl_interface.md
+section 8; a truncated policy is almost always looping, so ``V(s_T) ~ V(s_{T-1})``).
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ class PPOConfig:
     reward_scale: float = 0.1
     reward: dict = field(
         default_factory=dict
-    )  # env reward terms (blind/ante/win/loss/shaping/invalid)
+    )  # env reward terms (blind/ante/win/loss/shaping/invalid/reorder)
     # --- PPO
     gamma: float = 0.997
     lam: float = 0.95
@@ -81,6 +82,7 @@ class PPOConfig:
     adam_eps: float = 1e-5
     target_kl: float | None = None  # stop the epochs early when approx_kl exceeds this
     norm_adv: bool = True
+    bootstrap_truncation: bool = True  # GAE bootstraps through step-limit truncation (not terminal)
     # --- init from BC / KL to the BC policy
     init_checkpoint: str | None = None
     kl_coef: float = 0.0  # start coefficient of the KL penalty to the init checkpoint's policy
@@ -92,6 +94,7 @@ class PPOConfig:
     eval_every: int = 10  # updates
     eval_games: int = 512
     eval_sampled: bool = True
+    eval_move_limit: int | None = None  # validation repetition guard (evaluate.ModelActor)
     save_every: int = 5
     ckpt_keep_best: bool = True
     # --- model (used when not initialised from a checkpoint)
@@ -113,11 +116,15 @@ def compute_gae(
     last_first: torch.Tensor,
     gamma: float,
     lam: float,
+    trunc: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """GAE(gamma, lambda) for a ``(T, N)`` rollout. ``first[t]`` = observation ``t`` starts a new
     episode (the previous step finished one), so the transition ``t - 1 -> t`` is terminal when
     ``first[t]``; ``last_value`` / ``last_first`` describe the observation after the last step.
-    ``rewards[t]`` belongs to the transition ``t -> t + 1``. Returns ``(advantages, returns)``."""
+    ``rewards[t]`` belongs to the transition ``t -> t + 1``. ``trunc[t]`` (optional): the
+    transition ``t`` was cut by the step limit, not by the game: the trace is cut like at a
+    terminal, but the target bootstraps with ``values[t]`` (the observation after the cut is
+    unknown, see the module docs) instead of 0. Returns ``(advantages, returns)``."""
     steps = rewards.shape[0]
     adv = torch.zeros_like(rewards)
     last = torch.zeros_like(last_value)
@@ -128,7 +135,10 @@ def compute_gae(
         else:
             nonterm = (~first[t + 1]).to(rewards.dtype)
             next_value = values[t + 1]
-        delta = rewards[t] + gamma * next_value * nonterm - values[t]
+        boot = gamma * next_value * nonterm
+        if trunc is not None:
+            boot = boot + gamma * values[t] * trunc[t].to(rewards.dtype)
+        delta = rewards[t] + boot - values[t]
         last = delta + gamma * lam * nonterm * last
         adv[t] = last
     return adv, adv + values
@@ -248,6 +258,7 @@ class Trainer:
         for name in ("logp", "value", "reward"):
             self.buf[name] = torch.zeros((t, n), dtype=torch.float32, device=dev)
         self.buf["first"] = torch.zeros((t, n), dtype=torch.bool, device=dev)
+        self.buf["trunc"] = torch.zeros((t, n), dtype=torch.bool, device=dev)
         self.buf["ctrl"] = torch.zeros((t, n), dtype=torch.bool, device=dev)
         self.buf["phase"] = torch.zeros((t, n), dtype=torch.long, device=dev)
         self.h0 = torch.zeros((t // cfg.chunk, n, self.model.mem_dim), device=dev)
@@ -305,6 +316,7 @@ class Trainer:
             invalid += int(inv.sum())
             b["reward"][t] = torch.from_numpy(reward).to(dev)
             self.first = torch.from_numpy(done != 0).to(dev)
+            b["trunc"][t] = torch.from_numpy(done == 3).to(dev)
         o, m = prepare(self.obs, self.masks, dev)
         self.last_value, _ = model.value(o, m, self.hidden, first=self.first)
         if dev.type == "cuda":
@@ -355,7 +367,14 @@ class Trainer:
         model.train()
         reward = b["reward"] * cfg.reward_scale
         adv, ret = compute_gae(
-            reward, b["value"], b["first"], self.last_value, self.first, cfg.gamma, cfg.lam
+            reward,
+            b["value"],
+            b["first"],
+            self.last_value,
+            self.first,
+            cfg.gamma,
+            cfg.lam,
+            b["trunc"] if cfg.bootstrap_truncation else None,
         )
         ctrl = b["ctrl"]
         if cfg.norm_adv and ctrl.any():
@@ -530,13 +549,23 @@ class Trainer:
         route = None if self.route[: len(PHASES)].all() else self.stage.label
         t0 = time.perf_counter()
         det = ev.evaluate_model(
-            self.model, cfg.eval_games, True, route, max_episode_steps=cfg.max_episode_steps
+            self.model,
+            cfg.eval_games,
+            True,
+            route,
+            max_episode_steps=cfg.max_episode_steps,
+            move_limit=cfg.eval_move_limit,
         )
         rec = {"det_" + k: v for k, v in det.summary().items() if k not in ("name", "ante_hist")}
         rec["det_ante_hist"] = det.ante_hist
         if cfg.eval_sampled:
             sam = ev.evaluate_model(
-                self.model, cfg.eval_games, False, route, max_episode_steps=cfg.max_episode_steps
+                self.model,
+                cfg.eval_games,
+                False,
+                route,
+                max_episode_steps=cfg.max_episode_steps,
+                move_limit=cfg.eval_move_limit,
             )
             rec.update(
                 {"sam_" + k: v for k, v in sam.summary().items() if k not in ("name", "ante_hist")}

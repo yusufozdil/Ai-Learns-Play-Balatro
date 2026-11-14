@@ -301,6 +301,7 @@ legal. This is **exactly** `CardSelect::next_candidates` / `CardSelect::can_fini
 | `loss` | 0.0 | the run is lost (set negative to penalise dying) |
 | `shaping` | 0.0 | `shaping * (progress_after - progress_before)` of `min(round_score / target, 1)` within a round (telescopes to <= `shaping` per round; 0 = off) |
 | `invalid` | -0.05 | per invalid action (the reward replaces the others: nothing else happens) |
+| `reorder` | 0.0 | added to every *valid* `MoveJoker` action (set negative, e.g. -0.05, to break swap-back-and-forth loops: reordering changes nothing but the joker order and costs neither money nor a hand, so it is the one action a policy can repeat forever; added in Phase 10B, backward compatible, `INTERFACE_VERSION` unchanged) |
 
 Rewards are added when they happen in the same transition. Truncation (`max_episode_steps`) gives no
 terminal reward and is *not* a loss.
@@ -313,7 +314,9 @@ belong to the **new** episode's first state, `reward[i]` to the finishing transi
 episode's seed is a pure function of `(base_seed, env, episode)`. `drain_finished()` yields
 `(env, ante, done_code, steps, return, blinds_beaten, invalid_actions)` per finished episode.
 For value bootstrapping across truncation the last observation of the old episode is not kept;
-raise `max_episode_steps` instead (a sensible policy never reaches it).
+the PPO trainer therefore bootstraps a truncated step with the value of the observation the last
+action was taken in (a truncated policy is almost always in a loop, so the two are nearly the same
+state; `docs/design/training.md` section 7) and keeps `max_episode_steps` high.
 
 ## 9. Information-leak rules
 

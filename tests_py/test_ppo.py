@@ -65,6 +65,32 @@ def test_gae_hand_computed():
     assert adv2[2, 0].item() == pytest.approx(2.0 - 0.3)
 
 
+def test_gae_bootstraps_through_truncation():
+    # One env, T = 3. Transition 1 was truncated (step limit): observation 2 is a new episode,
+    # the trace is cut, but the target bootstraps with values[1] instead of 0.
+    g, lam = 0.9, 0.8
+    rewards = torch.tensor([[1.0], [0.5], [2.0]])
+    values = torch.tensor([[0.5], [0.4], [0.3]])
+    first = torch.tensor([[False], [False], [True]])
+    trunc = torch.tensor([[False], [True], [False]])
+    last_v, last_f = torch.tensor([0.6]), torch.tensor([False])
+    adv, _ = compute_gae(rewards, values, first, last_v, last_f, g, lam, trunc)
+    a2 = 2.0 + g * 0.6 - 0.3
+    a1 = 0.5 + g * 0.4 - 0.4  # bootstrap with its own value, no trace from observation 2
+    a0 = (1.0 + g * 0.4 - 0.5) + g * lam * a1
+    assert adv[:, 0].tolist() == pytest.approx([a0, a1, a2])
+    # without the flag (or an all-False flag) it is a terminal
+    for tr in (None, torch.zeros_like(first)):
+        adv0, _ = compute_gae(rewards, values, first, last_v, last_f, g, lam, tr)
+        assert adv0[1, 0].item() == pytest.approx(0.5 - 0.4)
+    # truncation on the very last step bootstraps with that step's value too
+    adv3, _ = compute_gae(
+        rewards, values, first, last_v, torch.tensor([True]), g, lam,
+        torch.tensor([[False], [False], [True]]),
+    )  # fmt: skip
+    assert adv3[2, 0].item() == pytest.approx(2.0 + g * 0.3 - 0.3)
+
+
 def test_gae_matches_naive_reference():
     gen = torch.Generator().manual_seed(0)
     t_len, n = 20, 5
@@ -186,6 +212,33 @@ def test_teacher_rows_do_not_enter_the_policy_loss(tmp_path):
 # --------------------------------------------------------------------------- end to end
 
 
+def test_training_with_truncation_bootstrap_reorder_cost_and_guarded_validation(tmp_path):
+    cfg = tiny_cfg(
+        tmp_path,
+        total_steps=16 * 16 * 2,
+        max_episode_steps=7,  # nearly every episode is cut by the step limit
+        reward={"reorder": -0.2},
+        eval_every=2,
+        eval_move_limit=2,
+        save_every=1,
+    )
+    tr = Trainer(cfg, echo=lambda *_: 0, device="cpu")
+    tr.train()
+    assert tr.buf["trunc"].any() and tr.buf["trunc"].sum() <= tr.buf["first"].sum()
+    recs = [json.loads(line) for line in (tmp_path / "run" / "log.jsonl").read_text().splitlines()]
+    ups = [r for r in recs if r["type"] == "update"]
+    assert all(np.isfinite(u["vloss"]) and np.isfinite(u["pg"]) for u in ups)
+    assert any(r["type"] == "eval" and r["det_truncated"] > 0 for r in recs)
+    # the flag is honoured: with the bootstrap off the advantages differ on truncated steps
+    for flag in (True, False):
+        cfg2 = tiny_cfg(
+            tmp_path / str(flag), max_episode_steps=7, bootstrap_truncation=flag, total_steps=256
+        )
+        t2 = Trainer(cfg2, echo=lambda *_: 0, device="cpu")
+        t2.collect()
+        assert t2.buf["trunc"].any()
+
+
 def test_short_training_run_and_resume(tmp_path):
     cfg = tiny_cfg(
         tmp_path, total_steps=16 * 16 * 3, eval_every=2, eval_games=8, save_every=1, kl_coef=0.0
@@ -258,3 +311,53 @@ def test_model_actor_subset_matches_full_batch():
     assert full.antes == again.antes and full.invalid_per_game == 0
     routed = ev.evaluate_model(model, 8, True, route="play", max_episode_steps=150, threads=1)
     assert routed.invalid_per_game == 0 and routed.games == 8
+
+
+class _AlwaysMove:
+    """Stub model: MoveJoker whenever the kind mask allows it, else the first legal kind."""
+
+    device = torch.device("cpu")
+
+    def eval(self):
+        return self
+
+    def init_hidden(self, n):
+        return torch.zeros(n, 1)
+
+    def act(self, o, m, h, deterministic=False, first=None, generator=None):
+        km = torch.as_tensor(np.asarray(m["kind_mask"])).bool()
+        kind = torch.where(km[:, ev.MOVE_JOKER], ev.MOVE_JOKER, km.int().argmax(dim=1))
+        out = torch.zeros(len(kind), 4, dtype=torch.long)
+        out[:, 0] = kind
+        return out, None, None, None, h
+
+
+def test_repetition_guard_breaks_move_joker_loops():
+    n = 3
+    kind_mask = np.zeros((n, 17), dtype=bool)
+    kind_mask[:, ev.MOVE_JOKER] = True
+    kind_mask[0, 5] = True  # env 0 and 1 have an alternative, env 2 only MoveJoker
+    kind_mask[1, 9] = True
+    env = type("E", (), {"num_envs": n})()
+    first = np.zeros(n, dtype=bool)
+    active = np.ones(n, dtype=bool)
+
+    def run(limit):
+        actor = ev.ModelActor(_AlwaysMove(), True, move_limit=limit)
+        return [
+            actor(env, {}, {"kind_mask": kind_mask}, first, active)[:, 0].tolist() for _ in range(7)
+        ]
+
+    off = run(None)
+    assert all(k == [ev.MOVE_JOKER] * 3 for k in off)  # the stub loops forever
+    on = run(2)
+    # moves, moves, blocked (the alternative), moves, moves, blocked, ...
+    assert [k[0] for k in on] == [8, 8, 5, 8, 8, 5, 8]
+    assert [k[1] for k in on] == [8, 8, 9, 8, 8, 9, 8]
+    assert [k[2] for k in on] == [8] * 7  # never an empty mask
+    assert run(2) == on  # deterministic
+    # a new game (first) restarts the count
+    actor = ev.ModelActor(_AlwaysMove(), True, move_limit=1)
+    a = actor(env, {}, {"kind_mask": kind_mask}, first, active)
+    b = actor(env, {}, {"kind_mask": kind_mask}, np.ones(n, dtype=bool), active)
+    assert a[0, 0] == 8 and b[0, 0] == 8

@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 
 from balatro_rl import BalatroVecEnv
+from balatro_rl.select import KIND_MOVE_JOKER as MOVE_JOKER
 from balatro_rl.train.curriculum import Curriculum
 
 TEST_SEED = 10_000_019
@@ -100,7 +101,14 @@ class ModelActor:
     """Model policy (deterministic or sampled). ``route``: ``None`` = the model plays every
     phase, else a :class:`Curriculum` stage spec / route table; the teacher plays the others."""
 
-    def __init__(self, model, deterministic: bool, seed: int = 0, route: str | None = None):
+    def __init__(
+        self,
+        model,
+        deterministic: bool,
+        seed: int = 0,
+        route: str | None = None,
+        move_limit: int | None = None,
+    ):
         import torch
 
         self.torch = torch
@@ -110,6 +118,11 @@ class ModelActor:
         self.hidden = None
         self.route = None if route in (None, "all") else Curriculum(route).stages[0].route_table()
         self.zeros = None
+        # Repetition guard (evaluation only): after ``move_limit`` consecutive MoveJoker actions of
+        # a game, MoveJoker is masked for the next decision (the count restarts on any other
+        # action or a new game). Deterministic; ``None`` = off (the model is judged as it is).
+        self.move_limit = move_limit
+        self.moves = None
 
     def __call__(self, env, obs, masks, first, active):
         torch = self.torch
@@ -118,6 +131,7 @@ class ModelActor:
         if self.hidden is None:
             self.hidden = self.model.init_hidden(n)
             self.zeros = np.zeros((n, 4), dtype=np.int64)
+            self.moves = np.zeros(n, dtype=np.int64)
         idx = np.flatnonzero(active)
         out = self.zeros.copy()
         if len(idx) == 0:
@@ -132,12 +146,24 @@ class ModelActor:
         else:
             o, m, h = obs, masks, self.hidden
             f = torch.from_numpy(first).to(dev)
+        if self.move_limit is not None:
+            self.moves[first] = 0
+            block = self.moves[idx] >= self.move_limit
+            if block.any():
+                km = m["kind_mask"].copy()
+                other = km.copy()
+                other[:, MOVE_JOKER] = False
+                block &= other.any(axis=1)  # never leave a state without any legal kind
+                km[block, MOVE_JOKER] = False
+                m = {**m, "kind_mask": km}
         a, _, _, _, h2 = self.model.act(o, m, h, self.deterministic, first=f, generator=self.gen)
         if sub:
             self.hidden[idx_t] = h2
         else:
             self.hidden = h2
         out[idx] = a.cpu().numpy()
+        if self.move_limit is not None:
+            self.moves[idx] = np.where(out[idx, 0] == MOVE_JOKER, self.moves[idx] + 1, 0)
         if self.route is not None:
             use_teacher = active & ~self.route[obs["global_i"][:, 0]]
             if use_teacher.any():
@@ -204,8 +230,9 @@ def evaluate_model(
     seed: int = TEST_SEED,
     actor_seed: int = 1,
     name: str | None = None,
+    move_limit: int | None = None,
     **kw,
 ) -> EvalResult:
-    actor = ModelActor(model, deterministic, actor_seed, route)
+    actor = ModelActor(model, deterministic, actor_seed, route, move_limit)
     name = name or f"model_{'det' if deterministic else 'sample'}" + (f"[{route}]" if route else "")
     return run_games(name, actor, games, seed, **kw)

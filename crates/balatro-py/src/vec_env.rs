@@ -245,7 +245,7 @@ pub fn parse_reward(d: Option<&Bound<'_, PyDict>>) -> PyResult<RewardConfig> {
             let val: f32 = v.extract()?;
             if !r.set(&key, val) {
                 return Err(val_err(format!(
-                    "unknown reward term {key:?} (blind, ante, win, loss, shaping, invalid)"
+                    "unknown reward term {key:?} (blind, ante, win, loss, shaping, invalid, reorder)"
                 )));
             }
         }
@@ -282,7 +282,7 @@ pub struct VecEnv {
 impl VecEnv {
     /// `num_threads = 0` uses all cores; 1 steps inline. `deck`/`stake` currently only accept
     /// "red"/"white". Episodes longer than `max_episode_steps` are truncated (done code 3).
-    /// `reward` overrides terms of the default reward (blind, ante, win, loss, shaping, invalid).
+    /// `reward` overrides terms of the default reward (blind, ante, win, loss, shaping, invalid, reorder).
     #[new]
     #[pyo3(signature = (num_envs, seed=0, num_threads=0, max_episode_steps=DEFAULT_MAX_EPISODE_STEPS,
                         deck="red", stake="white", endless=false, reward=None))]

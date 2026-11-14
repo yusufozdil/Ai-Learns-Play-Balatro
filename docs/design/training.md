@@ -19,8 +19,11 @@ One update = rollout, GAE, `epochs` passes over recurrent minibatches.
    (1 - first_{t+1}) * A_{t+1}`; the bootstrap value of the observation after the last step comes from `model.value`.
    Defaults `gamma = 0.997`, `lam = 0.95`. Rewards are multiplied by the constant `reward_scale` (0.1: an ante-5 run
    returns ~1.6, a win ~3; keeps the value loss on the scale of the policy loss, advantages are normalised anyway).
-   **Truncation** (`done == 3`, only after `max_episode_steps` = 3000, ~0.3% of BC games) is treated as terminal: the env
-   does not keep the last observation of the old episode (rl_interface section 8), so it cannot be bootstrapped.
+   **Truncation** (`done == 3`, only after `max_episode_steps` = 3000, ~0.3% of BC games): the env does not keep the last
+   observation of the old episode (rl_interface section 8), so the exact `V(s_T)` is unavailable. Since Phase 10B the trace is
+   cut as at a terminal but the target bootstraps with `V(s_{T-1})`, the value of the observation the last action was taken
+   in (`compute_gae(..., trunc)`, `PPOConfig.bootstrap_truncation`, default on): a truncated policy is almost always in a loop,
+   so the two states are nearly identical. Before 10B (runs `a_e2e`, `b_s1`) truncation was a plain terminal.
 3. **Recurrent minibatches**: a minibatch is (a time chunk of `chunk` = 32 steps) x (a random group of `group` = 128
    envs) = 4096 rows. Its GRU state is the stored `h0` of the rollout (detached; the old parameters computed it),
    the chunk is scanned with `first` resets. Before any step `evaluate` therefore reproduces the rollout log-probability
@@ -107,6 +110,9 @@ runs below the teacher's share is reported as `teacher_seconds` per rollout.
 | grad clip | 0.5 | |
 | reward scale | 0.1 | env reward: blind +1, boss ante +1, win +10, loss 0, invalid -0.05, shaping 0 (flag `--shaping`) |
 | BC KL | 0.3 -> 0 over 120-150 updates | only with `--init` |
+| reorder cost | 0 (recommended -0.05; section 8) | env reward of every MoveJoker (`--reorder-cost`) |
+| truncation bootstrap | on | `--bootstrap-truncation` / `--no-bootstrap-truncation` |
+| validation guard | off (recommended `--eval-move-limit 2`) | repetition guard of the periodic validation |
 
 ## 5. First results (Phase 10A; RTX 5060 Ti, Ryzen 5 7600; Red Deck, White Stake)
 
@@ -186,16 +192,77 @@ reports the unselected final checkpoint).
 
 ## 7. Caveats and open points
 
-* **Deterministic truncation**: the greedy policy of (a) hits the 3000-step limit in 4.9% (best) / 8.7% (final) of the test
-  games (sampled play: 0%). It stalls in a loop (mean 322-430 steps per game vs 179-183 sampled); a truncated game
-  counts with the ante reached, no penalty. A loop-breaking mechanism is needed before the deterministic policy can be
-  trusted (small per-step cost, a repeat penalty, or sampling at low temperature at test time); the sampled score is the
-  one PPO actually optimises (6.99 / 38.0%).
+* **Deterministic truncation**: solved in Phase 10B (section 8): the loop is a MoveJoker swap cycle; the evaluation
+  repetition guard removes it exactly, the `reorder` reward term reduces it in training.
 * **Simulator exploits**: a 2x win rate over the heuristic in 24M steps is large; nothing in the logs says it is
   illegitimate (0 invalid actions, plausible shifts: no skipping, more rerolls), but the policy should be inspected game by
   game (replay, joker/voucher choices, rerolling) before the number is believed, and the weak spots of the simulator
   (UNVERIFIED items in notes section 4.1) are exactly what RL finds.
 * The value critic is shared and normalised only by the constant `reward_scale`; explained variance reached 0.91.
-* Truncation bootstrap is missing (treated as terminal); with the loops above this adds a small bias.
+* Truncation bootstrap is approximate (`V(s_{T-1})`, section 1); exact would need the env to keep the final observation.
 * k3 KL estimator spikes (0.7-0.9) appear when a few sampled actions get probability collapses; harmless here, but watch it
   with larger learning rates.
+
+## 8. Phase 10B: the deterministic-policy stall, its fix and the new knobs
+
+**Diagnosis** (`runs/a_e2e/{best,latest}.pt`, 1000 test games, deterministic): all 49 (best) / 89 (latest) truncated games
+are the *same* loop: the last 500+ steps consist exclusively of `MoveJoker` (kind 8) actions, a period-2 swap of the same
+two joker slots (`MoveJoker 3 2`, `MoveJoker 2 3`, ...; period in the action sequence: 2 in 83/89, 3 in 3, 1 in 2
+(the same `MoveJoker 3 0` forever: it rotates the joker order, so the order cycles with period 4-5), 6 in 1), in the Shop (76/89 and 27/49) or in Play (13/89 and 22/49), at any ante (1-8), money and
+round unchanged. The loop starts after 20-530 steps (mean ~150). It is a legal but pointless action cycle the simulator
+allows: reordering jokers costs neither money, a hand nor a discard and changes nothing but the order (which matters for
+scoring: Blueprint/Brainstorm, chips-before-mult jokers), so it is the one action that can be repeated forever. No
+reroll/sell/buy/pack/consumable cycle appears: those spend resources and are self-limiting. The argmax policy sits in a
+fixed point: after a swap the order-aware observation changes, the argmax is the swap back. Sampling escapes by chance
+(MoveJoker is 4% of the sampled Shop decisions), the training distribution never contains the cycle, so no reward can fix
+the deterministic mode directly.
+
+**Fix = a hard evaluation guard + a soft training cost + proper truncation handling** (all three are small and
+independent):
+
+* *Evaluation guard* (`ModelActor(move_limit=k)`, `evaluate_model(.., move_limit=k)`, `scripts/evaluate.py --move-limit k`,
+  `PPOConfig.eval_move_limit` for the validation): after `k` consecutive MoveJoker actions of a game the MoveJoker kind is
+  masked out of the next decision (never when it is the only kind; the count restarts with any other action and with a new
+  game). Deterministic given the seed, no model change, and the state space is not touched, so the policy is still judged
+  by its own argmax everywhere else. Default off (the raw number stays available); the recommended report is *raw* and
+  *guard 2*. Checked on `a_e2e` (without any retraining): k = 1, 2, 4 give the same result within noise (table below),
+  truncation 0% for all.
+* *Training cost*: reward term `reorder` (rl_interface section 7; `--reorder-cost -0.05`), added to every valid MoveJoker.
+  The sampled policy learns to reorder less (MoveJoker share of the Shop decisions 4.3% -> 2.5% -> 1.6% over the
+  fine-tunes), the raw deterministic truncation falls 4.9-8.7% -> 3.2-3.6% (cost -0.05, 8M steps) -> 0.8% (-0.25, +6M
+  steps) without hurting the sampled score. It does not reach exactly 0: states where MoveJoker is the argmax with
+  probability < 1 are rarely visited in sampled training.
+* *Truncation bootstrap*: section 1 (`trunc` flag in GAE). With the loop removed truncation is rare in training
+  (`ep_trunc` ~ 0 in the logs).
+* Not done: lowering `max_episode_steps` (it would only truncate sooner); low-temperature sampling (also seed-deterministic,
+  but it would report a different policy than the argmax; the guard keeps the argmax everywhere else).
+
+**Validation runs** (fine-tune from `a_e2e/latest.pt`, fresh Adam, lr 5e-5 -> 5e-6, no KL / warm-up, curriculum all, rollout
+1024 x 128, `--eval-every 10`, new run dirs, `a_e2e` untouched): `c_loopfix` = `--reorder-cost -0.05`, 8.0M steps, 21.5 min;
+`c_loopfix2` = from `c_loopfix/latest.pt`, `--reorder-cost -0.25 --seed 1`, 5.9M steps, 14.6 min (GPU peak ~9 GB). Test =
+the same 1000 games, Red/White; teacher 5.91 / 16.1%, BC 5.29 / 6.5%:
+
+| checkpoint | steps total | det raw: ante / win / trunc | det guard 2: ante / win / trunc | sampled: ante / win / trunc |
+|---|---|---|---|---|
+| `a_e2e/best` (10A) | 24M | 7.08 / 36.1% / 4.9% | 7.11 / 36.9% / 0% | 6.95 / 34.4% / 0% (guard 2: 6.93 / 34.3%) |
+| `a_e2e/latest` (10A) | 24M | 7.04 / 37.9% / 8.7% | 7.15 / 40.9% / 0% | 6.99 / 38.0% / 0% (guard 2: 6.89 / 32.9%) |
+| `c_loopfix/latest` | 32M | 7.22 / 42.9% / 3.2% | 7.25 / 43.4% / 0% | 7.06 / 39.0% / 0% |
+| `c_loopfix/best` | 32M | 7.21 / 46.8% / 3.6% | 7.24 / 47.0% / 0% | 7.05 / 40.5% / 0% |
+| **`c_loopfix2/latest`** | 38M | **7.24 / 44.2% / 0.8%** | **7.25 / 44.6% / 0%** | **7.15 / 43.4% / 0%** (guard 2: 7.06 / 39.9%) |
+| `c_loopfix2/best` | 38M | 7.13 / 41.5% / 0.7% | 7.14 / 41.8% / 0% | 7.05 / 41.3% / 0% |
+
+(standard error of a mean ante ~0.04-0.05, of a win rate ~1.6 points; `best.pt` is chosen on the 512-game validation prefix
+and is not better than `latest` on the full set; the guarded sampled numbers vary by +-3 points just from a different random
+stream.) Guard on a_e2e: k = 1: best 7.09 / 37.6%, latest 7.17 / 41.9%; k = 4: 7.11 / 37.1%, 7.16 / 41.2%. Mean steps per
+deterministic game: 322-430 (a_e2e raw) -> 269 (c_loopfix raw) -> 197 (c_loopfix2 raw) vs 175-185 guarded / sampled. The
+gain over `a_e2e` (+0.2 ante, +6-8 points win) is mostly *more training* (the 10A curve was still rising at 24M; no
+no-cost control run was made), not the loop fix; the loop fix removes the 3-9% truncation bias and the instability of
+the deterministic score. Note the guarded sampled score of `a_e2e` is ~equal to the unguarded one, i.e. the guard does not
+help sampled play (it only matters where the argmax loops).
+
+**Recommended recipe for the long run (100M+ steps)**: the 10A command (section 6) plus `--reorder-cost -0.05
+--eval-move-limit 2` (validation and `best.pt` then ignore loop noise), and evaluate with `scripts/evaluate.py --move-limit 2`
+(report the raw numbers too). If the raw truncation of the final checkpoint is still > 0.5%, a final 5M steps with
+`--reorder-cost -0.25` (as `c_loopfix2`) brought it to 0.8% at no cost in score. The cost -0.05 is small against the +1
+blind reward but real against the 0.003 entropy bonus; -0.25 did not reduce the sampled win rate in 6M steps, but only
+tested on a policy that already knows how to use the jokers, so keep it for the end.

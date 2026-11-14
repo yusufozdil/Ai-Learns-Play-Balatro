@@ -44,7 +44,7 @@ class BalatroVecEnv:
       ``masks[*][i]`` are the first state of the next episode and ``reward[i]`` belongs to the
       finishing transition. ``done``: 0 running, 1 lost, 2 won, 3 truncated.
     * ``reward`` (constructor) overrides terms of the default reward: ``blind``, ``ante``,
-      ``win``, ``loss``, ``shaping``, ``invalid``.
+      ``win``, ``loss``, ``shaping``, ``invalid``, ``reorder``.
     """
 
     def __init__(

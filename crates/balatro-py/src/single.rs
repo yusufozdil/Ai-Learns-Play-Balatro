@@ -32,7 +32,7 @@ fn splitmix(z: &mut u64) -> u64 {
 impl PyGame {
     #[new]
     #[pyo3(signature = (seed=0, deck="red", stake="white", endless=false, reward=None,
-                        max_episode_steps=DEFAULT_MAX_EPISODE_STEPS))]
+                        max_episode_steps=DEFAULT_MAX_EPISODE_STEPS, env_index=0))]
     fn new(
         seed: u64,
         deck: &str,
@@ -40,6 +40,7 @@ impl PyGame {
         endless: bool,
         reward: Option<&Bound<'_, PyDict>>,
         max_episode_steps: u32,
+        env_index: u32,
     ) -> PyResult<Self> {
         let config = parse_config(deck, stake, endless).map_err(PyValueError::new_err)?;
         let reward: RewardConfig = parse_reward(reward)?;
@@ -49,8 +50,9 @@ impl PyGame {
             base_seed: seed,
             reward,
         };
-        // Env 0 of a pool with base seed `seed`: the same first episode as `VecEnv(.., seed)[0]`.
-        let env = Env::new(0, &sh);
+        // Env `env_index` of a pool with base seed `seed`: the same first episode as
+        // `VecEnv(.., seed)[env_index]` (0 by default).
+        let env = Env::new(env_index, &sh);
         Ok(PyGame { env, sh })
     }
 

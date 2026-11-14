@@ -44,6 +44,12 @@ def main() -> None:
     ap.add_argument("--route", default=None, help="phases the model plays (rest: teacher)")
     ap.add_argument("--bc", type=Path, default=ROOT / "runs" / "bc" / "model.pt")
     ap.add_argument("--no-baselines", action="store_true")
+    ap.add_argument(
+        "--move-limit",
+        type=int,
+        default=None,
+        help="evaluation repetition guard: mask MoveJoker after this many consecutive moves",
+    )
     ap.add_argument("--max-episode-steps", type=int, default=ev.MAX_EPISODE_STEPS)
     args = ap.parse_args()
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -78,7 +84,15 @@ def main() -> None:
     results = {}
     for mode in args.modes.split(","):
         det = mode == "det"
-        r = ev.evaluate_model(model, args.games, det, args.route, name=f"{name}_{mode}", **kw)
+        r = ev.evaluate_model(
+            model,
+            args.games,
+            det,
+            args.route,
+            name=f"{name}_{mode}",
+            move_limit=args.move_limit,
+            **kw,
+        )
         results[mode] = r
         print(r.line())
         print("   ante histogram:", dict(sorted(r.ante_hist.items())))
