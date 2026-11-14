@@ -146,7 +146,10 @@ fn registry_every_id_has_exactly_one_def() {
         .into_iter()
         .filter(|&id| def_count(id) != 1)
         .collect();
-    assert!(missing.is_empty(), "jokers without exactly one def: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "jokers without exactly one def: {missing:?}"
+    );
 }
 
 // ----- simple jokers -----

@@ -1,45 +1,45 @@
 n,id,name,rarity,cost,effect,timing,state,rng,copyable,wave,package,source,status
 1,Joker,Joker,Common,2,+4 Mult,joker_main,none,no,yes,3.1,prototypes,https://balatrowiki.org/w/Joker,implemented
 2,GreedyJoker,Greedy Joker,Common,5,+3 Mult for each played scoring card of Diamond suit,card_scored,none,no,yes,3.1,prototypes,https://balatrowiki.org/w/Greedy_Joker,implemented
-3,LustyJoker,Lusty Joker,Common,5,+3 Mult for each played scoring card of Heart suit,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Lusty_Joker,todo
-4,WrathfulJoker,Wrathful Joker,Common,5,+3 Mult for each played scoring card of Spade suit,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Wrathful_Joker,todo
-5,GluttonousJoker,Gluttonous Joker,Common,5,+3 Mult for each played scoring card of Club suit,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Gluttonous_Joker,todo
+3,LustyJoker,Lusty Joker,Common,5,+3 Mult for each played scoring card of Heart suit,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Lusty_Joker,implemented
+4,WrathfulJoker,Wrathful Joker,Common,5,+3 Mult for each played scoring card of Spade suit,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Wrathful_Joker,implemented
+5,GluttonousJoker,Gluttonous Joker,Common,5,+3 Mult for each played scoring card of Club suit,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Gluttonous_Joker,implemented
 6,JollyJoker,Jolly Joker,Common,3,+8 Mult if played hand contains a Pair,joker_main,none,no,yes,3.1,prototypes,https://balatrowiki.org/w/Jolly_Joker,implemented
-7,ZanyJoker,Zany Joker,Common,4,+12 Mult if played hand contains Three of a Kind,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Zany_Joker,todo
-8,MadJoker,Mad Joker,Common,4,+10 Mult if played hand contains Two Pair,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Mad_Joker,todo
-9,CrazyJoker,Crazy Joker,Common,4,+12 Mult if played hand contains a Straight,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Crazy_Joker,todo
-10,DrollJoker,Droll Joker,Common,4,+10 Mult if played hand contains a Flush,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Droll_Joker,todo
-11,SlyJoker,Sly Joker,Common,3,+50 Chips if played hand contains a Pair,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Sly_Joker,todo
-12,WilyJoker,Wily Joker,Common,4,+100 Chips if played hand contains Three of a Kind,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Wily_Joker,todo
-13,CleverJoker,Clever Joker,Common,4,+80 Chips if played hand contains Two Pair,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Clever_Joker,todo
-14,DeviousJoker,Devious Joker,Common,4,+100 Chips if played hand contains a Straight,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Devious_Joker,todo
-15,CraftyJoker,Crafty Joker,Common,4,+80 Chips if played hand contains a Flush,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Crafty_Joker,todo
-16,HalfJoker,Half Joker,Common,5,+20 Mult if played hand has 3 or fewer cards,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Half_Joker,todo
-17,JokerStencil,Joker Stencil,Uncommon,8,X1 Mult for each empty Joker slot (Joker Stencil's own slot counts as empty; other Stencils also count; Negative edition slots add to total),joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Joker_Stencil,todo
+7,ZanyJoker,Zany Joker,Common,4,+12 Mult if played hand contains Three of a Kind,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Zany_Joker,implemented
+8,MadJoker,Mad Joker,Common,4,+10 Mult if played hand contains Two Pair,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Mad_Joker,implemented
+9,CrazyJoker,Crazy Joker,Common,4,+12 Mult if played hand contains a Straight,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Crazy_Joker,implemented
+10,DrollJoker,Droll Joker,Common,4,+10 Mult if played hand contains a Flush,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Droll_Joker,implemented
+11,SlyJoker,Sly Joker,Common,3,+50 Chips if played hand contains a Pair,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Sly_Joker,implemented
+12,WilyJoker,Wily Joker,Common,4,+100 Chips if played hand contains Three of a Kind,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Wily_Joker,implemented
+13,CleverJoker,Clever Joker,Common,4,+80 Chips if played hand contains Two Pair,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Clever_Joker,implemented
+14,DeviousJoker,Devious Joker,Common,4,+100 Chips if played hand contains a Straight,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Devious_Joker,implemented
+15,CraftyJoker,Crafty Joker,Common,4,+80 Chips if played hand contains a Flush,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Crafty_Joker,implemented
+16,HalfJoker,Half Joker,Common,5,+20 Mult if played hand has 3 or fewer cards,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Half_Joker,implemented
+17,JokerStencil,Joker Stencil,Uncommon,8,X1 Mult for each empty Joker slot (Joker Stencil's own slot counts as empty; other Stencils also count; Negative edition slots add to total),joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Joker_Stencil,implemented
 18,FourFingers,Four Fingers,Uncommon,7,Flushes and Straights can be made with 4 cards instead of 5,rule_flag,none,no,no,3.4,prototypes,https://balatrowiki.org/w/Four_Fingers,implemented
 19,Mime,Mime,Uncommon,5,Retriggers the held-in-hand effects of each held card once,held_retrigger,none,no,yes,3.4,prototypes,https://balatrowiki.org/w/Mime,implemented
 20,CreditCard,Credit Card,Common,1,Allows the money balance to go down to -$20 (debt) when buying,passive_rule,none,no,no,3.3,wave3,https://balatrowiki.org/w/Credit_Card,todo
 21,CeremonialDagger,Ceremonial Dagger,Uncommon,6,On Blind select destroy the Joker to its right (nothing if rightmost; Eternal Jokers are not destroyed and give no Mult) and permanently add 2x that Joker's sell value to this Joker's Mult (starts +0),blind_select;joker_main;card_destroyed,counter:mult,no,yes,3.2,wave2a,https://balatrowiki.org/w/Ceremonial_Dagger,todo
-22,Banner,Banner,Common,5,+30 Chips for each discard remaining,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Banner,todo
-23,MysticSummit,Mystic Summit,Common,5,+15 Mult when 0 discards remain,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Mystic_Summit,todo
+22,Banner,Banner,Common,5,+30 Chips for each discard remaining,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Banner,implemented
+23,MysticSummit,Mystic Summit,Common,5,+15 Mult when 0 discards remain,joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Mystic_Summit,implemented
 24,MarbleJoker,Marble Joker,Uncommon,6,On Blind select add one Stone card to the deck,blind_select;card_added,none,no,yes,3.4,wave4a,https://balatrowiki.org/w/Marble_Joker,todo
 25,LoyaltyCard,Loyalty Card,Uncommon,5,"X4 Mult every 6th hand played (counts hands played while owned; 5 hands nothing then 6th hand gives X4, then repeats)",joker_main,counter:hands_played_mod6,no,yes,3.2,wave2a,https://balatrowiki.org/w/Loyalty_Card,todo
 26,EightBall,8 Ball,Common,5,Each played scoring 8 has a 1 in 4 chance to create a Tarot card (needs free consumable slot),card_scored;card_added,none,yes,yes,3.4,wave4a,https://balatrowiki.org/w/8_Ball,todo
-27,Misprint,Misprint,Common,4,Random Mult between +0 and +23 each hand (uniform integer),joker_main,none,yes,yes,3.1,wave1a,https://balatrowiki.org/w/Misprint,todo
+27,Misprint,Misprint,Common,4,Random Mult between +0 and +23 each hand (uniform integer),joker_main,none,yes,yes,3.1,wave1a,https://balatrowiki.org/w/Misprint,implemented
 28,Dusk,Dusk,Uncommon,5,Retriggers all played scoring cards once on the final hand of the round,card_retrigger,none,no,yes,3.4,wave4a,https://balatrowiki.org/w/Dusk,todo
 29,RaisedFist,Raised Fist,Common,5,"Adds Mult equal to 2x the rank of the lowest-ranked held card (ties: rightmost; Ace counts 11, face cards 10)",held_in_hand,none,no,yes,3.1,prototypes,https://balatrowiki.org/w/Raised_Fist,implemented
 30,ChaosTheClown,Chaos the Clown,Common,4,One free reroll in every shop,reroll;passive_rule,none,no,no,3.3,wave3,https://balatrowiki.org/w/Chaos_the_Clown,todo
-31,Fibonacci,Fibonacci,Uncommon,8,"+8 Mult for each played scoring Ace, 2, 3, 5 or 8",card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Fibonacci,todo
-32,SteelJoker,Steel Joker,Uncommon,7,X0.2 Mult for each Steel card in the full deck (total X(1+0.2n)),joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Steel_Joker,todo
-33,ScaryFace,Scary Face,Common,4,+30 Chips for each played scoring face card,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Scary_Face,todo
-34,AbstractJoker,Abstract Joker,Common,4,+3 Mult for each Joker owned (including itself),joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Abstract_Joker,todo
+31,Fibonacci,Fibonacci,Uncommon,8,"+8 Mult for each played scoring Ace, 2, 3, 5 or 8",card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Fibonacci,implemented
+32,SteelJoker,Steel Joker,Uncommon,7,X0.2 Mult for each Steel card in the full deck (total X(1+0.2n)),joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Steel_Joker,implemented
+33,ScaryFace,Scary Face,Common,4,+30 Chips for each played scoring face card,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Scary_Face,implemented
+34,AbstractJoker,Abstract Joker,Common,4,+3 Mult for each Joker owned (including itself),joker_main,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Abstract_Joker,implemented
 35,DelayedGratification,Delayed Gratification,Common,4,At round end earn $2 per discard remaining if no discards were used this round,round_end,none,no,no,3.3,wave3,https://balatrowiki.org/w/Delayed_Gratification,todo
 36,Hack,Hack,Uncommon,6,"Retriggers each played scoring 2, 3, 4 or 5 once",card_retrigger,none,no,yes,3.4,prototypes,https://balatrowiki.org/w/Hack,implemented
 37,Pareidolia,Pareidolia,Uncommon,5,All cards count as face cards,rule_flag,none,no,no,3.4,wave4a,https://balatrowiki.org/w/Pareidolia,todo
 38,GrosMichel,Gros Michel,Common,5,+15 Mult; at round end 1 in 6 chance it is destroyed. Only appears while Gros Michel has not gone extinct this run,joker_main;round_end,none,yes,yes,3.2,wave2a,https://balatrowiki.org/w/Gros_Michel,todo
-39,EvenSteven,Even Steven,Common,4,"+4 Mult for each played scoring card of even rank (10, 8, 6, 4, 2)",card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Even_Steven,todo
-40,OddTodd,Odd Todd,Common,4,"+31 Chips for each played scoring card of odd rank (A, 9, 7, 5, 3)",card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Odd_Todd,todo
-41,Scholar,Scholar,Common,4,Each played scoring Ace gives +20 Chips and +4 Mult,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Scholar,todo
+39,EvenSteven,Even Steven,Common,4,"+4 Mult for each played scoring card of even rank (10, 8, 6, 4, 2)",card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Even_Steven,implemented
+40,OddTodd,Odd Todd,Common,4,"+31 Chips for each played scoring card of odd rank (A, 9, 7, 5, 3)",card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Odd_Todd,implemented
+41,Scholar,Scholar,Common,4,Each played scoring Ace gives +20 Chips and +4 Mult,card_scored,none,no,yes,3.1,wave1a,https://balatrowiki.org/w/Scholar,implemented
 42,BusinessCard,Business Card,Common,4,Each played scoring face card has a 1 in 2 chance to earn $2,card_scored,none,yes,yes,3.3,wave3,https://balatrowiki.org/w/Business_Card,todo
 43,Supernova,Supernova,Common,5,+Mult equal to the number of times the played hand type has been played this run,joker_main,none,no,yes,3.2,prototypes,https://balatrowiki.org/w/Supernova,implemented
 44,RideTheBus,Ride the Bus,Common,6,+1 Mult for each consecutive hand played without a scoring face card (starts +0; resets to 0 when a face card scores),before_scoring;joker_main,counter:mult+reset,no,yes,3.2,prototypes,https://balatrowiki.org/w/Ride_the_Bus,implemented
