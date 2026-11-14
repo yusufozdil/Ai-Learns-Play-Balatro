@@ -368,7 +368,7 @@ pub fn evaluate(cards: &[Card], flags: &RuleFlags) -> HandEval {
 /// `scoring_mask` indexes the selection, not the hand). Per-card data is computed once and no
 /// per-subset allocation happens (`out` only grows if its capacity is short). A hand longer than
 /// 16 cards trips a `debug_assert!`; in release only the first 16 are used.
-pub fn evaluate_all_subsets(hand: &[Card], flags: &RuleFlags, out: &mut Vec<(u16, HandEval)>) {
+pub fn evaluate_all_subsets(hand: &[Card], flags: &RuleFlags, out: &mut Vec<(u32, HandEval)>) {
     debug_assert!(
         hand.len() <= MAX_HAND,
         "evaluate_all_subsets: at most {MAX_HAND} cards"
@@ -400,6 +400,6 @@ pub fn evaluate_all_subsets(hand: &[Card], flags: &RuleFlags, out: &mut Vec<(u16
             n += 1;
             bits &= bits - 1;
         }
-        out.push((mask as u16, eval_infos(&sel, n, flags)));
+        out.push((mask, eval_infos(&sel, n, flags)));
     }
 }

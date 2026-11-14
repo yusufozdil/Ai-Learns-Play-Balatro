@@ -1,4 +1,4 @@
-//! [`Action`] (card selections are `u16` bitmasks over hand positions, bit i = hand card i),
+//! [`Action`] (card selections are `u32` bitmasks over hand positions, bit i = hand card i, up to 32),
 //! [`ActionError`], action validation and per-phase legal-action generation.
 //!
 //! Contract: [`validate`] is pure and is the single gate of `Game::step`; an action that passes
@@ -10,7 +10,7 @@ use crate::blinds::BlindKind;
 use crate::boss;
 use crate::consumable::{ConsumableDef, MAX_CONSUMABLE_TARGETS, UseCheck};
 use crate::content::try_consumable_def;
-use crate::data::run_rules::MAX_SELECTED_CARDS;
+use crate::data::run_rules::{MAX_SELECTABLE_HAND, MAX_SELECTED_CARDS};
 use crate::data::shop_weights::BOSS_REROLL_COST;
 use crate::enums::Phase;
 use crate::packs::{self, PackItem};
@@ -30,9 +30,9 @@ pub enum Action {
     /// BlindSelect: skip the Small/Big blind for its tag (never the Boss).
     SkipBlind,
     /// Play: play the selected hand cards (1-5), left to right in hand order.
-    Play(u16),
+    Play(u32),
     /// Play: discard the selected hand cards (1-5).
-    Discard(u16),
+    Discard(u32),
     /// Any phase but game over: sell the joker in this slot.
     SellJoker(u8),
     /// Shop: leave the shop.
@@ -43,7 +43,7 @@ pub enum Action {
         /// Consumable slot.
         slot: u8,
         /// Selected hand cards (bitmask), 0 if the consumable has no targets.
-        targets: u16,
+        targets: u32,
     },
     /// Any phase but game over: sell the consumable in this slot.
     SellConsumable(u8),
@@ -72,7 +72,7 @@ pub enum Action {
         /// Pack item.
         index: u8,
         /// Selected hand cards (bitmask).
-        targets: u16,
+        targets: u32,
     },
     /// PackOpen: skip the rest of the pack.
     SkipPack,
@@ -121,7 +121,7 @@ pub enum ActionError {
     #[error("selection {mask:#b} exceeds hand of {hand_len} cards")]
     SelectionOutOfRange {
         /// Offending mask.
-        mask: u16,
+        mask: u32,
         /// Hand length.
         hand_len: usize,
     },
@@ -219,8 +219,9 @@ pub enum ActionError {
     },
 }
 
-/// Validate a card selection over a hand of `hand_len` cards: 1..=5 bits, all inside the hand.
-pub fn validate_selection(mask: u16, hand_len: usize) -> Result<(), ActionError> {
+/// Validate a card selection over a hand of `hand_len` cards: 1..=5 bits, all inside the hand
+/// (positions 0..32 are addressable, [`MAX_SELECTABLE_HAND`]).
+pub fn validate_selection(mask: u32, hand_len: usize) -> Result<(), ActionError> {
     if mask == 0 {
         return Err(ActionError::EmptySelection);
     }
@@ -231,7 +232,7 @@ pub fn validate_selection(mask: u16, hand_len: usize) -> Result<(), ActionError>
             max: MAX_SELECTED_CARDS,
         });
     }
-    if hand_len < 16 && (mask >> hand_len) != 0 {
+    if hand_len < MAX_SELECTABLE_HAND && (mask >> hand_len) != 0 {
         return Err(ActionError::SelectionOutOfRange { mask, hand_len });
     }
     Ok(())
@@ -455,7 +456,7 @@ pub fn boss_reroll_available(state: &GameState) -> bool {
 /// Validate taking pack item `index` with hand-card `targets`: the item exists; a consumable
 /// follows the same target rules as `validate_use` (slot `None`, see `UseCheck`); a joker needs a
 /// free slot (Negative excepted); a playing card always fits. Pure.
-pub fn validate_pick(state: &GameState, index: u8, targets: u16) -> Result<(), ActionError> {
+pub fn validate_pick(state: &GameState, index: u8, targets: u32) -> Result<(), ActionError> {
     let pack = state.pack.as_ref().ok_or(ActionError::WrongPhase {
         action: Action::PickPackItem { index, targets },
         phase: state.phase,
@@ -498,9 +499,9 @@ pub fn validate_pick(state: &GameState, index: u8, targets: u16) -> Result<(), A
 }
 
 /// Cerulean Bell: a Play/Discard selection must contain the force-selected card.
-fn check_forced(state: &GameState, mask: u16) -> Result<(), ActionError> {
+fn check_forced(state: &GameState, mask: u32) -> Result<(), ActionError> {
     match boss::forced_position(state) {
-        Some(p) if p < 16 && (mask >> p) & 1 == 0 => {
+        Some(p) if p < MAX_SELECTABLE_HAND && (mask >> p) & 1 == 0 => {
             Err(ActionError::ForcedCardMissing { position: p })
         }
         _ => Ok(()),
@@ -511,7 +512,7 @@ fn check_forced(state: &GameState, mask: u16) -> Result<(), ActionError> {
 /// exists and is defined; cards needing a hand only in `Phase::Play`; untargeted cards need
 /// `targets == 0`, targeted ones `min..=max` selected cards inside the hand; then the card's
 /// own `can_use`. Pure.
-pub fn validate_use(state: &GameState, slot: u8, targets: u16) -> Result<(), ActionError> {
+pub fn validate_use(state: &GameState, slot: u8, targets: u32) -> Result<(), ActionError> {
     let c = state
         .consumables
         .get(usize::from(slot))
@@ -528,7 +529,7 @@ pub fn validate_use(state: &GameState, slot: u8, targets: u16) -> Result<(), Act
 pub fn validate_use_def(
     state: &GameState,
     def: &ConsumableDef,
-    targets: u16,
+    targets: u32,
     slot: Option<usize>,
 ) -> Result<(), ActionError> {
     if def.requires_hand() && state.deck.hand.is_empty() {
@@ -545,7 +546,7 @@ pub fn validate_use_def(
         }
     } else {
         let hand_len = state.deck.hand.len();
-        if hand_len < 16 && (targets >> hand_len) != 0 {
+        if hand_len < MAX_SELECTABLE_HAND && (targets >> hand_len) != 0 {
             return Err(ActionError::SelectionOutOfRange {
                 mask: targets,
                 hand_len,
@@ -568,56 +569,154 @@ pub fn validate_use_def(
     Ok(())
 }
 
-/// Precomputed selection tables (built once).
+/// Hand sizes up to this have precomputed selection tables (every mask with 1..=5 bits over 16
+/// cards: 6 884 masks). Longer hands (Certificate, DNA, Familiar & co. can push the hand past the
+/// hand size) generate their selections lazily with [`MaskIter`]; their list is far larger
+/// (C(17, 1..=5) = 9 000 .. C(32, 1..=5) = 242 824 masks), which is why the env codec builds
+/// card selections one card at a time (see [`crate::action_mask`]) instead of listing them.
+const TABLE_HAND: usize = 16;
+
+/// Precomputed selection tables (built once, small hands only).
 struct SelectionTables {
-    /// Every mask with 1..=5 bits over 16 cards, ascending.
-    masks: Vec<u16>,
+    /// Every mask with 1..=5 bits over [`TABLE_HAND`] cards, ascending.
+    masks: Vec<u32>,
     /// `Action::Play(m)` for every mask (same order).
     play: Vec<Action>,
     /// `Action::Discard(m)` for every mask (same order).
     discard: Vec<Action>,
+    /// `prefix[n]` = number of table entries that fit a hand of `n` cards.
+    prefix: [usize; TABLE_HAND + 1],
 }
 
 fn tables() -> &'static SelectionTables {
     static TABLE: OnceLock<SelectionTables> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let masks: Vec<u16> = (1u32..=u32::from(u16::MAX))
+        let masks: Vec<u32> = (1u32..(1u32 << TABLE_HAND))
             .filter(|m| m.count_ones() <= MAX_SELECTED_CARDS)
-            .map(|m| m as u16)
             .collect();
+        let prefix = std::array::from_fn(|n| {
+            let limit = 1u32 << n;
+            masks.partition_point(|&m| m < limit)
+        });
         SelectionTables {
             play: masks.iter().map(|&m| Action::Play(m)).collect(),
             discard: masks.iter().map(|&m| Action::Discard(m)).collect(),
             masks,
+            prefix,
         }
     })
 }
 
-/// Number of table entries (a prefix) that fit a hand of `hand_len` cards. The masks of a shorter
-/// hand are a prefix of the masks of a longer one, so one table serves every hand size.
-fn prefix_len(t: &SelectionTables, hand_len: usize) -> usize {
-    let n = hand_len.min(16);
-    if n == 0 {
-        return 0;
-    }
-    let limit = 1u32 << n;
-    t.masks.partition_point(|&m| u32::from(m) < limit)
+/// Every card selection with 1..=5 cards over a hand of `hand_len <= TABLE_HAND` cards, ascending.
+/// The masks of a shorter hand are a prefix of the masks of a longer one, so one table serves
+/// every hand size.
+fn selections(hand_len: usize) -> &'static [u32] {
+    let t = tables();
+    &t.masks[..t.prefix[hand_len.min(TABLE_HAND)]]
 }
 
-/// Every card selection with 1..=5 cards over a hand of `hand_len` cards, ascending.
-fn selections(hand_len: usize) -> &'static [u16] {
-    let t = tables();
-    &t.masks[..prefix_len(t, hand_len)]
+/// Smallest mask above `m` with at most `max_bits` bits set that fits `n` hand positions
+/// (`None` when there is none). `max_bits >= 1`. Carry trick: when `m + 1` has too many bits, the
+/// whole run of ones at its lowest set bit cannot yield a valid mask (every number up to the end
+/// of the run keeps those bits), so the run is skipped by adding the lowest set bit.
+#[inline]
+fn next_mask(m: u32, n: usize, max_bits: u32) -> Option<u32> {
+    debug_assert!(max_bits >= 1);
+    let mut x = u64::from(m) + 1;
+    while x.count_ones() > max_bits {
+        x += x.isolate_lowest_one();
+    }
+    (x < (1u64 << n.min(MAX_SELECTABLE_HAND))).then_some(x as u32)
+}
+
+/// Ascending iterator over every non-empty card selection of at most `max_bits` cards over `n`
+/// hand positions (`n <= 32`), optionally restricted to masks containing all of `required`. No
+/// table and no allocation: works for any hand size. For `n <= 16` and `max_bits = 5` it yields
+/// the same masks, in the same order, as the precomputed tables.
+#[derive(Debug, Clone)]
+pub struct MaskIter {
+    n: usize,
+    max_bits: u32,
+    required: u32,
+    last: u32,
+}
+
+impl MaskIter {
+    /// Selections of `1..=max_bits` cards over `n` positions that contain every bit of
+    /// `required`.
+    pub fn new(n: usize, max_bits: u32, required: u32) -> Self {
+        MaskIter {
+            n,
+            max_bits: max_bits.max(1),
+            required,
+            last: 0,
+        }
+    }
+}
+
+impl Iterator for MaskIter {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        loop {
+            let m = next_mask(self.last, self.n, self.max_bits)?;
+            self.last = m;
+            if m & self.required == self.required {
+                return Some(m);
+            }
+        }
+    }
+}
+
+/// Iterator of [`SelectionSpace::iter`]: a table slice for small hands, [`MaskIter`] otherwise.
+#[derive(Debug, Clone)]
+pub enum SelectionIter {
+    /// Precomputed (hand of at most 16 cards).
+    Table {
+        /// Remaining table entries.
+        masks: std::slice::Iter<'static, u32>,
+        /// Bits every mask must contain (0 = none).
+        required: u32,
+    },
+    /// Generated (longer hands).
+    Generated(MaskIter),
+}
+
+impl Iterator for SelectionIter {
+    type Item = u32;
+
+    #[inline]
+    fn next(&mut self) -> Option<u32> {
+        match self {
+            SelectionIter::Table { masks, required } => {
+                masks.find(|&&m| m & *required == *required).copied()
+            }
+            SelectionIter::Generated(g) => g.next(),
+        }
+    }
+}
+
+/// `C(n, k)` (small arguments).
+fn binom(n: usize, k: usize) -> u64 {
+    if k > n {
+        return 0;
+    }
+    let mut r = 1u64;
+    for j in 1..=k.min(n - k) {
+        r = r * (n - j + 1) as u64 / j as u64;
+    }
+    r
 }
 
 /// The legal `Play` / `Discard` card selections of the current state, described without
-/// materialising the actions: the legal masks are `masks` (ascending; only those containing
-/// `forced`, if set), offered as `Play` when `can_play` and as `Discard` when `can_discard`.
-/// `legal_actions` lists the `Play` masks, then the `Discard` masks, in this order.
+/// materialising the actions: the legal masks are all 1..=5 card selections over the hand
+/// (ascending; only those containing `forced`, if set), offered as `Play` when `can_play` and as
+/// `Discard` when `can_discard`. `legal_actions` lists the `Play` masks, then the `Discard` masks,
+/// in this order.
 #[derive(Debug, Clone, Copy)]
 pub struct SelectionSpace {
-    /// All 1..=5 card selections over the hand, ascending.
-    pub masks: &'static [u16],
+    /// Cards in hand (selections address positions `0..min(hand_len, 32)`).
+    pub hand_len: usize,
     /// Hand position every selection must contain (Cerulean Bell), if any.
     pub forced: Option<u8>,
     /// `Play(mask)` is legal for the masks.
@@ -629,20 +728,40 @@ pub struct SelectionSpace {
 impl SelectionSpace {
     /// `mask` is one of the legal selections (before the play/discard split).
     #[inline]
-    pub fn allows(&self, mask: u16) -> bool {
+    pub fn allows(&self, mask: u32) -> bool {
         self.forced.is_none_or(|p| (mask >> p) & 1 == 1)
     }
 
-    /// The legal masks, ascending.
-    pub fn iter(&self) -> impl Iterator<Item = u16> + '_ {
-        self.masks.iter().copied().filter(|&m| self.allows(m))
+    /// The precomputed ascending mask table of this hand (all 1..=5 card selections, before the
+    /// forced-card filter) when the hand is small enough (`<= 16` cards); `None` for longer hands.
+    pub fn table(&self) -> Option<&'static [u32]> {
+        (self.hand_len <= TABLE_HAND).then(|| selections(self.hand_len))
     }
 
-    /// Number of legal masks.
+    /// The legal masks, ascending (generated lazily for hands over 16 cards).
+    pub fn iter(&self) -> SelectionIter {
+        let required = self.forced.map_or(0, |p| 1u32 << p);
+        match self.table() {
+            Some(masks) => SelectionIter::Table {
+                masks: masks.iter(),
+                required,
+            },
+            None => {
+                SelectionIter::Generated(MaskIter::new(self.hand_len, MAX_SELECTED_CARDS, required))
+            }
+        }
+    }
+
+    /// Number of legal masks (closed form, no enumeration).
     pub fn mask_count(&self) -> usize {
+        let n = self.hand_len.min(MAX_SELECTABLE_HAND);
+        let k_max = MAX_SELECTED_CARDS as usize;
         match self.forced {
-            None => self.masks.len(),
-            Some(_) => self.iter().count(),
+            None => (1..=k_max).map(|k| binom(n, k)).sum::<u64>() as usize,
+            Some(p) if usize::from(p) < n => {
+                (1..=k_max).map(|k| binom(n - 1, k - 1)).sum::<u64>() as usize
+            }
+            Some(_) => 0,
         }
     }
 
@@ -661,16 +780,16 @@ impl SelectionSpace {
 pub fn selection_space(state: &GameState) -> SelectionSpace {
     if state.phase != Phase::Play || state.is_terminal() {
         return SelectionSpace {
-            masks: &[],
+            hand_len: 0,
             forced: None,
             can_play: false,
             can_discard: false,
         };
     }
     SelectionSpace {
-        masks: selections(state.deck.hand.len()),
+        hand_len: state.deck.hand.len(),
         forced: boss::forced_position(state)
-            .filter(|&p| p < 16)
+            .filter(|&p| p < MAX_SELECTABLE_HAND)
             .map(|p| p as u8),
         can_play: state.hands_left > 0,
         can_discard: state.discards_left > 0,
@@ -700,8 +819,10 @@ pub fn legal_count(state: &GameState) -> usize {
 /// gets every selection whose size is in `min_targets..=max_targets` (at most
 /// `MAX_CONSUMABLE_TARGETS` = 3: 92 masks for 8 cards) that passes `validate`. Cerulean Bell
 /// restricts Play/Discard masks to those containing the forced card (not consumable targets).
-/// Exhaustive enumeration (218 Play + 218 Discard masks for 8 cards); envs that only need a count
-/// or a mask use [`legal_count`] / [`selection_space`] and never build the list.
+/// Exhaustive enumeration (218 Play + 218 Discard masks for 8 cards; a 17-card hand already has
+/// 2 x 9 000, a 32-card hand 2 x 242 824, generated lazily); envs that only need a count, a mask
+/// or a structured choice use [`legal_count`] / [`selection_space`] /
+/// [`crate::action_mask::structured_mask`] and never build the list.
 pub fn legal_actions(state: &GameState, out: &mut Vec<Action>) {
     legal_actions_impl(state, out, true);
 }
@@ -734,6 +855,7 @@ fn legal_actions_impl(state: &GameState, out: &mut Vec<Action>, with_selections:
             }
         }
     };
+    let hand_len = state.deck.hand.len();
     match state.phase {
         Phase::BlindSelect => {
             out.push(Action::SelectBlind);
@@ -745,40 +867,36 @@ fn legal_actions_impl(state: &GameState, out: &mut Vec<Action>, with_selections:
             }
             sell(out);
             moves(out);
-            consumable_actions(state, &[], out);
+            consumable_actions(state, 0, out);
         }
         Phase::Play => {
-            let masks = selections(state.deck.hand.len());
             if with_selections {
-                let t = tables();
-                let k = masks.len();
-                let forced = boss::forced_position(state).filter(|&p| p < 16);
-                out.reserve(k * 2);
-                if forced.is_none() {
-                    if state.hands_left > 0 {
-                        out.extend_from_slice(&t.play[..k]);
+                let space = selection_space(state);
+                match (space.table(), space.forced) {
+                    (Some(masks), None) => {
+                        let t = tables();
+                        let k = masks.len();
+                        out.reserve(k * 2);
+                        if space.can_play {
+                            out.extend_from_slice(&t.play[..k]);
+                        }
+                        if space.can_discard {
+                            out.extend_from_slice(&t.discard[..k]);
+                        }
                     }
-                    if state.discards_left > 0 {
-                        out.extend_from_slice(&t.discard[..k]);
-                    }
-                } else {
-                    let ok = |m: u16| forced.is_none_or(|p| (m >> p) & 1 == 1);
-                    if state.hands_left > 0 {
-                        out.extend(masks.iter().filter(|&&m| ok(m)).map(|&m| Action::Play(m)));
-                    }
-                    if state.discards_left > 0 {
-                        out.extend(
-                            masks
-                                .iter()
-                                .filter(|&&m| ok(m))
-                                .map(|&m| Action::Discard(m)),
-                        );
+                    _ => {
+                        if space.can_play {
+                            out.extend(space.iter().map(Action::Play));
+                        }
+                        if space.can_discard {
+                            out.extend(space.iter().map(Action::Discard));
+                        }
                     }
                 }
             }
             sell(out);
             moves(out);
-            consumable_actions(state, masks, out);
+            consumable_actions(state, hand_len, out);
         }
         Phase::Shop => {
             out.push(Action::EndShop);
@@ -801,10 +919,9 @@ fn legal_actions_impl(state: &GameState, out: &mut Vec<Action>, with_selections:
             push_if(Action::Reroll, out);
             sell(out);
             moves(out);
-            consumable_actions(state, &[], out);
+            consumable_actions(state, 0, out);
         }
         Phase::PackOpen => {
-            let masks = selections(state.deck.hand.len());
             if let Some(pack) = &state.pack {
                 for (i, item) in pack.items.iter().enumerate() {
                     let (Some(item), Ok(index)) = (item, u8::try_from(i)) else {
@@ -820,13 +937,10 @@ fn legal_actions_impl(state: &GameState, out: &mut Vec<Action>, with_selections:
                                     out.push(Action::PickPackItem { index, targets: 0 });
                                 }
                             } else {
-                                let (lo, hi) = (
-                                    u32::from(def.min_targets),
-                                    u32::from(def.max_targets.min(MAX_CONSUMABLE_TARGETS)),
-                                );
-                                for &m in masks {
-                                    let k = m.count_ones();
-                                    if k >= lo && k <= hi && validate_pick(state, index, m).is_ok()
+                                let (lo, hi) = target_range(def);
+                                for m in MaskIter::new(hand_len, hi, 0) {
+                                    if m.count_ones() >= lo
+                                        && validate_pick(state, index, m).is_ok()
                                     {
                                         out.push(Action::PickPackItem { index, targets: m });
                                     }
@@ -844,15 +958,24 @@ fn legal_actions_impl(state: &GameState, out: &mut Vec<Action>, with_selections:
             out.push(Action::SkipPack);
             sell(out);
             moves(out);
-            consumable_actions(state, masks, out);
+            consumable_actions(state, hand_len, out);
         }
         Phase::GameOver | Phase::Won => {}
     }
 }
 
+/// Allowed number of target cards `(min, max)` of a targeted consumable (`max <=
+/// MAX_CONSUMABLE_TARGETS`).
+pub(crate) fn target_range(def: &ConsumableDef) -> (u32, u32) {
+    (
+        u32::from(def.min_targets),
+        u32::from(def.max_targets.min(MAX_CONSUMABLE_TARGETS)),
+    )
+}
+
 /// Per consumable slot: legal `UseConsumable` actions (see [`legal_actions`]) then
-/// `SellConsumable`. `masks` = all 1..=5 card selections of the hand (ascending).
-fn consumable_actions(state: &GameState, masks: &[u16], out: &mut Vec<Action>) {
+/// `SellConsumable`. `hand_len` = cards in hand (selections are generated, not tabled).
+fn consumable_actions(state: &GameState, hand_len: usize, out: &mut Vec<Action>) {
     for (i, c) in state.consumables.iter().enumerate() {
         let Ok(slot) = u8::try_from(i) else {
             break;
@@ -863,13 +986,9 @@ fn consumable_actions(state: &GameState, masks: &[u16], out: &mut Vec<Action>) {
                     out.push(Action::UseConsumable { slot, targets: 0 });
                 }
             } else {
-                let (lo, hi) = (
-                    u32::from(def.min_targets),
-                    u32::from(def.max_targets.min(MAX_CONSUMABLE_TARGETS)),
-                );
-                for &m in masks {
-                    let k = m.count_ones();
-                    if k >= lo && k <= hi && validate_use(state, slot, m).is_ok() {
+                let (lo, hi) = target_range(def);
+                for m in MaskIter::new(hand_len, hi, 0) {
+                    if m.count_ones() >= lo && validate_use(state, slot, m).is_ok() {
                         out.push(Action::UseConsumable { slot, targets: m });
                     }
                 }

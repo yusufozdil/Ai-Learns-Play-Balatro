@@ -17,10 +17,14 @@
 //! The [`Strategy`] is the state the experts share: target hand weights, dominant suit and the
 //! economy mode. The agent owns its RNG (never `state.rng`) and is deterministic given the game.
 //!
-//! Information note: like the Greedy agent, scoring previews run on a clone of the game's RNG, so
-//! probabilistic card/joker effects (Lucky, Misprint, Bloodstone...) of the played hand resolve
-//! exactly as the real play would, and face-down cards are read normally. A fair-information
-//! teacher would need a preview that hides both.
+//! Information (`HeuristicConfig::fair_info`, default on): the agent acts on
+//! [`Game::fair_view`] of the game, a copy in which face-down hand cards are replaced by samples
+//! of the unseen cards and the RNG is an independent stream, so no preview or simulation can read
+//! hidden cards or the outcome of the real future rolls (Lucky, Misprint, Bloodstone...). With
+//! `fair_info = false` the agent uses full information like before Phase 8A (previews run on a
+//! clone of the real RNG and read face-down cards): an upper bound, not a teacher for a policy
+//! that observes only what the player sees. Known residual leaks: the order of jokers under Amber
+//! Acorn, and the hand position of face-down cards (the hand was rank-sorted with their identity).
 
 mod consumables;
 mod hand;
@@ -34,7 +38,7 @@ use crate::card::Card;
 use crate::content::jokers::JokerId;
 use crate::enums::{HandType, Phase, Suit};
 use crate::game::Game;
-use crate::rng::GameRng;
+use crate::rng::{GameRng, RngKey};
 use crate::scoring::Scorer;
 use crate::state::GameState;
 use valuer::Valuer;
@@ -171,6 +175,9 @@ pub struct HeuristicConfig {
     pub arrange_min_gain: f64,
     /// Smallest value of a Buffoon pack joker worth taking.
     pub pack_joker_min: f64,
+    /// Fair information (see the module docs): decide on [`Game::fair_view`], never on the real
+    /// RNG or on face-down cards. `false` = full information.
+    pub fair_info: bool,
 }
 
 impl Default for HeuristicConfig {
@@ -199,6 +206,7 @@ impl Default for HeuristicConfig {
             boss_reroll_reserve: 0,
             arrange_min_gain: 0.02,
             pack_joker_min: 0.15,
+            fair_info: true,
         }
     }
 }
@@ -241,7 +249,8 @@ impl HeuristicConfig {
             discard_base,
             discard_slope,
             pace,
-            boss_reroll_reserve
+            boss_reroll_reserve,
+            fair_info
         )
     }
 }
@@ -347,7 +356,18 @@ impl HeuristicAgent {
 }
 
 impl Agent for HeuristicAgent {
-    fn act(&mut self, game: &Game) -> Action {
+    fn act(&mut self, real: &Game) -> Action {
+        // The experts see the player's view: hidden cards sampled, independent RNG stream. The
+        // copy has the same phase, slots and hand positions, so the chosen action is valid on
+        // the real game (checked below).
+        let fair;
+        let game = if self.cfg.fair_info && !real.is_terminal() {
+            let seed = self.rng.next_u64(RngKey::Misc);
+            fair = real.fair_view(seed);
+            &fair
+        } else {
+            real
+        };
         let s = game.state();
         self.strat.refresh(s);
         self.valuer.full = false;
@@ -358,10 +378,10 @@ impl Agent for HeuristicAgent {
             Phase::PackOpen => self.pack_action(game),
             Phase::GameOver | Phase::Won => Action::EndShop,
         };
-        if game.validate(a).is_ok() {
+        if real.validate(a).is_ok() {
             a
         } else {
-            Self::fallback(game)
+            Self::fallback(real)
         }
     }
 }

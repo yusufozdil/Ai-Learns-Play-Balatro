@@ -48,7 +48,7 @@ fn give(g: &mut Game, id: C) -> usize {
     g.add_consumable(ConsumableInstance::new(id)).expect("room")
 }
 
-fn use_c(g: &mut Game, slot: u8, targets: u16) -> Result<StepInfo, ActionError> {
+fn use_c(g: &mut Game, slot: u8, targets: u32) -> Result<StepInfo, ActionError> {
     g.step(Action::UseConsumable { slot, targets })
 }
 
@@ -628,7 +628,7 @@ fn legal_actions_list_every_valid_use_and_sale() {
     assert!(legal.contains(&Action::SellConsumable(1)));
     // Every candidate use is legal iff it validates.
     for slot in 0..3u8 {
-        for targets in 0u16..256 {
+        for targets in 0u32..256 {
             let a = Action::UseConsumable { slot, targets };
             assert_eq!(legal.contains(&a), g.validate(a).is_ok(), "{a:?}");
         }

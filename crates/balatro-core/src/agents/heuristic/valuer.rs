@@ -45,11 +45,14 @@ pub fn draw_random(rng: &mut GameRng, pool: &[Card], k: usize, buf: &mut Vec<Car
 pub fn pruned_masks(
     hand: &[Card],
     rules: &RuleFlags,
-    scratch: &mut Vec<(u16, HandEval)>,
-    keyed: &mut Vec<(u16, u8, u16)>,
-    out: &mut Vec<u16>,
+    scratch: &mut Vec<(u32, HandEval)>,
+    keyed: &mut Vec<(u32, u8, u32)>,
+    out: &mut Vec<u32>,
     full: bool,
 ) {
+    // Subset enumeration covers the 16 leftmost cards (`hand_eval::MAX_HAND`); the extra cards of a
+    // hand longer than that (Certificate & co.) are never part of a considered selection.
+    let hand = &hand[..hand.len().min(hand_eval::MAX_HAND)];
     hand_eval::evaluate_all_subsets(hand, rules, scratch);
     out.clear();
     if full {
@@ -58,7 +61,7 @@ pub fn pruned_masks(
     }
     keyed.clear();
     for &(mask, ev) in scratch.iter() {
-        let mut key = 0u16;
+        let mut key = 0u32;
         let mut j = 0usize;
         for i in 0..hand.len().min(16) {
             if (mask >> i) & 1 == 1 {
@@ -79,9 +82,9 @@ pub fn pruned_masks(
 #[derive(Debug, Default)]
 pub struct Valuer {
     scorer: Scorer,
-    subsets: Vec<(u16, HandEval)>,
-    keyed: Vec<(u16, u8, u16)>,
-    masks: Vec<u16>,
+    subsets: Vec<(u32, HandEval)>,
+    keyed: Vec<(u32, u8, u32)>,
+    masks: Vec<u32>,
     /// Preview every selection (needed while a boss demands exactly five cards).
     pub full: bool,
 }
@@ -140,7 +143,7 @@ impl Valuer {
 
     /// Best previewed score over the (pruned) selections of `hand` on `g`, with the mask and the
     /// hand type. `g` must be in `Play`; its hand is overwritten.
-    pub fn best_play(&mut self, g: &mut Game, hand: &[Card]) -> (f64, u16, HandType) {
+    pub fn best_play(&mut self, g: &mut Game, hand: &[Card]) -> (f64, u32, HandType) {
         {
             let h = &mut g.state_mut().deck.hand;
             h.clear();
@@ -155,7 +158,7 @@ impl Valuer {
             &mut self.masks,
             self.full,
         );
-        let mut best = (0.0f64, 0u16, HandType::HighCard);
+        let mut best = (0.0f64, 0u32, HandType::HighCard);
         for &m in &self.masks {
             if let Ok(r) = g.preview_play_with(&mut self.scorer, m) {
                 let sc = if r.invalid { 0.0 } else { r.score };
@@ -174,7 +177,7 @@ impl Valuer {
             h.clear();
             h.extend_from_slice(cards);
         }
-        let mask = ((1u32 << cards.len()) - 1) as u16;
+        let mask = (1u32 << cards.len()) - 1;
         match g.preview_play_with(&mut self.scorer, mask) {
             Ok(r) if !r.invalid => r.score,
             _ => 0.0,

@@ -2,6 +2,7 @@
 //! Cards are owned by exactly one pile; the full deck is the union of all piles.
 
 use crate::card::Card;
+use crate::data::run_rules::MAX_SELECTABLE_HAND;
 use crate::enums::{Rank, Suit};
 use crate::rng::{GameRng, RngKey};
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ pub enum DeckError {
     #[error("mask {mask:#b} selects positions beyond hand size {hand_len}")]
     MaskOutOfRange {
         /// Offending mask.
-        mask: u16,
+        mask: u32,
         /// Current hand size.
         hand_len: usize,
     },
@@ -162,12 +163,12 @@ impl Deck {
 
     /// Remove and return the hand cards selected by `mask` (bit i = position i), in left-to-right
     /// order. Errors on an empty mask or bits beyond the hand size; the hand is unchanged on error.
-    pub fn take_from_hand(&mut self, mask: u16) -> Result<Vec<Card>, DeckError> {
+    pub fn take_from_hand(&mut self, mask: u32) -> Result<Vec<Card>, DeckError> {
         if mask == 0 {
             return Err(DeckError::EmptyMask);
         }
         let n = self.hand.len();
-        if n < 16 && (mask >> n) != 0 {
+        if n < MAX_SELECTABLE_HAND && (mask >> n) != 0 {
             return Err(DeckError::MaskOutOfRange { mask, hand_len: n });
         }
         let mut taken = Vec::with_capacity(mask.count_ones() as usize);
@@ -175,7 +176,7 @@ impl Deck {
         let mut kept = 0;
         for i in 0..n {
             let c = self.hand[i];
-            if i < 16 && (mask >> i) & 1 == 1 {
+            if i < MAX_SELECTABLE_HAND && (mask >> i) & 1 == 1 {
                 taken.push(c);
             } else {
                 self.hand[kept] = c;
@@ -192,7 +193,7 @@ impl Deck {
     }
 
     /// Discard the hand cards selected by `mask`; returns them. Same errors as `take_from_hand`.
-    pub fn discard_from_hand(&mut self, mask: u16) -> Result<Vec<Card>, DeckError> {
+    pub fn discard_from_hand(&mut self, mask: u32) -> Result<Vec<Card>, DeckError> {
         let taken = self.take_from_hand(mask)?;
         self.discard_pile.extend_from_slice(&taken);
         Ok(taken)

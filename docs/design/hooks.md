@@ -503,7 +503,9 @@ fn four_fingers_modifiers(_: &JokerInstance, m: &mut Modifiers) { m.rules.four_f
   The Hook's forced discard + its `fire_discard(forced: true)`, The Tooth/Ox money, The Arm
   level, `boss.hand_invalid/triggered`), fill `RunView`, then `score_hand` with
   `&mut deck.played` (card mutations persist). `Game::preview_play` runs the same pre-play hook
-  and forced-discard event on copies. Card debuffs come from the boss (`boss::refresh_debuffs`,
+  and forced-discard event on copies. `Game::preview_play` is full-information (real RNG clone,
+  face-down cards read); `Game::preview_play_fair(mask, seed)` / `Game::fair_view(seed)` (Phase 8A)
+  resolve chance on an independent stream and sample face-down cards from the unseen pool. Card debuffs come from the boss (`boss::refresh_debuffs`,
   after every Play-phase action); Crimson Heart's joker debuff is set between hands.
 - Consumables (Phase 4.0): `UseConsumable` runs the card's effect, applies its side effects,
   updates `stats.run.{tarots,planets,unique_planets}_used` and then fires

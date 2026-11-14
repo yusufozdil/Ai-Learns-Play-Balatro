@@ -19,7 +19,7 @@ pub struct Ctx {
     /// Suit the run builds around.
     pub dominant: Suit,
     /// The best play right now (hand-position mask), if a hand is dealt.
-    pub best_mask: Option<u16>,
+    pub best_mask: Option<u32>,
 }
 
 fn is_plain(c: &Card) -> bool {
@@ -55,8 +55,8 @@ fn likely_played(s: &GameState, ctx: &Ctx) -> Vec<usize> {
     }
 }
 
-fn mask_of(idx: &[usize]) -> u16 {
-    idx.iter().fold(0u16, |m, &i| m | (1 << i))
+fn mask_of(idx: &[usize]) -> u32 {
+    idx.iter().fold(0u32, |m, &i| m | (1 << i))
 }
 
 /// Up to `n` plain, undebuffed cards among `from`, in the order given.
@@ -95,7 +95,7 @@ fn tarot_suit(id: C) -> Option<Suit> {
 
 /// `Some((targets, value))` if `id` is worth using now on those hand cards (`0` for untargeted
 /// cards); the caller still validates the action. `value` ranks pack items against each other.
-pub fn plan(id: C, game: &Game, ctx: &Ctx) -> Option<(u16, f64)> {
+pub fn plan(id: C, game: &Game, ctx: &Ctx) -> Option<(u32, f64)> {
     let s = game.state();
     let hand_len = s.deck.hand.len();
     let has_hand = hand_len >= 2;

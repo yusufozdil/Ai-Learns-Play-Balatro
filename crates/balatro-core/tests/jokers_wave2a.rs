@@ -236,7 +236,7 @@ fn set_hand(g: &mut Game, cards: &[(Rank, Suit)]) {
     }
 }
 
-fn play(g: &mut Game, mask: u16) -> StepInfo {
+fn play(g: &mut Game, mask: u32) -> StepInfo {
     g.step(Action::Play(mask)).expect("play")
 }
 

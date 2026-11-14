@@ -192,7 +192,7 @@ fn out_of_discards_plays_the_best_previewed_hand() {
         panic!("expected a Play");
     };
     let chosen = g.preview_play(mask).unwrap().score;
-    let best = (1u16..(1 << 8))
+    let best = (1u32..(1 << 8))
         .filter(|m| m.count_ones() <= 5)
         .filter_map(|m| g.preview_play(m).ok())
         .map(|r| r.score)

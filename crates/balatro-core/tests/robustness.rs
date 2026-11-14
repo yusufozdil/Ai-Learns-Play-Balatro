@@ -389,7 +389,7 @@ fn invalid_actions_leave_state_untouched() {
 }
 
 fn random_action(r: &mut GameRng) -> Action {
-    let m = |r: &mut GameRng| r.range(RngKey::Misc, 0, 1 << 16) as u16;
+    let m = |r: &mut GameRng| r.range(RngKey::Misc, 0, 1 << 16) as u32;
     let b = |r: &mut GameRng| r.range(RngKey::Misc, 0, 8) as u8;
     match r.range(RngKey::Misc, 0, 16) {
         0 => Action::SelectBlind,

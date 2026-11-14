@@ -492,7 +492,7 @@ fn move_joker_reorders_and_the_order_changes_the_score() {
     add_joker(&mut g, JokerId::Joker); // +4 mult
     add_joker(&mut g, JokerId::Cavendish); // x3 mult
     let hi = (0..g.state().deck.hand.len())
-        .map(|i| 1u16 << i)
+        .map(|i| 1u32 << i)
         .find(|&m| g.preview_play(m).is_ok())
         .expect("a play");
     let plus_first = g.preview_play(hi).expect("preview").score;

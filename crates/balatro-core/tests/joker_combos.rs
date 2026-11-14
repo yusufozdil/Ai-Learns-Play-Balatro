@@ -147,7 +147,7 @@ fn set_hand(g: &mut Game, i: usize, card: Card) {
     *h = Card { uid, ..card };
 }
 
-fn play(g: &mut Game, mask: u16) -> StepInfo {
+fn play(g: &mut Game, mask: u32) -> StepInfo {
     let info = g.step(Action::Play(mask)).expect("play");
     g.state().check_invariants().expect("invariants");
     info

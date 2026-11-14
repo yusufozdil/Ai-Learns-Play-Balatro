@@ -228,11 +228,11 @@ fn report(info: &StepInfo) -> String {
 }
 
 /// Parse card positions into a bitmask over the current hand.
-fn parse_mask(args: &[&str], hand_len: usize) -> Result<u16, String> {
-    let mut mask: u16 = 0;
+fn parse_mask(args: &[&str], hand_len: usize) -> Result<u32, String> {
+    let mut mask: u32 = 0;
     for a in args {
         let i: usize = a.parse().map_err(|_| format!("not a position: {a:?}"))?;
-        if i >= hand_len || i >= 16 {
+        if i >= hand_len || i >= 32 {
             return Err(format!("position {i} out of range (hand has {hand_len})"));
         }
         mask |= 1 << i;

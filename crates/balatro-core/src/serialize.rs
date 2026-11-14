@@ -11,8 +11,9 @@ use crate::state::{GameConfig, GameState};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Current [`Replay`] format version.
-pub const REPLAY_VERSION: u32 = 3;
+/// Current [`Replay`] format version. v4 (Phase 8A): card-selection masks are `u32` (hand
+/// positions 16..32 are selectable); JSON of every action shape is unchanged.
+pub const REPLAY_VERSION: u32 = 4;
 
 /// JSON (de)serialization failure.
 #[derive(Debug, Error)]

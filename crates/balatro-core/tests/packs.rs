@@ -48,7 +48,7 @@ fn set_items(g: &mut Game, items: Vec<PackItem>) {
     p.items = items.into_iter().map(Some).collect();
 }
 
-fn pick(index: u8, targets: u16) -> Action {
+fn pick(index: u8, targets: u32) -> Action {
     Action::PickPackItem { index, targets }
 }
 

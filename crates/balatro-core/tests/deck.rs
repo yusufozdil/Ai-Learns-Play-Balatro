@@ -118,7 +118,7 @@ fn remove_and_add() {
 
 proptest! {
     #[test]
-    fn conservation(ops in proptest::collection::vec((0u8..6, any::<u16>()), 0..60), seed in any::<u64>()) {
+    fn conservation(ops in proptest::collection::vec((0u8..6, any::<u16>().prop_map(u32::from)), 0..60), seed in any::<u64>()) {
         let mut d = Deck::standard();
         let mut rng = GameRng::new(seed);
         d.reset_for_round(&mut rng);

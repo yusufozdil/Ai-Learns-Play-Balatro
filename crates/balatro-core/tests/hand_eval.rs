@@ -742,7 +742,7 @@ proptest! {
         let mut out = Vec::new();
         evaluate_all_subsets(&cards, &flags, &mut out);
         prop_assert_eq!(out.len(), 218);
-        let mut last = 0u16;
+        let mut last = 0u32;
         for (mask, e) in &out {
             prop_assert!(*mask > last);
             last = *mask;
@@ -754,7 +754,7 @@ proptest! {
 
     #[test]
     fn all_subsets_any_size(cards in prop::collection::vec(arb_card(), 0..=10), flags in arb_flags()) {
-        let mut out = vec![(0u16, evaluate(&[], &flags))];
+        let mut out = vec![(0u32, evaluate(&[], &flags))];
         evaluate_all_subsets(&cards, &flags, &mut out);
         let n = cards.len();
         let expect: usize = (1..=5usize.min(n)).map(|k| binom(n, k)).sum();
@@ -778,7 +778,7 @@ fn all_subsets_eight_cards_is_218() {
     assert_eq!(out.len(), 218);
     assert_eq!(out[0].0, 1);
     // Full set of the first five cards is a straight.
-    let m = 0b11111u16;
+    let m = 0b11111u32;
     let found = out.iter().find(|(k, _)| *k == m).map(|(_, e)| *e);
     assert_eq!(found.map(|e| e.hand_type), Some(HandType::Straight));
     // Buffer is reused without growing on a second call.

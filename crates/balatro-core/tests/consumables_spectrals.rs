@@ -44,7 +44,7 @@ fn give(g: &mut Game, id: C) -> usize {
     g.add_consumable(ConsumableInstance::new(id)).expect("room")
 }
 
-fn use_c(g: &mut Game, slot: u8, targets: u16) -> Result<StepInfo, ActionError> {
+fn use_c(g: &mut Game, slot: u8, targets: u32) -> Result<StepInfo, ActionError> {
     g.step(Action::UseConsumable { slot, targets })
 }
 
@@ -162,7 +162,7 @@ fn target_counts_are_validated_for_every_spectral() {
     for id in TARGETED {
         let mut g = in_play(1);
         give(&mut g, id);
-        for (mask, selected) in [(0u16, 0u32), (0b11, 2)] {
+        for (mask, selected) in [(0u32, 0u32), (0b11, 2)] {
             let before = g.state().clone();
             assert_eq!(
                 use_c(&mut g, 0, mask),
@@ -364,7 +364,7 @@ fn random_spectral_effects_are_deterministic_per_seed() {
                 add_joker(&mut g, j);
             }
             give(&mut g, id);
-            let t = u16::from(id == C::Aura);
+            let t = u32::from(id == C::Aura);
             use_c(&mut g, 0, t).expect("use");
             g.state().clone()
         };
@@ -491,7 +491,7 @@ fn aura_refuses_a_card_that_already_has_an_edition() {
     g.state_mut().deck.hand[0].edition = Edition::Negative;
     give(&mut g, C::Aura);
     let legal = g.legal_actions();
-    let aura_uses: Vec<u16> = legal
+    let aura_uses: Vec<u32> = legal
         .iter()
         .filter_map(|a| match a {
             Action::UseConsumable { slot: 0, targets } => Some(*targets),
@@ -904,7 +904,7 @@ fn untargeted_spectrals_appear_exactly_once_in_legal_actions() {
         assert_eq!(n, 1, "slot {slot}");
     }
     for slot in 0..2u8 {
-        for targets in 0u16..256 {
+        for targets in 0u32..256 {
             let a = Action::UseConsumable { slot, targets };
             assert_eq!(legal.contains(&a), g.validate(a).is_ok(), "{a:?}");
         }

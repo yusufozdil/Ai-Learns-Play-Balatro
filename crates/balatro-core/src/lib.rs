@@ -3,6 +3,7 @@
 //! Pure Rust, no Python dependency. See `prd.md` §3 for the architecture and `notes.md` §1 for
 //! non-negotiable rules (determinism, no copied game assets/code, errors instead of panics).
 
+pub mod action_mask;
 pub mod actions;
 pub mod agents;
 pub mod blinds;
@@ -19,6 +20,7 @@ mod game_shop;
 pub mod hand_eval;
 pub mod hooks;
 pub mod joker;
+pub mod observe;
 pub mod packs;
 pub mod rng;
 pub mod scoring;

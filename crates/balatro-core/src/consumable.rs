@@ -12,6 +12,7 @@ use crate::card::Card;
 use crate::content::ids::ConsumableId;
 use crate::content::try_consumable_def;
 use crate::data::prices::{PLANET, SPECTRAL, TAROT};
+use crate::data::run_rules::MAX_SELECTABLE_HAND;
 use crate::deck::Pile;
 use crate::economy;
 use crate::enums::{Edition, Enhancement, HandType, Rank, Rarity, Seal, Suit};
@@ -166,17 +167,17 @@ impl ConsumableDef {
 #[derive(Debug, Clone, Copy)]
 pub struct Targets<'a> {
     hand: &'a [Card],
-    mask: u16,
+    mask: u32,
 }
 
 impl<'a> Targets<'a> {
     /// Selection `mask` over `hand` (bits past the hand are ignored).
-    pub fn new(hand: &'a [Card], mask: u16) -> Self {
+    pub fn new(hand: &'a [Card], mask: u32) -> Self {
         Targets { hand, mask }
     }
 
     /// The raw mask.
-    pub fn mask(&self) -> u16 {
+    pub fn mask(&self) -> u32 {
         self.mask
     }
 
@@ -192,7 +193,7 @@ impl<'a> Targets<'a> {
 
     /// Selected hand positions, left to right.
     pub fn positions(&self) -> impl Iterator<Item = usize> + 'a {
-        let (mask, n) = (self.mask, self.hand.len().min(16));
+        let (mask, n) = (self.mask, self.hand.len().min(MAX_SELECTABLE_HAND));
         (0..n).filter(move |&i| (mask >> i) & 1 == 1)
     }
 
@@ -218,7 +219,7 @@ pub struct UseCheck<'a> {
 
 impl<'a> UseCheck<'a> {
     /// Build a check (the game layer and tests).
-    pub fn new(state: &'a GameState, targets: u16, slot: Option<usize>) -> Self {
+    pub fn new(state: &'a GameState, targets: u32, slot: Option<usize>) -> Self {
         UseCheck {
             state,
             targets: Targets::new(&state.deck.hand, targets),
@@ -290,7 +291,7 @@ pub struct UseCtx<'a> {
     state: &'a mut GameState,
     fx: &'a mut Vec<SideEffect>,
     used: ConsumableInstance,
-    mask: u16,
+    mask: u32,
 }
 
 impl<'a> UseCtx<'a> {
@@ -299,7 +300,7 @@ impl<'a> UseCtx<'a> {
         state: &'a mut GameState,
         fx: &'a mut Vec<SideEffect>,
         used: ConsumableInstance,
-        targets: u16,
+        targets: u32,
     ) -> Self {
         UseCtx {
             state,

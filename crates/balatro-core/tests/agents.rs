@@ -137,7 +137,7 @@ fn preview_matches_step_for_every_mask() {
                     continue;
                 }
                 let before = g.state().clone();
-                let pv = g.preview_play(mask as u16);
+                let pv = g.preview_play(mask);
                 assert_eq!(*g.state(), before, "preview mutated the state");
                 if g.state().hands_left == 0 {
                     assert!(pv.is_err());
@@ -145,7 +145,7 @@ fn preview_matches_step_for_every_mask() {
                 }
                 let pv = pv.unwrap();
                 let mut copy = g.clone();
-                let info = copy.step(Action::Play(mask as u16)).unwrap();
+                let info = copy.step(Action::Play(mask)).unwrap();
                 assert_eq!(info.hand.unwrap(), pv, "seed {seed} mask {mask:b}");
             }
             let a = agent.act(&g);

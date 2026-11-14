@@ -25,7 +25,7 @@ fn give(g: &mut Game, id: C) -> usize {
     g.add_consumable(ConsumableInstance::new(id)).expect("room")
 }
 
-fn use_c(g: &mut Game, slot: u8, targets: u16) -> Result<StepInfo, ActionError> {
+fn use_c(g: &mut Game, slot: u8, targets: u32) -> Result<StepInfo, ActionError> {
     g.step(Action::UseConsumable { slot, targets })
 }
 
@@ -150,7 +150,7 @@ fn play_hand(seed: u64, ht: HandType, planet: Option<C>) -> (HandType, u32, f64,
         set_card(&mut g, i, r, s);
     }
     let r = g
-        .step(Action::Play((1u16 << cards.len()) - 1))
+        .step(Action::Play((1u32 << cards.len()) - 1))
         .expect("play")
         .hand
         .expect("hand");
@@ -296,7 +296,7 @@ fn enhancement_tarots_set_the_enhancement_on_their_targets_only() {
             Enhancement::Bonus
         };
         g.state_mut().deck.hand[1].enhancement = other;
-        let mask: u16 = if max == 2 { 0b110 } else { 0b010 };
+        let mask: u32 = if max == 2 { 0b110 } else { 0b010 };
         use_c(&mut g, 0, mask).expect("use");
         for (i, uid) in uids.iter().enumerate() {
             let c = card(&g, *uid);
@@ -316,7 +316,7 @@ fn enhancement_tarots_set_the_enhancement_on_their_targets_only() {
             use_c(&mut g, 0, 0),
             Err(ActionError::TargetCount { selected: 0, .. })
         ));
-        let too_many = (1u16 << (max + 1)) - 1;
+        let too_many = (1u32 << (max + 1)) - 1;
         assert!(matches!(
             use_c(&mut g, 0, too_many),
             Err(ActionError::TargetCount { .. })
@@ -548,7 +548,7 @@ fn strength_raises_ranks_wrapping_king_to_ace_and_ace_to_two() {
         give(&mut g, C::Strength);
         set_card(&mut g, 2, from, Suit::Clubs);
         let uid = uid_at(&g, 2);
-        let mask = 1u16 << pos_of(&g, uid);
+        let mask = 1u32 << pos_of(&g, uid);
         use_c(&mut g, 0, mask).expect("Strength");
         assert_eq!(card(&g, uid).rank, to);
     }

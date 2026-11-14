@@ -19,7 +19,7 @@ use crate::card::Card;
 use crate::consumable::{self, ConsumableInstance, ConsumableKind, UseCtx};
 use crate::content::ids::ConsumableId;
 use crate::content::try_consumable_def;
-use crate::data::run_rules::{MAX_EFFECT_CASCADE, WIN_ANTE};
+use crate::data::run_rules::{MAX_EFFECT_CASCADE, MAX_SELECTABLE_HAND, WIN_ANTE};
 use crate::deck::Pile;
 use crate::economy::{self, CashOut, CashOutInput};
 use crate::enums::{Edition, HandType, Phase, Seal};
@@ -29,7 +29,7 @@ use crate::hooks::{
     SoldItem,
 };
 use crate::joker::JokerInstance;
-use crate::rng::RngKey;
+use crate::rng::{GameRng, RngKey};
 use crate::scoring::{ScoreInput, Scorer};
 use crate::shop::{self, ShopState};
 use crate::state::{GameConfig, GameState, Outcome, TagId, transition_allowed};
@@ -200,6 +200,21 @@ impl Game {
         actions::selection_space(&self.state)
     }
 
+    /// The legal choices of the current state at the kind/operand level (structured action
+    /// format, see [`crate::action_mask`]).
+    pub fn structured_mask(&self) -> crate::action_mask::StructuredMask {
+        crate::action_mask::structured_mask(&self.state)
+    }
+
+    /// The hand cards a `(kind, arg0)` takes (see [`crate::action_mask::card_select`]).
+    pub fn card_select(
+        &self,
+        kind: crate::action_mask::ActionKind,
+        arg0: u8,
+    ) -> Option<crate::action_mask::CardSelect> {
+        crate::action_mask::card_select(&self.state, kind, arg0)
+    }
+
     /// Start a new run in place (same as `*self = Game::new(seed, config)`, keeping the scratch
     /// buffers of the scorer and the effect queue).
     pub fn reset_with_seed(&mut self, seed: u64, config: GameConfig) {
@@ -215,7 +230,12 @@ impl Game {
     /// Score `Play(mask)` without changing the game: the result `step` would report for the
     /// same state (jokers and the RNG are cloned, so probabilistic effects resolve exactly as
     /// the real play would). Errors like `validate(Action::Play(mask))`.
-    pub fn preview_play(&self, mask: u16) -> Result<HandReport, ActionError> {
+    ///
+    /// **Full information**: this reads the real future RNG (Lucky, Misprint, Bloodstone... resolve
+    /// exactly as the real play will) and the identity of face-down cards. Use
+    /// [`Game::preview_play_fair`] for anything a player could not know (RL teachers, observation
+    /// features).
+    pub fn preview_play(&self, mask: u32) -> Result<HandReport, ActionError> {
         self.preview_play_with(&mut Scorer::new(), mask)
     }
 
@@ -224,15 +244,124 @@ impl Game {
     pub fn preview_play_with(
         &self,
         scorer: &mut Scorer,
-        mask: u16,
+        mask: u32,
     ) -> Result<HandReport, ActionError> {
         actions::validate(&self.state, Action::Play(mask))?;
+        self.preview_core(scorer, mask, &self.state.deck.hand, self.state.rng.clone())
+    }
+
+    /// Fair-information [`Game::preview_play`]: what a player who cannot see the future could
+    /// compute.
+    ///
+    /// * **Probabilistic effects** (Lucky, Misprint, Bloodstone, Glass, ...) resolve on a fresh
+    ///   RNG seeded with `rng_seed`, never on `state.rng`: the outcome does not depend on what the
+    ///   real play will roll. The same seed gives every candidate the same random stream
+    ///   (common random numbers), so previews of different masks are comparable; average over
+    ///   several seeds for an expectation.
+    /// * **Face-down cards** (The House/Wheel/Fish/Mark): their identity is not used. Each is
+    ///   replaced, in place, by a card drawn uniformly without replacement from the cards the
+    ///   player has not seen: the draw pile plus the face-down cards themselves, taken in `uid`
+    ///   order so that neither the draw order nor which of those cards is hidden where has any
+    ///   influence (seeded by `rng_seed`; see [`Game::fair_view`]).
+    ///
+    /// Known leaks (documented, not fixed): the *order* of jokers under Amber Acorn is real, and
+    /// the hand sort order was fixed by the hidden identities when the hand was drawn.
+    pub fn preview_play_fair(&self, mask: u32, rng_seed: u64) -> Result<HandReport, ActionError> {
+        self.preview_play_fair_with(&mut Scorer::new(), mask, rng_seed)
+    }
+
+    /// [`Game::preview_play_fair`] with a caller-owned [`Scorer`].
+    pub fn preview_play_fair_with(
+        &self,
+        scorer: &mut Scorer,
+        mask: u32,
+        rng_seed: u64,
+    ) -> Result<HandReport, ActionError> {
+        actions::validate(&self.state, Action::Play(mask))?;
+        let mut rng = GameRng::new(rng_seed);
+        match self.sample_hidden_hand(&mut rng) {
+            Some((hand, _unseen)) => self.preview_core(scorer, mask, &hand, rng),
+            None => self.preview_core(scorer, mask, &self.state.deck.hand, rng),
+        }
+    }
+
+    /// A copy of the game as a player sees it: the identity of every face-down hand card is
+    /// replaced by a sample of the unseen cards (see [`Game::preview_play_fair`]), the draw pile
+    /// is put in canonical (`uid`) order so its real order cannot be read, and `state.rng` is
+    /// replaced by a fresh stream seeded with `rng_seed`. Simulations and previews run on the
+    /// copy cannot read hidden cards or the future RNG outcomes. Positions, hand length, piles
+    /// and every other field are unchanged, so an action chosen on the copy is valid on the
+    /// original (slots and hand positions mean the same). Not for stepping the real game.
+    pub fn fair_view(&self, rng_seed: u64) -> Game {
+        let mut rng = GameRng::new(rng_seed);
+        let mut state = self.state.clone();
+        if let Some((hand, mut unseen)) = self.sample_hidden_hand(&mut rng) {
+            // The draw pile is what is left of the unseen cards after the hidden hand cards
+            // took their samples (which cards sit in the pile and which in the hand is hidden).
+            unseen.sort_unstable_by_key(|c| c.uid);
+            state.deck.hand = hand;
+            state.deck.draw_pile = unseen;
+        }
+        // The draw order is hidden information too (it decides what the player will draw):
+        // a canonical order leaves only the contents of the pile.
+        state.deck.draw_pile.sort_unstable_by_key(|c| c.uid);
+        state.rng = rng;
+        Game::from_state(state)
+    }
+
+    /// The hand with every face-down card replaced by a uniform sample of the unseen cards, and
+    /// the unseen cards that were not sampled (the draw pile as the player can reason about it),
+    /// or `None` when no card is face down. Pool = draw pile + the face-down hand cards, sorted by
+    /// `uid` (canonical: independent of draw order and of where a card currently is); partial
+    /// Fisher-Yates on `RngKey::Misc`, one pick per face-down card from left to right. The
+    /// sample keeps `face_down = true` (the player still knows it is hidden) and its own debuff
+    /// flag (a debuff is a function of the identity it is sampled for).
+    fn sample_hidden_hand(&self, rng: &mut GameRng) -> Option<(Vec<Card>, Vec<Card>)> {
+        let d = &self.state.deck;
+        if !d.hand.iter().any(|c| c.face_down) {
+            return None;
+        }
+        let mut pool: Vec<Card> = d
+            .draw_pile
+            .iter()
+            .copied()
+            .chain(d.hand.iter().filter(|c| c.face_down).map(|c| Card {
+                // Unseen cards are all alike: the flag is re-set on the sampled ones below.
+                face_down: false,
+                ..*c
+            }))
+            .collect();
+        pool.sort_unstable_by_key(|c| c.uid);
+        let mut hand = d.hand.clone();
+        let mut picked = 0usize;
+        for c in hand.iter_mut().filter(|c| c.face_down) {
+            let j = rng.range(RngKey::Misc, picked, pool.len());
+            pool.swap(picked, j);
+            let mut sample = pool[picked];
+            sample.face_down = true;
+            *c = sample;
+            picked += 1;
+        }
+        // The sampled cards (now at the front of the pool) sit in the hand: the rest is unseen.
+        pool.drain(..picked);
+        Some((hand, pool))
+    }
+
+    /// Shared body of the previews: score `Play(mask)` (already validated) over `hand` with
+    /// `rng` as the randomness of the scored hand.
+    fn preview_core(
+        &self,
+        scorer: &mut Scorer,
+        mask: u32,
+        hand: &[Card],
+        mut rng: GameRng,
+    ) -> Result<HandReport, ActionError> {
         let s = &self.state;
-        let n = s.deck.hand.len();
+        let n = hand.len();
         let mut played: Vec<Card> = Vec::with_capacity(5);
         let mut held: Vec<Card> = Vec::with_capacity(n);
-        for (i, c) in s.deck.hand.iter().enumerate() {
-            if i < 16 && (mask >> i) & 1 == 1 {
+        for (i, c) in hand.iter().enumerate() {
+            if i < MAX_SELECTABLE_HAND && (mask >> i) & 1 == 1 {
                 played.push(*c);
             } else {
                 held.push(*c);
@@ -248,7 +377,6 @@ impl Game {
         view.hand_plays_run[ht.index()] += 1;
         view.hand_plays_round[ht.index()] += 1;
         let mut jokers = s.jokers.clone();
-        let mut rng = s.rng.clone();
         // Boss pre-play effects on copies, exactly as `play` applies them to the state.
         if s.boss_in_effect() {
             let mut bs = s.boss_state;
@@ -480,7 +608,7 @@ impl Game {
         self.open_next_pending_pack();
     }
 
-    fn play(&mut self, mask: u16, info: &mut StepInfo) -> Result<(), ActionError> {
+    fn play(&mut self, mask: u32, info: &mut StepInfo) -> Result<(), ActionError> {
         let s = &mut self.state;
         let hand_len = s.deck.hand.len();
         // First mutation; the hand is unchanged if it fails (it cannot after `validate`).
@@ -577,7 +705,7 @@ impl Game {
         self.resolve_fx();
     }
 
-    fn discard(&mut self, mask: u16, info: &mut StepInfo) -> Result<(), ActionError> {
+    fn discard(&mut self, mask: u32, info: &mut StepInfo) -> Result<(), ActionError> {
         let s = &mut self.state;
         let hand_len = s.deck.hand.len();
         let cards = s
@@ -642,7 +770,7 @@ impl Game {
     /// Use a consumable (validated): out of its slot, effect (immediate writes + queued side
     /// effects, applied with their follow-up events), run counters and The Fool's record, then
     /// `on_consumable_used` (hooks see the counters including this use).
-    fn use_consumable(&mut self, slot: usize, targets: u16, info: &mut StepInfo) {
+    fn use_consumable(&mut self, slot: usize, targets: u32, info: &mut StepInfo) {
         let s = &mut self.state;
         if slot >= s.consumables.len() {
             return; // rejected by `validate`
@@ -656,7 +784,7 @@ impl Game {
     pub(crate) fn apply_use(
         &mut self,
         used: ConsumableInstance,
-        targets: u16,
+        targets: u32,
         info: &mut StepInfo,
     ) {
         let s = &mut self.state;

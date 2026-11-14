@@ -26,7 +26,7 @@ fn win_round(g: &mut Game) {
     let t = g.state().target;
     g.state_mut().round_score = t - 1.0;
     let n = g.state().deck.hand.len().min(5);
-    let mask = ((1u32 << n) - 1) as u16; // 5 cards: valid under The Psychic
+    let mask = (1u32 << n) - 1; // 5 cards: valid under The Psychic
     let info = g.step(Action::Play(mask)).expect("winning play");
     assert!(info.round.expect("round ended").won);
     if g.state().phase == Phase::Shop {
@@ -399,7 +399,7 @@ fn preview_matches_step_under_every_defined_boss() {
                 if mask.count_ones() > 5 {
                     continue;
                 }
-                let m = mask as u16;
+                let m = mask;
                 let pv = match g.preview_play(m) {
                     Ok(p) => p,
                     Err(e) => {

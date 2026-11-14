@@ -63,6 +63,13 @@ Tarot/Planet $3, Spectral $4; sell `max(1, floor(cost/2))`).
 3. untargeted → `targets == 0`; targeted → `min..=max` selected cards, all inside the hand;
 4. then your `can_use`.
 
+Card selections (`Play`/`Discard`/`UseConsumable.targets`/`PickPackItem.targets`) are `u32`
+bitmasks (Phase 8A): bit i = hand card i, positions 0..32 (`MAX_SELECTABLE_HAND`; the hand can
+hold more than the hand size, e.g. 17 cards with Certificate). `legal_actions` keeps a precomputed
+table for hands up to 16 cards and generates the masks lazily beyond; the env codec uses the
+structured action space instead (`action_mask`: `structured_mask`, `card_select`), which also
+expresses card-dependent `can_use` checks of single-target cards (Aura) per hand position.
+
 Your `can_use` only states the card's own condition: free slot (The Fool, High Priestess,
 Emperor, Judgement, Wraith, The Soul, Ankh), eligible joker (Wheel, Ectoplasm, Hex), hand of at
 least 2 cards (Familiar, Grim, Incantation, Sigil, Ouija, Immolate). It must not roll or mutate.

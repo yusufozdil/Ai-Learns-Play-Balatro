@@ -14,27 +14,40 @@ use crate::packs::PackItem;
 use crate::scoring::Scorer;
 use crate::shop::{self, ShopCardKind};
 
-/// Deterministic (no RNG) one-ply greedy agent.
+/// Deterministic one-ply greedy agent.
+///
+/// Information: by default full (previews clone the real RNG and read face-down cards: the
+/// behaviour of every baseline measured before Phase 8A, kept as the default so those numbers
+/// stay comparable). [`GreedyAgent::with_fair_info`] makes it decide on [`Game::fair_view`]
+/// (hidden cards sampled, independent RNG stream; the seeds come from a counter, so the agent
+/// stays deterministic).
 #[derive(Debug, Default)]
 pub struct GreedyAgent {
     scorer: Scorer,
+    fair_info: bool,
+    fair_counter: u64,
 }
 
 impl GreedyAgent {
-    /// New greedy agent.
+    /// New greedy agent (full information).
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Greedy agent that decides on the fair view of the game (`true`) or on full information.
+    pub fn with_fair_info(mut self, fair_info: bool) -> Self {
+        self.fair_info = fair_info;
+        self
+    }
+
     /// Best `Play` mask by previewed score (lowest mask wins ties), its score and hand type.
-    fn best_play(&mut self, game: &Game) -> Option<(u16, f64, HandType)> {
+    fn best_play(&mut self, game: &Game) -> Option<(u32, f64, HandType)> {
         let n = game.state().deck.hand.len().min(16);
-        let mut best: Option<(u16, f64, HandType)> = None;
+        let mut best: Option<(u32, f64, HandType)> = None;
         for mask in 1u32..(1u32 << n) {
             if mask.count_ones() > 5 {
                 continue;
             }
-            let mask = mask as u16;
             if let Ok(r) = game.preview_play_with(&mut self.scorer, mask) {
                 let score = if r.invalid { 0.0 } else { r.score };
                 if best.is_none_or(|(_, s, _)| score > s) {
@@ -46,7 +59,7 @@ impl GreedyAgent {
     }
 
     /// Discard mask chosen by the heuristic, or `None` to play instead.
-    fn discard_plan(game: &Game, best_mask: u16, best_type: HandType) -> Option<u16> {
+    fn discard_plan(game: &Game, best_mask: u32, best_type: HandType) -> Option<u32> {
         let s = game.state();
         let hand = &s.deck.hand;
         let rules = &s.mods.rules;
@@ -55,9 +68,9 @@ impl GreedyAgent {
         }
         // Flush chase: most common suit.
         let mut flush_k = 0usize;
-        let mut flush_mask = 0u16;
+        let mut flush_mask = 0u32;
         for suit in Suit::ALL {
-            let mut m = 0u16;
+            let mut m = 0u32;
             let mut k = 0usize;
             for (i, c) in hand.iter().enumerate().take(16) {
                 if c.has_suit(suit, rules) {
@@ -73,14 +86,12 @@ impl GreedyAgent {
         // Straight chase: best window of 5 consecutive ranks (Ace low or high).
         let (straight_k, straight_keep) = best_straight_window(hand);
 
-        let all = if hand.len() >= 16 {
-            u16::MAX
-        } else {
-            (1u16 << hand.len()) - 1
-        };
+        // Agents only look at the 16 leftmost cards (`hand_eval::MAX_HAND`); a longer hand (Certificate
+        // & co.) keeps its extra cards out of the discard plan.
+        let all = (1u32 << hand.len().min(16)) - 1;
         // Limit to 5 cards (lowest positions first); `None` if nothing to discard.
-        let cap = |m: u16| -> Option<u16> {
-            let mut out = 0u16;
+        let cap = |m: u32| -> Option<u32> {
+            let mut out = 0u32;
             let mut cnt = 0;
             for i in 0..16 {
                 if m & (1 << i) != 0 && cnt < 5 {
@@ -107,7 +118,7 @@ impl GreedyAgent {
             .map(|(_, c)| *c)
             .collect();
         let eval = hand_eval::evaluate(&sel, rules);
-        let mut keep = 0u16;
+        let mut keep = 0u32;
         let mut j = 0;
         for i in 0..hand.len().min(16) {
             if best_mask & (1 << i) != 0 {
@@ -122,7 +133,7 @@ impl GreedyAgent {
 }
 
 /// `(cards present in the best 5-rank window, mask of one card per present rank in it)`.
-fn best_straight_window(hand: &[Card]) -> (usize, u16) {
+fn best_straight_window(hand: &[Card]) -> (usize, u32) {
     // Index 1..=14, Ace counts at 1 and 14.
     let mut pos = [None::<usize>; 15];
     for (i, c) in hand.iter().enumerate().take(16) {
@@ -137,10 +148,10 @@ fn best_straight_window(hand: &[Card]) -> (usize, u16) {
             pos[1] = Some(i);
         }
     }
-    let mut best = (0usize, 0u16);
+    let mut best = (0usize, 0u32);
     for start in 1..=10usize {
         let mut k = 0;
-        let mut mask = 0u16;
+        let mut mask = 0u32;
         for p in &pos[start..start + 5] {
             if let Some(i) = *p
                 && mask & (1 << i) == 0
@@ -220,7 +231,26 @@ impl GreedyAgent {
 }
 
 impl Agent for GreedyAgent {
-    fn act(&mut self, game: &Game) -> Action {
+    fn act(&mut self, real: &Game) -> Action {
+        if self.fair_info && !real.is_terminal() {
+            self.fair_counter = self.fair_counter.wrapping_add(1);
+            let fair = real.fair_view(self.fair_counter ^ 0x6772_6565_6479_FA17);
+            let a = self.act_on(&fair);
+            return if real.validate(a).is_ok() {
+                a
+            } else {
+                real.legal_actions()
+                    .into_iter()
+                    .next()
+                    .unwrap_or(Action::EndShop)
+            };
+        }
+        self.act_on(real)
+    }
+}
+
+impl GreedyAgent {
+    fn act_on(&mut self, game: &Game) -> Action {
         let s = game.state();
         match s.phase {
             Phase::BlindSelect => Action::SelectBlind,

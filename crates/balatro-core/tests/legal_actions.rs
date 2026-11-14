@@ -10,13 +10,13 @@ use balatro_core::rng::{GameRng, RngKey};
 use balatro_core::state::{GameConfig, GameState};
 use std::collections::HashSet;
 
-fn rand_mask(rng: &mut GameRng) -> u16 {
+fn rand_mask(rng: &mut GameRng) -> u32 {
     let r = rng.next_u64(RngKey::Misc);
     // Mix of dense, sparse and tiny masks.
     match r & 3 {
-        0 => (r >> 8) as u16,
-        1 => ((r >> 8) as u16) & ((r >> 24) as u16),
-        2 => ((r >> 8) as u16) & 0xFF,
+        0 => (r >> 8) as u32,
+        1 => ((r >> 8) as u32) & ((r >> 24) as u32),
+        2 => ((r >> 8) as u32) & 0xFF,
         _ => 1 << ((r >> 8) % 16),
     }
 }
@@ -31,8 +31,8 @@ fn candidates(rng: &mut GameRng, n: usize) -> Vec<Action> {
         Action::SkipPack,
         Action::Play(0),
         Action::Discard(0),
-        Action::Play(u16::MAX),
-        Action::Discard(u16::MAX),
+        Action::Play(u32::from(u16::MAX)),
+        Action::Discard(u32::from(u16::MAX)),
     ];
     for i in 0..8u8 {
         v.push(Action::SellJoker(i));
@@ -93,7 +93,7 @@ fn check_all_masks(state: &GameState) {
     let mut listed = Vec::new();
     legal_actions(state, &mut listed);
     let set: HashSet<Action> = listed.iter().copied().collect();
-    for m in 0..=u16::MAX {
+    for m in 0..=u32::from(u16::MAX) {
         for a in [Action::Play(m), Action::Discard(m)] {
             assert_eq!(validate(state, a).is_ok(), set.contains(&a), "{a:?}");
         }

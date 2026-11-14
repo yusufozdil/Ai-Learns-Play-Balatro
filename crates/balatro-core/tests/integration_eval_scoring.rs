@@ -79,7 +79,7 @@ fn best_subset_of_eight_matches_direct_scoring() {
     let mut subsets = Vec::new();
     evaluate_all_subsets(&hand, &RuleFlags::default(), &mut subsets);
     assert_eq!(subsets.len(), 218);
-    let mut best = (0u16, 0.0f64);
+    let mut best = (0u32, 0.0f64);
     for &(mask, eval) in &subsets {
         let played: Vec<Card> = (0..hand.len())
             .filter(|i| mask & (1 << i) != 0)

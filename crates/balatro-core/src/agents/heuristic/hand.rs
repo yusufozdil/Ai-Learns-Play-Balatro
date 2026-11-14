@@ -22,7 +22,7 @@ use crate::state::GameState;
 /// A previewed selection.
 #[derive(Debug, Clone, Copy)]
 struct Play {
-    mask: u16,
+    mask: u32,
     score: f64,
     ht: HandType,
     cards: u32,
@@ -48,7 +48,7 @@ fn card_value(c: &Card) -> f64 {
     v
 }
 
-fn scoring_positions(s: &GameState, mask: u16) -> u16 {
+fn scoring_positions(s: &GameState, mask: u32) -> u32 {
     let hand = &s.deck.hand;
     let sel: Vec<Card> = hand
         .iter()
@@ -57,7 +57,7 @@ fn scoring_positions(s: &GameState, mask: u16) -> u16 {
         .map(|(_, c)| *c)
         .collect();
     let ev = hand_eval::evaluate(&sel, &s.mods.rules);
-    let mut out = 0u16;
+    let mut out = 0u32;
     let mut j = 0;
     for i in 0..hand.len().min(16) {
         if (mask >> i) & 1 == 1 {
@@ -72,7 +72,7 @@ fn scoring_positions(s: &GameState, mask: u16) -> u16 {
 
 /// Mask of one card per present rank inside the best 5-rank window (Ace low or high), and how
 /// many ranks the window holds.
-fn straight_window(hand: &[Card]) -> (usize, u16) {
+fn straight_window(hand: &[Card]) -> (usize, u32) {
     let mut pos = [None::<usize>; 15];
     for (i, c) in hand.iter().enumerate().take(16) {
         if c.is_stone() || c.debuffed {
@@ -86,10 +86,10 @@ fn straight_window(hand: &[Card]) -> (usize, u16) {
             pos[1] = Some(i);
         }
     }
-    let mut best = (0usize, 0u16);
+    let mut best = (0usize, 0u32);
     for start in 1..=10usize {
         let mut k = 0;
-        let mut mask = 0u16;
+        let mut mask = 0u32;
         for p in &pos[start..start + 5] {
             if let Some(i) = *p
                 && mask & (1 << i) == 0
@@ -106,14 +106,14 @@ fn straight_window(hand: &[Card]) -> (usize, u16) {
 }
 
 /// Candidate discard masks (1..=5 cards each), deduplicated, ascending.
-fn discard_candidates(s: &GameState, best_mask: u16, forced: Option<usize>) -> Vec<u16> {
+fn discard_candidates(s: &GameState, best_mask: u32, forced: Option<usize>) -> Vec<u32> {
     let hand = &s.deck.hand;
     let n = hand.len().min(16);
     let rules = &s.mods.rules;
     let all: Vec<usize> = (0..n).collect();
-    let mut out: Vec<u16> = Vec::new();
+    let mut out: Vec<u32> = Vec::new();
 
-    let from_keep = |keep: u16| -> Option<u16> {
+    let from_keep = |keep: u32| -> Option<u32> {
         let mut d: Vec<usize> = all
             .iter()
             .copied()
@@ -125,15 +125,15 @@ fn discard_candidates(s: &GameState, best_mask: u16, forced: Option<usize>) -> V
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         d.truncate(5);
-        let m = d.iter().fold(0u16, |m, &i| m | (1 << i));
+        let m = d.iter().fold(0u32, |m, &i| m | (1 << i));
         (m != 0).then_some(m)
     };
 
-    let mut keeps: Vec<u16> = Vec::new();
+    let mut keeps: Vec<u32> = Vec::new();
     keeps.push(scoring_positions(s, best_mask));
     // Flush chase.
     for suit in Suit::ALL {
-        let mut m = 0u16;
+        let mut m = 0u32;
         let mut k = 0;
         for (i, c) in hand.iter().enumerate().take(16) {
             if !c.debuffed && c.has_suit(suit, rules) {
@@ -157,7 +157,7 @@ fn discard_candidates(s: &GameState, best_mask: u16, forced: Option<usize>) -> V
             counts[c.rank as usize] += 1;
         }
     }
-    let mut grp = 0u16;
+    let mut grp = 0u32;
     for (i, c) in hand.iter().enumerate().take(16) {
         if !c.is_stone() && !c.debuffed && counts[c.rank as usize] >= 2 {
             grp |= 1 << i;
@@ -176,7 +176,7 @@ fn discard_candidates(s: &GameState, best_mask: u16, forced: Option<usize>) -> V
         let low3 = (0..16)
             .filter(|i| (m >> i) & 1 == 1)
             .take(3)
-            .fold(0u16, |a, i| a | (1 << i));
+            .fold(0u32, |a, i| a | (1 << i));
         out.push(low3);
         out.push(m);
     }
@@ -207,7 +207,6 @@ impl HeuristicAgent {
             if mask.count_ones() > 5 {
                 continue;
             }
-            let mask = mask as u16;
             if let Ok(r) = game.preview_play_with(&mut self.scorer, mask) {
                 v.push(Play {
                     mask,
@@ -222,7 +221,7 @@ impl HeuristicAgent {
 
     /// Monte-Carlo estimate for each candidate discard: `(mean best score after, mean of
     /// min(best, need))` over random draws from the draw pile.
-    fn mc_discards(&mut self, game: &Game, cands: &[u16], need: f64) -> Vec<(f64, f64)> {
+    fn mc_discards(&mut self, game: &Game, cands: &[u32], need: f64) -> Vec<(f64, f64)> {
         let s = game.state();
         let mut sim = Game::from_state(s.clone());
         // After the discard: one discard fewer (Banner, Mystic Summit read the count).
@@ -326,7 +325,7 @@ impl HeuristicAgent {
             return Action::Play(best.mask);
         }
         let forced = crate::boss::forced_position(s);
-        let cands: Vec<u16> = discard_candidates(s, best.mask, forced)
+        let cands: Vec<u32> = discard_candidates(s, best.mask, forced)
             .into_iter()
             .filter(|&m| game.validate(Action::Discard(m)).is_ok())
             .collect();

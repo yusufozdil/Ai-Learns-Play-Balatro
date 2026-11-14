@@ -83,7 +83,7 @@ fn bench_all_subsets(c: &mut Criterion) {
     let mut rng = XorShift(0xD1B5_4A32_D192_ED03);
     let hands: Vec<Vec<Card>> = (0..256).map(|_| random_cards(&mut rng, 8)).collect();
     let flags = RuleFlags::default();
-    let mut out: Vec<(u16, HandEval)> = Vec::with_capacity(256);
+    let mut out: Vec<(u32, HandEval)> = Vec::with_capacity(256);
     let mut group = c.benchmark_group("evaluate_all_subsets");
     group.throughput(Throughput::Elements(218));
     let mut i = 0usize;

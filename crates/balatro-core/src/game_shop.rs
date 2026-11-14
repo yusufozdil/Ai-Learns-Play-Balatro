@@ -152,7 +152,7 @@ impl Game {
 
     /// `PickPackItem`: take the item (a consumable is used at once, a card joins the deck, a joker
     /// the joker area); the pack closes when the picks are used up or nothing is left.
-    pub(crate) fn pick_pack_item(&mut self, index: usize, targets: u16, info: &mut StepInfo) {
+    pub(crate) fn pick_pack_item(&mut self, index: usize, targets: u32, info: &mut StepInfo) {
         let Some(pack) = self.state.pack.as_mut() else {
             return;
         };

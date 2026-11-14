@@ -166,7 +166,7 @@ impl Fail {
 }
 
 fn random_action(r: &mut GameRng) -> Action {
-    let m = |r: &mut GameRng| r.range(RngKey::Misc, 0, 1 << 16) as u16;
+    let m = |r: &mut GameRng| r.range(RngKey::Misc, 0, 1 << 16) as u32;
     let b = |r: &mut GameRng| r.range(RngKey::Misc, 0, 10) as u8;
     match r.range(RngKey::Misc, 0, 22) {
         0 => Action::SelectBlind,

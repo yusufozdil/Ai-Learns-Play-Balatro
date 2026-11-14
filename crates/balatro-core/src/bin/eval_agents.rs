@@ -1,5 +1,7 @@
 //! Baseline evaluation: `eval_agents --agent random|greedy|heuristic --games N --seed S
-//! [--threads T]`.
+//! [--threads T] [--fair true|false] [--set knob=value]`. `--fair` selects fair information (hidden
+//! cards sampled, independent RNG) for the greedy and heuristic agents; the defaults are off for
+//! greedy and on for heuristic.
 //!
 //! Plays N seeded games and prints the mean ante reached, the ante histogram, the win rate, mean
 //! steps and games per second. Games are independent and the aggregate does not depend on the
@@ -24,12 +26,17 @@ struct Outcome {
     steps: usize,
 }
 
-fn play_one(agent: &str, cfg: &HeuristicConfig, gseed: u64) -> Result<Outcome, String> {
+fn play_one(
+    agent: &str,
+    cfg: &HeuristicConfig,
+    greedy_fair: bool,
+    gseed: u64,
+) -> Result<Outcome, String> {
     let mut game = Game::new(gseed, GameConfig::default());
     let mut a: Box<dyn Agent> = match agent {
         "random" => Box::new(RandomAgent::new(gseed)),
         "heuristic" => Box::new(HeuristicAgent::with_config(gseed, cfg.clone())),
-        _ => Box::new(GreedyAgent::new()),
+        _ => Box::new(GreedyAgent::new().with_fair_info(greedy_fair)),
     };
     let mut steps = 0usize;
     while !game.is_terminal() {
@@ -56,6 +63,7 @@ fn main() -> ExitCode {
     let mut seed = 0u64;
     let mut threads = 1usize;
     let mut cfg = HeuristicConfig::default();
+    let mut greedy_fair = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         let v = it.next();
@@ -64,6 +72,12 @@ fn main() -> ExitCode {
             ("--games", Some(v)) => games = v.parse().unwrap_or(games),
             ("--seed", Some(v)) => seed = v.parse().unwrap_or(seed),
             ("--threads", Some(v)) => threads = v.parse().unwrap_or(threads).max(1),
+            // Fair information for both agents (heuristic default: on; greedy default: off).
+            ("--fair", Some(v)) => {
+                let on = v.parse().unwrap_or(false);
+                greedy_fair = on;
+                cfg.fair_info = on;
+            }
             ("--set", Some(v)) => {
                 // Heuristic config knob: `--set name=value` (repeatable).
                 let ok = v.split_once('=').is_some_and(|(k, val)| cfg.set(k, val));
@@ -75,7 +89,7 @@ fn main() -> ExitCode {
             _ => {
                 eprintln!(
                     "usage: eval_agents --agent random|greedy|heuristic --games N --seed S \
-                     [--threads T] [--set knob=value]"
+                     [--threads T] [--fair true|false] [--set knob=value]"
                 );
                 return ExitCode::from(2);
             }
@@ -98,7 +112,7 @@ fn main() -> ExitCode {
                     if i >= games {
                         break;
                     }
-                    match play_one(&agent, &cfg, seed.wrapping_add(i)) {
+                    match play_one(&agent, &cfg, greedy_fair, seed.wrapping_add(i)) {
                         Ok(o) => {
                             if let Ok(mut r) = results.lock() {
                                 r.push((i, o));

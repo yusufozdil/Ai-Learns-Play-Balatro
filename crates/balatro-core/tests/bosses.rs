@@ -29,7 +29,7 @@ fn win_round(g: &mut Game) {
     let t = g.state().target;
     g.state_mut().round_score = t - 1.0;
     let n = g.state().deck.hand.len().min(5);
-    let mask = ((1u32 << n) - 1) as u16; // 5 cards: valid under The Psychic
+    let mask = (1u32 << n) - 1; // 5 cards: valid under The Psychic
     let info = g.step(Action::Play(mask)).expect("winning play");
     assert!(info.round.expect("round ended").won);
     if g.state().phase == Phase::Shop {
@@ -114,7 +114,7 @@ fn set_plain_hand(g: &mut Game, pair: bool) {
     }
 }
 
-fn play(g: &mut Game, mask: u16) -> HandReport {
+fn play(g: &mut Game, mask: u32) -> HandReport {
     g.step(Action::Play(mask))
         .expect("play")
         .hand
@@ -1225,7 +1225,7 @@ fn every_new_boss_is_deterministic_per_seed() {
                 .boss_state
                 .card_uid
                 .and_then(|u| g.state().deck.hand.iter().position(|c| c.uid == u));
-            let mask: u16 = forced.map_or(0b1, |p| 1 << p);
+            let mask: u32 = forced.map_or(0b1, |p| 1 << p);
             if g.step(Action::Play(mask)).is_err() {
                 break;
             }
