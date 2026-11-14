@@ -318,6 +318,8 @@ fn endless_mode_continues_after_the_win() {
         let s = g.state_mut();
         s.ante = 8;
         s.blind = BlindKind::Boss;
+        // Plain boss so a one-card play is never rejected (The Psychic etc.).
+        s.boss = Some(BossId::TheWall);
     }
     select(&mut g);
     beat_blind(&mut g);
