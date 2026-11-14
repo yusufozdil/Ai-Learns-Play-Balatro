@@ -299,5 +299,22 @@ reach ante 8. The second fine-tune at cost -0.25 again removed the loop (truncat
 blocks after `moves >= limit`); omit the flag for raw numbers. With MoveJoker banned the same checkpoint drops to
 ~7.3 / 55% (det and sampled), i.e. joker ordering is worth ~11 points of win rate to this policy.
 
-Open: memory ablation `e2e_nomem` (24M steps from `runs/bc_nomem/model.pt`, compare with the first 24M of `e2e_long`) parked
-by the user; seed repeats; Phase 5E (other decks and stakes) deferred until after training.
+**Memory ablation** `e2e_nomem`: the same recipe and seed from `runs/bc_nomem/model.pt` (no GRU, 1.83M params), 24.0M steps,
+58 min. Validation (512, det guard 2) tracks `e2e_long` within noise at every point, including the jump after the KL reaches
+0 (update 160: 7.06 / 40.6% vs 7.03 / 37.9%; update 176: 7.12 / 40.8% vs 7.12 / 42.4%). Test (1000 games):
+
+| checkpoint | steps | det raw: ante / win / trunc | det guard 2 | sampled |
+|---|---|---|---|---|
+| `e2e_nomem/best` | 23M | 7.00 / 36.3% / 9.7% | 7.11 / 40.1% / 0% | 7.03 / 34.6% / 0% |
+| `e2e_nomem/latest` | 24M | 7.07 / 37.5% / 8.8% | 7.17 / 40.9% / 0% | 6.96 / 36.0% / 0% |
+| `a_e2e/latest` (GRU, 24M, no reorder cost) | 24M | 7.04 / 37.9% / 8.7% | 7.15 / 40.9% / 0% | 6.99 / 38.0% / 0% |
+
+(`e2e_long` kept no 24M checkpoint; `a_e2e` is the closest GRU reference with test numbers.) **Conclusion: at 24M steps the
+cross-decision GRU memory gives no measurable gain in strength** -- the observation already carries what the policy uses
+(run state, deck counts, levels, shop). One structural difference: the memoryless argmax is a pure function of the
+observation, so a MoveJoker cycle that returns to the same observation can never be left; its raw truncation is 8.8-9.7%
+even with the -0.05 reorder cost (the GRU run `c_loopfix` with the same cost reached 3.2%, `e2e_long` 1.1% at 100M).
+Not tested: whether memory matters beyond 24M, where most of the `e2e_long` gain (42% -> 68%) happened; a 100M memoryless
+run would answer it (~4 h).
+
+Open: seed repeats; Phase 5E (other decks and stakes) deferred until after training.
