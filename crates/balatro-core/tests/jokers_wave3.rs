@@ -1043,3 +1043,19 @@ fn game_payouts_stack_across_jokers() {
     // 4 + 0 interest + 3 + 3 + 12 = 22.
     assert_eq!(g.state().money, 22);
 }
+
+// Phase 4.R decision: Trading Card's wiki page ("first discard of round has only 1 card")
+// mentions no debuff exception, so a debuffed single card still triggers it.
+#[test]
+fn trading_card_still_fires_for_a_debuffed_single_card() {
+    let mut js = jokers(&[J::TradingCard]);
+    let first = RunView {
+        discards_used_round: 1,
+        ..RunView::default()
+    };
+    let mut k = c(7, Seven, Spades);
+    k.debuffed = true;
+    let (money, fx) = discard_event(&mut js, &first, &[k]);
+    assert_eq!(money, 3);
+    assert_eq!(fx, vec![SideEffect::DestroyCard { uid: 7 }]);
+}

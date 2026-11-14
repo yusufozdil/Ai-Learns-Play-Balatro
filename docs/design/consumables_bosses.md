@@ -296,7 +296,11 @@ bosses are covered automatically), and `check_invariants()`. The smoke test
 3. Suit bosses: `card.has_suit(suit, rules)` on the passed (un-debuffed) card makes Wild cards
    debuffed and respects Smeared (notes.md §4.1c).
 4. Eye/Mouth compare `hand_type()`, not `contains` (notes.md §4.1c). Counts include this hand:
-   The Eye rejects when `plays_round(ht) > 1`.
+   The Eye rejects when `plays_round(ht) > 1`. `hand_plays_round` also counts rejected hands, so
+   Eye and Mouth treat a rejected play as played: after a rejected hand of type T, T is still
+   forbidden for the Eye. The Mouth must not use `plays_round`: it writes the first **valid**
+   hand type to `boss_state.hand` in `after_play` (reset at blind start) and rejects any other
+   type while `boss_state.hand` is set.
 5. The Ox: tie → highest tier (iterate `HandType::ALL` in reverse, notes.md §4.1c).
 6. The Serpent: return 3 for `AfterPlay`/`AfterDiscard`, `default` otherwise; the game caps the
    hand at 16 cards.
@@ -374,7 +378,7 @@ bosses are covered automatically), and `check_invariants()`. The smoke test
 | The Water | 2 | — | `on_blind_start`: `removed = discards_left`, `set_discards_left(0)`; `on_disable`: `add_discards(removed)` |
 | The Manacle | 1 | `hand_size: -1` | — |
 | The Eye | 3 | — | `before_play`: `plays_round(ht) > 1` → `invalidate()` |
-| The Mouth | 2 | — | `before_play`: another type with `plays_round > 0` → `invalidate()` |
+| The Mouth | 2 | — | `before_play`: `hand_type() != boss_state.hand` (first valid type, set in `after_play`) → `invalidate()` |
 | The Plant ✅ | 4 | — | `debuffs_card`: `card.is_face(rules)` |
 | The Serpent | 5 | — | `draw_count`: 3 after play/discard |
 | The Pillar | 1 | — | `debuffs_card`: `card.played_ante` |

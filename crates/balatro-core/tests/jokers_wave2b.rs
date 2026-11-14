@@ -1638,3 +1638,25 @@ fn package_jokers_survive_random_games_deterministically() {
         assert_eq!(a.state(), b.state(), "seed {seed}: replay diverged");
     }
 }
+
+// =============================================================================================
+// Debuffed discards (Phase 4.R decision)
+// =============================================================================================
+
+// Yorick and Ramen count every discarded card, debuffed or not. The wiki pages for both are
+// silent on debuffed cards and, per the game's discard branch, neither carries an
+// `other_card.debuff` guard (unlike Mail-In Rebate, Hit the Road, Castle, Faceless).
+#[test]
+fn yorick_and_ramen_count_debuffed_discarded_cards() {
+    let debuffed: Vec<Card> = cards(5)
+        .into_iter()
+        .map(|mut k| {
+            k.debuffed = true;
+            k
+        })
+        .collect();
+    let mut js = jokers(&[J::Ramen, J::Yorick]);
+    discard(&mut js, &debuffed);
+    assert_eq!(js[0].value, 1.95);
+    assert_eq!(js[1].counter, 18);
+}

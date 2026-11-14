@@ -493,3 +493,35 @@ fn forced_card_is_required_in_play_and_discard_masks() {
         _ => true,
     }));
 }
+
+#[test]
+fn smoke_covers_all_28_bosses_and_each_appears_naturally_with_the_ante_shortcut() {
+    // The forced-boss smoke test above iterates `defined()`: it must be the whole roster.
+    assert_eq!(defined().len(), B::COUNT);
+    // Natural selection: start at ante 1..=8 (shortcut), nudge scores so rounds are won, and
+    // record every boss that is in effect. Showdowns come from `choose_boss` at ante 8.
+    let mut seen = [false; B::COUNT];
+    for seed in 0..600u64 {
+        let mut g = new_game(seed);
+        g.state_mut().ante = 1 + (seed % 8) as i32;
+        let mut agent = RandomAgent::with_play_weight(seed, 4.0);
+        let mut steps = 0;
+        while !g.is_terminal() && steps < 800 {
+            if g.state().phase == Phase::Play {
+                let t = g.state().target;
+                g.state_mut().round_score = g.state().round_score.max(t - 1.0);
+            }
+            let a = agent.act(&g);
+            g.step(a).expect("legal");
+            if g.state().boss_in_effect()
+                && let Some(b) = g.state().boss
+            {
+                seen[b.index()] = true;
+            }
+            steps += 1;
+        }
+    }
+    for b in B::ALL {
+        assert!(seen[b.index()], "{b:?} never active in a natural game");
+    }
+}
