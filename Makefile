@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: setup test test-rs test-py lint fmt build-py bench snapshot
+.PHONY: setup setup-train test test-rs test-py lint fmt build-py bench snapshot bc-smoke
 
 # `uv run --no-sync` so uv never rebuilds/uninstalls the maturin-installed extension.
 UVR := uv run --no-sync
@@ -10,6 +10,15 @@ UVR := uv run --no-sync
 setup:
 	uv sync --no-install-project --inexact
 	$(UVR) maturin develop --release --quiet
+
+# PyTorch (CUDA 12.8 wheels, ~6.6 GB with the NVIDIA libs) for the model / training code.
+setup-train:
+	uv sync --no-install-project --inexact --group train
+	$(UVR) maturin develop --release --quiet
+
+# Behaviour-cloning smoke test (collect teacher data, train, play games); see docs/design/model.md.
+bc-smoke:
+	$(UVR) python scripts/bc_smoke.py --stage all
 
 test: test-rs test-py
 

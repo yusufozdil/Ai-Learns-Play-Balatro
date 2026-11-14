@@ -11,6 +11,20 @@ dependencies = ["numpy>=2.0"]
 
 [dependency-groups]
 dev = ["maturin>=1.9,<2", "pytest>=8", "ruff>=0.8"]
+# PyTorch with CUDA 12.8 wheels (needed for Blackwell sm_120 / RTX 50xx). Install: `make setup-train`.
+train = ["torch==2.9.1"]
+
+[tool.uv]
+# `train` is opt-in (~3 GB of CUDA libs); `make test` works without it (torch tests importorskip).
+default-groups = ["dev"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
 
 [tool.maturin]
 manifest-path = "crates/balatro-py/Cargo.toml"
