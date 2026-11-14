@@ -3,77 +3,115 @@ import time
 
 import numpy as np
 import pytest
-from balatro_rl import BalatroVecEnv, Game, _engine
+from balatro_rl import LAYOUT, BalatroVecEnv, Game, _engine
+from balatro_rl.env import allocate_buffers
 
-OBS_DIM = _engine.OBS_DIM
+OBS = LAYOUT["obs_names"]
+MASKS = LAYOUT["mask_names"]
 
 
-def rollout(num_envs, seed, threads, steps, max_episode_steps=300):
-    """Random-action rollout; returns everything observable, concatenated."""
+def snap(env):
+    """Everything observable after a call, copied."""
+    return {
+        **{k: v.copy() for k, v in env.obs.items()},
+        **{k: v.copy() for k, v in env.masks.items()},
+        "reward": env.reward.copy(),
+        "done": env.done.copy(),
+        "invalid": env.invalid.copy(),
+    }
+
+
+def rollout(num_envs, seed, threads, steps, max_episode_steps=300, teacher=False):
+    """Random (or teacher) rollout; returns every observable, stacked over time."""
     env = BalatroVecEnv(
         num_envs, seed=seed, num_threads=threads, max_episode_steps=max_episode_steps
     )
-    obs, lc = env.reset()
-    obs_log, rew_log, done_log, lc_log = [obs.copy()], [], [], [lc.copy()]
+    env.reset()
+    log = [snap(env)]
+    actions = []
     for _ in range(steps):
-        obs, rew, done, lc = env.step(env.random_actions())
-        obs_log.append(obs.copy())
-        rew_log.append(rew.copy())
-        done_log.append(done.copy())
-        lc_log.append(lc.copy())
-    return (
-        np.stack(obs_log),
-        np.stack(rew_log),
-        np.stack(done_log),
-        np.stack(lc_log),
-        env.drain_finished(),
-    )
+        a = (env.teacher_actions() if teacher else env.random_actions()).copy()
+        actions.append(a)
+        env.step(a)
+        log.append(snap(env))
+    stacked = {k: np.stack([s[k] for s in log]) for k in log[0]}
+    stacked["actions"] = np.stack(actions)
+    return stacked, env.drain_finished()
 
 
-def test_shapes_and_dtypes():
+def assert_same(a, b):
+    assert a[1] == b[1]
+    assert a[0].keys() == b[0].keys()
+    for k in a[0]:
+        assert np.array_equal(a[0][k], b[0][k]), k
+
+
+def test_shapes_and_dtypes_follow_the_layout():
     env = BalatroVecEnv(8, seed=1, num_threads=2)
-    obs, lc = env.reset()
-    assert obs.shape == (8, OBS_DIM) and obs.dtype == np.float32
-    assert lc.shape == (8,) and lc.dtype == np.int32
-    assert (lc > 0).all()
-    # Fresh run: BlindSelect phase one-hot, ante 1.
-    assert (obs[:, 0] == 1).all() and (obs[:, 6] == 1).all()
-    assert (obs[:, 22] == lc).all()
-    obs, rew, done, lc = env.step(env.random_actions())
-    assert rew.shape == (8,) and rew.dtype == np.float32
-    assert done.shape == (8,) and done.dtype == np.uint8
-    assert np.isfinite(obs).all()
+    obs, masks = env.reset()
+    assert set(obs) == set(OBS) and set(masks) == set(MASKS)
+    spec = {name: (np.dtype(dt), shape) for name, dt, shape in LAYOUT["buffers"]}
+    for name, arr in {**obs, **masks}.items():
+        dt, shape = spec[name]
+        assert arr.dtype == dt and arr.shape == (8, *shape), name
+    assert env.reward.dtype == np.float32 and env.reward.shape == (8,)
+    assert env.done.dtype == np.uint8 and env.invalid.dtype == np.uint8
+    # Fresh run: BlindSelect phase, ante 1, only SelectBlind/SkipBlind.
+    names = LAYOUT["feature_names"]
+    assert (obs["global_i"][:, names["global_i"].index("phase")] == 0).all()
+    assert (obs["global_f"][:, names["global_f"].index("ante")] == 1 / 8).all()
+    expected = np.zeros(17, bool)
+    expected[[0, 1]] = True
+    assert (masks["kind_mask"] == expected).all()
+    out = env.step(env.random_actions())
+    assert len(out) == 5
+    assert all(np.isfinite(v).all() for v in env.obs.values() if v.dtype == np.float32)
 
 
-def test_raw_engine_dtype_errors():
+def test_raw_engine_buffer_errors():
     env = _engine.VecEnv(2, 0, 1)
-    obs = np.zeros((2, OBS_DIM), np.float32)
-    lc = np.zeros(2, np.int32)
-    env.reset(obs, lc)
-    with pytest.raises(TypeError):  # wrong dtype is rejected, not silently converted
-        env.reset(obs.astype(np.float64), lc)
-    with pytest.raises(ValueError):  # wrong shape
-        env.reset(np.zeros((3, OBS_DIM), np.float32), lc)
-    with pytest.raises(ValueError):  # non-contiguous
-        env.reset(np.zeros((OBS_DIM, 2), np.float32).T, lc)
+    bufs = allocate_buffers(2)
+    env.reset(bufs)
+    bad = dict(bufs)
+    del bad["hand_f"]
+    with pytest.raises(KeyError):
+        env.reset(bad)
+    bad = dict(bufs, hand_f=bufs["hand_f"].astype(np.float64))  # dtype is not converted silently
+    with pytest.raises(ValueError, match="dtype"):
+        env.reset(bad)
+    bad = dict(bufs, hand_f=np.zeros((3, *bufs["hand_f"].shape[1:]), np.float32))
+    with pytest.raises(ValueError, match="shape"):
+        env.reset(bad)
+    swapped = np.zeros(bufs["global_f"].shape[::-1], np.float32).T  # Fortran order
+    with pytest.raises(ValueError, match="C-contiguous"):
+        env.reset(dict(bufs, global_f=swapped))
+    with pytest.raises(ValueError, match="shape"):
+        env.step(np.zeros((2, 3), np.int64), bufs)
+    with pytest.raises(TypeError):
+        env.step(np.zeros((2, 4), np.int32), bufs)
+    with pytest.raises(ValueError):
+        _engine.VecEnv(0)
+    with pytest.raises(ValueError, match="unknown reward term"):
+        _engine.VecEnv(1, reward={"nope": 1.0})
 
 
 @pytest.mark.parametrize("threads", [2, 3, 12])
-def test_determinism_independent_of_thread_count(threads):
-    a = rollout(50, seed=123, threads=1, steps=600)
-    b = rollout(50, seed=123, threads=threads, steps=600)
-    for x, y in zip(a[:4], b[:4], strict=True):
-        assert np.array_equal(x, y)
-    assert a[4] == b[4]
-    assert (a[2] != 0).any()  # the rollout actually finished episodes
+@pytest.mark.parametrize("teacher", [False, True])
+def test_determinism_independent_of_thread_count(threads, teacher):
+    steps = 40 if teacher else 400
+    a = rollout(24, seed=123, threads=1, steps=steps, teacher=teacher)
+    b = rollout(24, seed=123, threads=threads, steps=steps, teacher=teacher)
+    assert_same(a, b)
+    if not teacher:
+        assert (a[0]["done"] != 0).any()  # the rollout actually finished episodes
 
 
 def test_same_seed_repeats_and_different_seed_differs():
     a = rollout(16, seed=5, threads=2, steps=200)
     b = rollout(16, seed=5, threads=2, steps=200)
     c = rollout(16, seed=6, threads=2, steps=200)
-    assert np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1])
-    assert not np.array_equal(a[0], c[0])
+    assert_same(a, b)
+    assert not np.array_equal(a[0]["global_f"], c[0]["global_f"])
 
 
 def test_envs_differ_from_each_other():
@@ -81,7 +119,7 @@ def test_envs_differ_from_each_other():
     env.reset()
     for _ in range(40):
         env.step(env.random_actions())
-    assert len({tuple(row) for row in env.obs}) > 1
+    assert len({tuple(row) for row in env.obs["global_f"]}) > 1
 
 
 def test_reset_restarts_deterministically():
@@ -89,18 +127,19 @@ def test_reset_restarts_deterministically():
 
     def run():
         env.reset()
-        first = env.obs.copy()
+        first = snap(env)
         for _ in range(100):
             env.step(env.random_actions())
-        return first, env.obs.copy()
+        return first, snap(env)
 
     f1, l1 = run()
     f2, l2 = run()
-    assert np.array_equal(f1, f2) and np.array_equal(l1, l2)
+    for k in f1:
+        assert np.array_equal(f1[k], f2[k]) and np.array_equal(l1[k], l2[k]), k
     env.reset(seed=4)
     for _ in range(100):
         env.step(env.random_actions())
-    assert not np.array_equal(env.obs, l1)
+    assert not np.array_equal(env.obs["global_f"], l1["global_f"])
 
 
 def test_auto_reset_and_episode_stats():
@@ -108,72 +147,91 @@ def test_auto_reset_and_episode_stats():
     env.reset()
     saw_done = False
     for _ in range(3000):
-        _, _, done, lc = env.step(env.random_actions())
-        assert (lc > 0).all(), "auto-reset must always leave a playable state"
+        _, masks, _, done, _ = env.step(env.random_actions())
+        assert masks["kind_mask"].any(axis=1).all(), "auto-reset must leave a playable state"
         saw_done |= bool(done.any())
         if saw_done and len(env.drain_finished()) >= 8:
             break
     assert saw_done
-    # After auto-reset the env is playable: the next obs is a fresh run (ante 1 at the latest
-    # once a Loss happened) and stepping continues to work.
     env.step(env.random_actions())
 
 
 def test_done_obs_is_next_episode_and_stats_match():
     env = BalatroVecEnv(4, seed=11, num_threads=1, max_episode_steps=2000)
     env.reset()
+    names = LAYOUT["feature_names"]
+    ante_col = names["global_f"].index("ante")
+    phase_col = names["global_i"].index("phase")
     found = None
     for _ in range(5000):
-        obs, rew, done, _ = env.step(env.random_actions())
+        obs, _, _, done, _ = env.step(env.random_actions())
         idx = np.flatnonzero(done)
         if idx.size:
-            found = (idx[0], obs[idx[0]].copy(), int(done[idx[0]]))
+            i = idx[0]
+            found = (i, obs["global_f"][i, ante_col], obs["global_i"][i, phase_col], int(done[i]))
             break
     assert found is not None
-    i, o, code = found
+    i, ante, phase, code = found
     assert code in (1, 2)
-    assert o[0] == 1.0 and o[6] == 1.0  # new episode: BlindSelect, ante 1
+    assert ante == 1 / 8 and phase == 0  # a new episode: BlindSelect, ante 1
     stats = env.drain_finished()
     assert stats and stats[0][0] == i and stats[0][2] == code and stats[0][3] > 0
+    assert len(stats[0]) == 7 and stats[0][6] == 0  # no invalid actions in this rollout
 
 
 def test_truncation():
     env = BalatroVecEnv(4, seed=1, num_threads=1, max_episode_steps=3)
     env.reset()
     for _ in range(2):
-        _, _, done, _ = env.step(env.random_actions())
-        assert (done == 0).all()
-    _, _, done, _ = env.step(env.random_actions())
-    assert (done == _engine.DONE_TRUNCATED).all()
+        env.step(env.random_actions())
+        assert (env.done == 0).all()
+    env.step(env.random_actions())
+    assert (env.done == _engine.DONE_TRUNCATED).all()
     assert all(f[2] == _engine.DONE_TRUNCATED and f[3] == 3 for f in env.drain_finished())
 
 
-def test_invalid_action_index_raises_and_leaves_state_untouched():
-    env = BalatroVecEnv(4, seed=1, num_threads=2)
-    obs, lc = env.reset()
-    before = obs.copy()
-    bad = np.zeros(4, dtype=np.int64)
-    bad[2] = lc[2]  # one past the last legal index
-    with pytest.raises(ValueError, match="out of range"):
-        env.step(bad)
-    bad[2] = -1
-    with pytest.raises(ValueError, match="out of range"):
-        env.step(bad)
-    # State untouched: a valid step afterwards behaves like a fresh env's first step.
-    assert np.array_equal(env.obs, before)
-    ref = BalatroVecEnv(4, seed=1, num_threads=1)
+def test_invalid_actions_are_noops_with_a_flag_and_penalty():
+    env = BalatroVecEnv(6, seed=1, num_threads=2, reward={"invalid": -0.5})
+    env.reset()
+    before = snap(env)
+    acts = env.random_actions().copy()
+    # Fresh run (BlindSelect): Play is illegal, and so are malformed kinds/operands/masks.
+    acts[0] = [2, 0, 0, 1]
+    acts[1] = [99, 0, 0, 0]
+    acts[2] = [-1, 0, 0, 0]
+    acts[3] = [4, 256, 0, 0]
+    acts[4] = [2, 0, 0, 1 << 40]
+    acts[5] = [4, 0, 0, 0]  # SellJoker with no jokers
+    env.step(acts)
+    assert (env.invalid == 1).all()
+    assert np.allclose(env.reward, -0.5) and (env.done == 0).all()
+    for k in OBS + MASKS:  # state untouched
+        assert np.array_equal(env.obs.get(k, env.masks.get(k)), before[k]), k
+    # The steps still count: invalid actions end up in the episode stats on truncation.
+    env2 = BalatroVecEnv(2, seed=1, num_threads=1, max_episode_steps=3)
+    env2.reset()
+    bad = np.tile(np.array([[2, 0, 0, 1]], dtype=np.int64), (2, 1))
+    for _ in range(3):
+        env2.step(bad)
+    assert (env2.done == _engine.DONE_TRUNCATED).all()
+    assert [f[6] for f in env2.drain_finished()] == [3, 3]
+    # A valid step afterwards behaves like a fresh env's first step.
+    ref = BalatroVecEnv(6, seed=1, num_threads=1)
     ref.reset()
-    acts = np.zeros(4, dtype=np.int64)
-    assert np.array_equal(env.step(acts)[0], ref.step(acts)[0])
+    ok = np.zeros((6, 4), dtype=np.int64)
+    env.step(ok)
+    ref.step(ok)
+    assert np.array_equal(env.obs["global_f"], ref.obs["global_f"])
+    assert (env.invalid == 0).all()
 
 
-def test_wrong_buffer_sizes_raise():
+def test_wrong_action_shape_raises():
     env = BalatroVecEnv(4, seed=1, num_threads=1)
     env.reset()
     with pytest.raises(ValueError):
-        env.step(np.zeros(3, dtype=np.int64))
-    with pytest.raises(ValueError):
-        _engine.VecEnv(0)
+        env.step(np.zeros((3, 4), dtype=np.int64))
+    with pytest.raises((ValueError, TypeError)):  # wrong rank
+        env.step(np.zeros(4, dtype=np.int64))
 
 
 def test_set_num_threads_does_not_change_results():
@@ -186,22 +244,47 @@ def test_set_num_threads_does_not_change_results():
             env.set_num_threads([1, 4, 12, 2][k // 15])
         env.step(env.random_actions())
         ref.step(ref.random_actions())
-        assert np.array_equal(env.obs, ref.obs)
+        assert np.array_equal(env.obs["global_f"], ref.obs["global_f"])
         assert np.array_equal(env.reward, ref.reward)
 
 
-def test_reward_is_blind_clear_signal():
-    env = BalatroVecEnv(64, seed=21, num_threads=2, max_episode_steps=2000)
+def test_reward_terms_are_configurable():
+    zero = dict(blind=0.0, ante=0.0, win=0.0, loss=0.0, shaping=0.0, invalid=0.0)
+
+    def returns(**terms):
+        env = BalatroVecEnv(
+            64, seed=21, num_threads=2, max_episode_steps=2000, reward={**zero, **terms}
+        )
+        env.reset()
+        for _ in range(1500):
+            env.step(env.random_actions())
+        return env.drain_finished()
+
+    # Default-like blind reward: the return of an episode is the number of blinds beaten.
+    stats = returns(blind=1.0)
+    assert stats
+    for _, _, _, _, ret, won, _ in stats:
+        assert ret == pytest.approx(won)
+    # Loss penalty: -1 per lost episode, nothing else.
+    for _, _, code, _, ret, _, _ in returns(loss=-1.0):
+        assert ret == pytest.approx(-1.0 if code == _engine.DONE_LOSS else 0.0)
+    # Win bonus.
+    for _, _, code, _, ret, _, _ in returns(win=10.0, loss=0.0):
+        assert ret == pytest.approx(10.0 if code == _engine.DONE_WIN else 0.0)
+    # Shaping: telescopes to at most 1 per round started (rounds won + the last round).
+    for _, _, _, _, ret, won, _ in returns(shaping=1.0):
+        assert -1e-4 <= ret <= won + 1 + 1e-4
+
+
+def test_default_reward_values():
+    env = BalatroVecEnv(1, seed=0, num_threads=1)
     env.reset()
-    total = np.zeros(64)
-    for _ in range(1500):
-        _, rew, _, _ = env.step(env.random_actions())
-        assert (rew >= 0).all()
-        total += rew
-    stats = env.drain_finished()
-    # Episode return = blinds beaten + 10 per win.
-    for _, _, code, _, ret, won in stats:
-        assert ret == pytest.approx(won + (10.0 if code == _engine.DONE_WIN else 0.0))
+    # Mask-violating action: the default invalid penalty.
+    env.step(np.array([[2, 0, 0, 1]], dtype=np.int64))
+    assert env.reward[0] == pytest.approx(-0.05) and env.invalid[0] == 1
+    # Everything else is 0 for a SelectBlind.
+    env.step(np.array([[0, 0, 0, 0]], dtype=np.int64))
+    assert env.reward[0] == 0.0 and env.invalid[0] == 0
 
 
 def test_game_debug_object():
@@ -209,32 +292,44 @@ def test_game_debug_object():
     assert "BlindSelect" in g.state_json()
     acts = g.legal_actions()
     assert acts and all(isinstance(a, str) for a in acts)
-    assert g.legal_count() == len(acts)
-    assert len(g.observation()) == OBS_DIM
+    assert g.legal_count() == len(acts) == len(g.legal_parts())
+    obs, masks = g.observation(), g.masks()
+    assert set(obs) == set(OBS) and set(masks) == set(MASKS)
+    spec = {name: shape for name, _, shape in LAYOUT["buffers"]}
+    assert all(v.shape == spec[k] for k, v in {**obs, **masks}.items())
     assert not g.is_terminal() and g.outcome() is None
-    reward, done = g.step(0)
-    assert done == 0 and reward == 0.0
-    with pytest.raises(ValueError):
-        g.step(10**9)
-    # Play to the end with a fixed policy: terminates with a loss or truncation by our own cap.
+    reward, done, invalid = g.step_parts(0, 0, 0, 0)
+    assert (done, invalid, reward) == (0, False, 0.0)
+    reward, done, invalid = g.step_parts(99, 0, 0, 0)  # malformed: no-op
+    assert invalid and reward == pytest.approx(-0.05)
     for _ in range(100_000):
         if g.is_terminal():
             break
-        g.step(g.legal_count() - 1)
+        g.step_parts(*g.random_parts())
     else:
-        pytest.skip("fixed policy did not terminate")
+        pytest.skip("random policy did not terminate")
     assert g.outcome() in ("win", "loss")
+    assert not g.masks()["kind_mask"].any()
+    with pytest.raises(ValueError):
+        g.step_parts(0, 0, 0, 0)
 
 
 def test_game_matches_vec_env_row():
-    g = Game(seed=0)
-    env = _engine.VecEnv(1, 0, 1)
-    obs = np.zeros((1, OBS_DIM), np.float32)
-    lc = np.zeros(1, np.int32)
-    env.reset(obs, lc)
-    # VecEnv derives its own per-env seeds, so only the *initial* structure is comparable.
-    assert g.legal_count() == lc[0]
-    assert np.array_equal(np.array(g.observation())[[0, 6, 22]], obs[0][[0, 6, 22]])
+    for seed in (0, 3):
+        g = Game(seed=seed)
+        env = BalatroVecEnv(1, seed=seed, num_threads=1)
+        env.reset()
+        for k, v in {**g.observation(), **g.masks()}.items():
+            assert np.array_equal(v, {**env.obs, **env.masks}[k][0]), k
+        # Same actions, same trajectory (VecEnv env 0 is episode 0 of Game(seed)).
+        for _ in range(60):
+            a = env.random_actions()[0].copy()
+            g.step_parts(*[int(x) for x in a])
+            env.step(a[None, :])
+            if env.done[0]:
+                break
+            for k, v in g.observation().items():
+                assert np.array_equal(v, env.obs[k][0]), k
 
 
 def test_gil_is_released_during_step():

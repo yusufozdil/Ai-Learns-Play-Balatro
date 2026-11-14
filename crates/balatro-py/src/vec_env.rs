@@ -2,168 +2,25 @@
 //! caller-owned numpy buffers (no per-step allocation on the hot path).
 //!
 //! Layering:
-//! * [`EnvPool`] is plain Rust (no pyo3): envs, seed derivation, auto-reset, parallel stepping.
-//! * [`VecEnv`] is the thin pyo3 shell: extracts numpy slices, detaches from the GIL, maps
+//! * [`EnvPool`] is plain Rust (no pyo3): envs, parallel stepping, helpers.
+//! * [`VecEnv`] is the thin pyo3 shell: extracts the buffer dict, detaches from the GIL, maps
 //!   errors to Python exceptions.
 //!
 //! Determinism: env `i` in episode `k` is seeded with `derive_seed(base_seed, i, k)`; every env is
 //! stepped by exactly one thread and never reads another env, so results do not depend on the
-//! thread count or on rayon's work distribution. Per-env sampling for `random_actions` uses a
-//! per-env SplitMix64 stream for the same reason.
+//! thread count or on rayon's work distribution. The per-env samplers use per-env streams for the
+//! same reason.
 //!
-//! Action interface (TEMPORARY, Phase 8 replaces it): an action is an index into the env's
-//! current `legal_actions()` list. Observation, reward and `legal_count` come from
-//! [`crate::interface`].
+//! Interface: `docs/design/rl_interface.md`. Buffers: [`crate::layout`].
 
-use crate::interface::{self, OBS_DIM};
-use balatro_core::actions::Action;
-use balatro_core::game::Game;
-use balatro_core::state::{DeckKind, GameConfig, StakeKind};
-use numpy::{PyReadonlyArray1, PyReadwriteArray1, PyReadwriteArray2, PyUntypedArrayMethods};
+use crate::env::{DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, parse_config};
+use crate::layout::{Bufs, PyBufs};
+use balatro_core::state::GameConfig;
+use numpy::{PyReadonlyArray2, PyReadwriteArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use rayon::prelude::*;
-
-/// Default cap on steps per episode; longer episodes are truncated (done code 3).
-pub const DEFAULT_MAX_EPISODE_STEPS: u32 = 10_000;
-
-fn splitmix64(mut z: u64) -> u64 {
-    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// Seed of env `env` in episode `episode`. Pure function of its arguments.
-pub fn derive_seed(base: u64, env: u64, episode: u64) -> u64 {
-    let s = splitmix64(base);
-    let s = splitmix64(s ^ env.wrapping_mul(0xD6E8_FEB8_6659_FD93));
-    splitmix64(s ^ episode.wrapping_mul(0xA076_1D64_78BD_642F))
-}
-
-/// Summary of one finished episode (for logging).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Finished {
-    /// Env index.
-    pub env: u32,
-    /// Ante reached.
-    pub ante: i32,
-    /// Done code (`DONE_LOSS`, `DONE_WIN`, `DONE_TRUNCATED`).
-    pub code: u8,
-    /// Steps taken.
-    pub steps: u32,
-    /// Sum of the (placeholder) rewards.
-    pub ret: f32,
-    /// Blinds beaten.
-    pub rounds_won: u32,
-}
-
-/// Settings shared by all envs of a pool.
-#[derive(Debug, Clone, Copy)]
-struct Shared {
-    config: GameConfig,
-    max_steps: u32,
-    base_seed: u64,
-}
-
-struct Env {
-    idx: u32,
-    game: Game,
-    /// Legal actions of the current state (recomputed after every step / reset).
-    legal: Vec<Action>,
-    episode: u64,
-    steps: u32,
-    ep_return: f32,
-    /// SplitMix64 state for `random_actions`.
-    act_rng: u64,
-    finished: Vec<Finished>,
-}
-
-impl Env {
-    fn new(idx: u32, sh: &Shared) -> Env {
-        let mut e = Env {
-            idx,
-            game: Game::new(derive_seed(sh.base_seed, u64::from(idx), 0), sh.config),
-            legal: Vec::new(),
-            episode: 0,
-            steps: 0,
-            ep_return: 0.0,
-            act_rng: splitmix64(derive_seed(sh.base_seed, u64::from(idx), u64::MAX)),
-            finished: Vec::new(),
-        };
-        e.game.legal_actions_into(&mut e.legal);
-        e
-    }
-
-    /// Back to episode 0 with fresh seeds (the `reset()` entry point).
-    fn hard_reset(&mut self, sh: &Shared) {
-        let idx = self.idx;
-        self.game = Game::new(derive_seed(sh.base_seed, u64::from(idx), 0), sh.config);
-        self.episode = 0;
-        self.steps = 0;
-        self.ep_return = 0.0;
-        self.act_rng = splitmix64(derive_seed(sh.base_seed, u64::from(idx), u64::MAX));
-        self.finished.clear();
-        self.game.legal_actions_into(&mut self.legal);
-    }
-
-    /// Start the next episode (auto-reset) with a derived seed.
-    fn next_episode(&mut self, sh: &Shared) {
-        self.episode += 1;
-        self.steps = 0;
-        self.ep_return = 0.0;
-        self.game = Game::new(
-            derive_seed(sh.base_seed, u64::from(self.idx), self.episode),
-            sh.config,
-        );
-        self.game.legal_actions_into(&mut self.legal);
-    }
-
-    /// Apply legal-action index `a` (already range-checked), auto-reset when the episode ends.
-    /// Returns `(reward, done_code)`; the observation is written by the caller afterwards.
-    fn step(&mut self, a: usize, sh: &Shared) -> Result<(f32, u8), String> {
-        let Some(&action) = self.legal.get(a) else {
-            return Err(format!("env {}: action index {a} out of range", self.idx));
-        };
-        let info = self
-            .game
-            .step(action)
-            .map_err(|e| format!("env {}: legal action {action:?} rejected: {e}", self.idx))?;
-        let reward = interface::step_reward(&info, &self.game);
-        self.steps += 1;
-        self.ep_return += reward;
-        let mut done = interface::done_code(&self.game);
-        if done == interface::DONE_NO && self.steps >= sh.max_steps {
-            done = interface::DONE_TRUNCATED;
-        }
-        if done != interface::DONE_NO {
-            let s = self.game.state();
-            self.finished.push(Finished {
-                env: self.idx,
-                ante: s.ante,
-                code: done,
-                steps: self.steps,
-                ret: self.ep_return,
-                rounds_won: s.stats.rounds_won,
-            });
-            self.next_episode(sh);
-        } else {
-            self.game.legal_actions_into(&mut self.legal);
-            if self.legal.is_empty() {
-                return Err(format!(
-                    "env {}: non-terminal state without legal actions",
-                    self.idx
-                ));
-            }
-        }
-        Ok((reward, done))
-    }
-
-    fn write_obs(&self, obs: &mut [f32], legal_count: &mut i32) {
-        interface::write_obs(&self.game, self.legal.len(), obs);
-        *legal_count = self.legal.len() as i32;
-    }
-}
 
 /// Plain-Rust batch of envs (see module docs).
 pub struct EnvPool {
@@ -181,11 +38,13 @@ impl EnvPool {
         threads: usize,
         config: GameConfig,
         max_steps: u32,
+        reward: RewardConfig,
     ) -> Result<Self, String> {
         let shared = Shared {
             config,
             max_steps: max_steps.max(1),
             base_seed: seed,
+            reward,
         };
         let envs = (0..num_envs).map(|i| Env::new(i as u32, &shared)).collect();
         let mut p = EnvPool {
@@ -235,68 +94,56 @@ impl EnvPool {
         self.envs.len().div_ceil(self.threads * 4).max(1)
     }
 
-    /// Reset every env to episode 0 (optionally with a new base seed) and write observations.
-    pub fn reset(&mut self, seed: Option<u64>, obs: &mut [f32], legal_count: &mut [i32]) {
+    /// Reset every env to episode 0 (optionally with a new base seed) and write observations and
+    /// masks.
+    pub fn reset(&mut self, seed: Option<u64>, bufs: &Bufs<'_>) {
         if let Some(s) = seed {
             self.shared.base_seed = s;
         }
         let sh = self.shared;
         let chunk = self.chunk();
-        let work = |envs: &mut [Env], obs: &mut [f32], lc: &mut [i32]| {
-            for ((e, o), l) in envs
-                .iter_mut()
-                .zip(obs.as_chunks_mut::<OBS_DIM>().0.iter_mut())
-                .zip(lc.iter_mut())
-            {
+        let work = |ci: usize, envs: &mut [Env]| {
+            for (j, e) in envs.iter_mut().enumerate() {
                 e.hard_reset(&sh);
-                e.write_obs(o, l);
+                // SAFETY: env index `ci * chunk + j` belongs to this chunk only.
+                let mut row = unsafe { bufs.row(ci * chunk + j) };
+                e.write(&mut row);
+                row.reward[0] = 0.0;
+                row.done[0] = 0;
+                row.invalid[0] = 0;
             }
         };
         match &self.pool {
             Some(pool) => pool.install(|| {
                 self.envs
                     .par_chunks_mut(chunk)
-                    .zip(obs.par_chunks_mut(chunk * OBS_DIM))
-                    .zip(legal_count.par_chunks_mut(chunk))
-                    .for_each(|((e, o), l)| work(e, o, l));
+                    .enumerate()
+                    .for_each(|(ci, e)| work(ci, e));
             }),
-            None => work(&mut self.envs, obs, legal_count),
+            None => work(0, &mut self.envs),
         }
     }
 
-    /// `actions[i]` indexes env i's legal-action list. All indices are validated before any env
-    /// is touched, so an error leaves the pool unchanged.
-    pub fn step(
-        &mut self,
-        actions: &[i64],
-        obs: &mut [f32],
-        reward: &mut [f32],
-        done: &mut [u8],
-        legal_count: &mut [i32],
-    ) -> Result<(), String> {
-        for (e, &a) in self.envs.iter().zip(actions) {
-            if a < 0 || a as usize >= e.legal.len() {
-                return Err(format!(
-                    "env {}: action index {a} out of range (legal_count = {})",
-                    e.idx,
-                    e.legal.len()
-                ));
-            }
-        }
+    /// Step env `i` with `actions[4 * i..4 * i + 4]`; writes observation, masks, reward, done and
+    /// invalid into `bufs`.
+    pub fn step(&mut self, actions: &[i64], bufs: &Bufs<'_>) -> Result<(), String> {
         let sh = self.shared;
         let chunk = self.chunk();
-        let work = |envs: &mut [Env],
-                    acts: &[i64],
-                    obs: &mut [f32],
-                    rew: &mut [f32],
-                    dn: &mut [u8],
-                    lc: &mut [i32]|
-         -> Result<(), String> {
-            for (i, e) in envs.iter_mut().enumerate() {
-                let (r, d) = e.step(acts[i] as usize, &sh)?;
-                rew[i] = r;
-                dn[i] = d;
-                e.write_obs(&mut obs[i * OBS_DIM..(i + 1) * OBS_DIM], &mut lc[i]);
+        let work = |ci: usize, envs: &mut [Env], acts: &[i64]| -> Result<(), String> {
+            for (j, e) in envs.iter_mut().enumerate() {
+                let a = [
+                    acts[4 * j],
+                    acts[4 * j + 1],
+                    acts[4 * j + 2],
+                    acts[4 * j + 3],
+                ];
+                let out = e.step_parts(a, &sh, true)?;
+                // SAFETY: env index `ci * chunk + j` belongs to this chunk only.
+                let mut row = unsafe { bufs.row(ci * chunk + j) };
+                row.reward[0] = out.reward;
+                row.done[0] = out.done;
+                row.invalid[0] = u8::from(out.invalid);
+                e.write(&mut row);
             }
             Ok(())
         };
@@ -304,24 +151,57 @@ impl EnvPool {
             Some(pool) => pool.install(|| {
                 self.envs
                     .par_chunks_mut(chunk)
-                    .zip(actions.par_chunks(chunk))
-                    .zip(obs.par_chunks_mut(chunk * OBS_DIM))
-                    .zip(reward.par_chunks_mut(chunk))
-                    .zip(done.par_chunks_mut(chunk))
-                    .zip(legal_count.par_chunks_mut(chunk))
-                    .map(|(((((e, a), o), r), d), l)| work(e, a, o, r, d, l))
+                    .zip(actions.par_chunks(chunk * 4))
+                    .enumerate()
+                    .map(|(ci, (e, a))| work(ci, e, a))
                     .reduce(|| Ok(()), |x, y| x.and(y))
             }),
-            None => work(&mut self.envs, actions, obs, reward, done, legal_count),
+            None => work(0, &mut self.envs, actions),
         }
     }
 
-    /// Uniform random legal-action index for every env (per-env deterministic streams).
+    /// Uniformly random mask-conforming structured actions (`out.len() == 4 * num_envs`).
     pub fn random_actions(&mut self, out: &mut [i64]) {
-        for (e, o) in self.envs.iter_mut().zip(out.iter_mut()) {
-            e.act_rng = splitmix64(e.act_rng);
-            let n = e.legal.len() as u128;
-            *o = ((u128::from(e.act_rng) * n) >> 64) as i64;
+        let chunk = self.chunk();
+        let work = |envs: &mut [Env], out: &mut [i64]| {
+            for (e, o) in envs.iter_mut().zip(out.as_chunks_mut::<4>().0.iter_mut()) {
+                o.copy_from_slice(&e.random_parts());
+            }
+        };
+        match &self.pool {
+            Some(pool) => pool.install(|| {
+                self.envs
+                    .par_chunks_mut(chunk)
+                    .zip(out.par_chunks_mut(chunk * 4))
+                    .for_each(|(e, o)| work(e, o));
+            }),
+            None => work(&mut self.envs, out),
+        }
+    }
+
+    /// The heuristic agent's action in every env (`out.len() == 4 * num_envs`).
+    pub fn teacher_actions(&mut self, out: &mut [i64]) {
+        let sh = self.shared;
+        // A teacher action costs from microseconds (Play) to milliseconds (market valuation):
+        // hand out one env at a time so that work stealing balances the load.
+        let work = |e: &mut Env, o: &mut [i64]| o.copy_from_slice(&e.teacher_parts(&sh));
+        match &self.pool {
+            Some(pool) => pool.install(|| {
+                self.envs
+                    .par_iter_mut()
+                    .zip(out.par_chunks_mut(4))
+                    .with_max_len(1)
+                    .for_each(|(e, o)| work(e, o));
+            }),
+            None => {
+                for (e, o) in self
+                    .envs
+                    .iter_mut()
+                    .zip(out.as_chunks_mut::<4>().0.iter_mut())
+                {
+                    work(e, o);
+                }
+            }
         }
     }
 
@@ -336,23 +216,6 @@ impl EnvPool {
     }
 }
 
-/// Parse the deck/stake names accepted by the Python constructors.
-pub fn parse_config(deck: &str, stake: &str, endless: bool) -> Result<GameConfig, String> {
-    let deck = match deck.to_ascii_lowercase().as_str() {
-        "red" => DeckKind::Red,
-        other => return Err(format!("unknown deck {other:?} (implemented: \"red\")")),
-    };
-    let stake = match stake.to_ascii_lowercase().as_str() {
-        "white" => StakeKind::White,
-        other => return Err(format!("unknown stake {other:?} (implemented: \"white\")")),
-    };
-    Ok(GameConfig {
-        deck,
-        stake,
-        endless,
-    })
-}
-
 fn val_err(e: String) -> PyErr {
     PyValueError::new_err(e)
 }
@@ -363,13 +226,43 @@ fn slice_err(name: &str, e: impl std::fmt::Display) -> PyErr {
     ))
 }
 
+/// Parse the `reward` dict of the constructor.
+pub fn parse_reward(d: Option<&Bound<'_, PyDict>>) -> PyResult<RewardConfig> {
+    let mut r = RewardConfig::default();
+    if let Some(d) = d {
+        for (k, v) in d.iter() {
+            let key: String = k.extract()?;
+            let val: f32 = v.extract()?;
+            if !r.set(&key, val) {
+                return Err(val_err(format!(
+                    "unknown reward term {key:?} (blind, ante, win, loss, shaping, invalid)"
+                )));
+            }
+        }
+    }
+    Ok(r)
+}
+
+fn check_actions(a: &PyReadonlyArray2<'_, i64>, n: usize) -> PyResult<()> {
+    if a.shape() != [n, 4] {
+        return Err(val_err(format!(
+            "`actions` has shape {:?}, expected ({n}, 4)",
+            a.shape()
+        )));
+    }
+    if !a.is_c_contiguous() {
+        return Err(val_err("`actions` must be C-contiguous".into()));
+    }
+    Ok(())
+}
+
 /// Vectorised environment: `num_envs` runs stepped in parallel with the GIL released.
 ///
-/// All arrays are caller-owned and filled in place. Dtypes: `obs` float32 `(n, obs_dim)`,
-/// `reward` float32 `(n,)`, `done` uint8 `(n,)` (0 running, 1 lost, 2 won, 3 truncated),
-/// `legal_count` int32 `(n,)`, `actions` int64 `(n,)` (index into the env's legal-action list).
-/// After a step with `done[i] != 0` the env has already auto-reset: `obs[i]` and
-/// `legal_count[i]` belong to the next episode, `reward[i]` to the finishing transition.
+/// All arrays are caller-owned and filled in place; their names, dtypes and shapes are
+/// `layout()["buffers"]`. `actions` is int64 `(n, 4)` = `[kind, arg0, arg1, card_mask]`. After a
+/// step with `done[i] != 0` the env has already auto-reset: the observation and masks belong to
+/// the next episode, `reward[i]` to the finishing transition. See
+/// `docs/design/rl_interface.md`.
 #[pyclass(module = "balatro_rl._engine")]
 pub struct VecEnv {
     pool: EnvPool,
@@ -379,9 +272,11 @@ pub struct VecEnv {
 impl VecEnv {
     /// `num_threads = 0` uses all cores; 1 steps inline. `deck`/`stake` currently only accept
     /// "red"/"white". Episodes longer than `max_episode_steps` are truncated (done code 3).
+    /// `reward` overrides terms of the default reward (blind, ante, win, loss, shaping, invalid).
     #[new]
     #[pyo3(signature = (num_envs, seed=0, num_threads=0, max_episode_steps=DEFAULT_MAX_EPISODE_STEPS,
-                        deck="red", stake="white", endless=false))]
+                        deck="red", stake="white", endless=false, reward=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         num_envs: usize,
         seed: u64,
@@ -390,6 +285,7 @@ impl VecEnv {
         deck: &str,
         stake: &str,
         endless: bool,
+        reward: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(val_err("num_envs must be >= 1".into()));
@@ -398,8 +294,16 @@ impl VecEnv {
             return Err(val_err("num_envs too large".into()));
         }
         let config = parse_config(deck, stake, endless).map_err(val_err)?;
-        let pool = EnvPool::new(num_envs, seed, num_threads, config, max_episode_steps)
-            .map_err(PyRuntimeError::new_err)?;
+        let reward = parse_reward(reward)?;
+        let pool = EnvPool::new(
+            num_envs,
+            seed,
+            num_threads,
+            config,
+            max_episode_steps,
+            reward,
+        )
+        .map_err(PyRuntimeError::new_err)?;
         Ok(VecEnv { pool })
     }
 
@@ -407,12 +311,6 @@ impl VecEnv {
     #[getter]
     fn num_envs(&self) -> usize {
         self.pool.num_envs()
-    }
-
-    /// Observation length.
-    #[getter]
-    fn obs_dim(&self) -> usize {
-        OBS_DIM
     }
 
     /// Worker threads in use.
@@ -428,138 +326,146 @@ impl VecEnv {
             .map_err(PyRuntimeError::new_err)
     }
 
-    /// Reset all envs to episode 0 (optionally with a new base `seed`) and fill `obs_out`
-    /// and `legal_count_out`.
-    #[pyo3(signature = (obs_out, legal_count_out, seed=None))]
+    /// Reset all envs to episode 0 (optionally with a new base `seed`) and fill the observation
+    /// and mask arrays of `buffers` (`reward`/`done`/`invalid` are zeroed).
+    #[pyo3(signature = (buffers, seed=None))]
     fn reset(
         &mut self,
         py: Python<'_>,
-        mut obs_out: PyReadwriteArray2<'_, f32>,
-        mut legal_count_out: PyReadwriteArray1<'_, i32>,
+        buffers: &Bound<'_, PyDict>,
         seed: Option<u64>,
     ) -> PyResult<()> {
-        let n = self.pool.num_envs();
-        check_shape2(&obs_out, n, "obs_out")?;
-        let obs = obs_out
-            .as_slice_mut()
-            .map_err(|e| slice_err("obs_out", e))?;
-        let lc = legal_count_out
-            .as_slice_mut()
-            .map_err(|e| slice_err("legal_count_out", e))?;
-        check_len(lc.len(), n, "legal_count_out")?;
+        let mut pb = PyBufs::extract(buffers, self.pool.num_envs())?;
+        let bufs = pb.bufs()?;
         let pool = &mut self.pool;
-        py.detach(|| pool.reset(seed, obs, lc));
+        py.detach(|| pool.reset(seed, &bufs));
         Ok(())
     }
 
-    /// Step every env with `actions[i]` = index into its legal-action list. Raises `ValueError`
-    /// (leaving all envs untouched) if any index is out of `[0, legal_count)`.
+    /// Step every env with `actions[i] = [kind, arg0, arg1, card_mask]`. Malformed or illegal
+    /// actions are no-ops flagged in `invalid` (they never raise).
     fn step(
         &mut self,
         py: Python<'_>,
-        actions: PyReadonlyArray1<'_, i64>,
-        mut obs_out: PyReadwriteArray2<'_, f32>,
-        mut reward_out: PyReadwriteArray1<'_, f32>,
-        mut done_out: PyReadwriteArray1<'_, u8>,
-        mut legal_count_out: PyReadwriteArray1<'_, i32>,
+        actions: PyReadonlyArray2<'_, i64>,
+        buffers: &Bound<'_, PyDict>,
     ) -> PyResult<()> {
         let n = self.pool.num_envs();
-        check_shape2(&obs_out, n, "obs_out")?;
+        check_actions(&actions, n)?;
         let acts = actions.as_slice().map_err(|e| slice_err("actions", e))?;
-        let obs = obs_out
-            .as_slice_mut()
-            .map_err(|e| slice_err("obs_out", e))?;
-        let rew = reward_out
-            .as_slice_mut()
-            .map_err(|e| slice_err("reward_out", e))?;
-        let dn = done_out
-            .as_slice_mut()
-            .map_err(|e| slice_err("done_out", e))?;
-        let lc = legal_count_out
-            .as_slice_mut()
-            .map_err(|e| slice_err("legal_count_out", e))?;
-        check_len(acts.len(), n, "actions")?;
-        check_len(rew.len(), n, "reward_out")?;
-        check_len(dn.len(), n, "done_out")?;
-        check_len(lc.len(), n, "legal_count_out")?;
+        let mut pb = PyBufs::extract(buffers, n)?;
+        let bufs = pb.bufs()?;
         let pool = &mut self.pool;
-        py.detach(|| pool.step(acts, obs, rew, dn, lc))
-            .map_err(val_err)
+        py.detach(|| pool.step(acts, &bufs))
+            .map_err(|e| PyRuntimeError::new_err(format!("internal environment error: {e}")))
     }
 
-    /// Fill `out` (int64, `(n,)`) with a uniform random legal-action index per env
-    /// (deterministic per-env streams, reseeded by `reset`).
-    fn random_actions(&mut self, mut out: PyReadwriteArray1<'_, i64>) -> PyResult<()> {
+    /// Fill `out` (int64 `(n, 4)`) with uniformly random mask-conforming actions (deterministic
+    /// per-env streams, reseeded by `reset`).
+    fn random_actions(
+        &mut self,
+        py: Python<'_>,
+        mut out: PyReadwriteArray2<'_, i64>,
+    ) -> PyResult<()> {
         let n = self.pool.num_envs();
+        if out.shape() != [n, 4] || !out.is_c_contiguous() {
+            return Err(val_err(format!(
+                "`out` must be a C-contiguous int64 array of shape ({n}, 4)"
+            )));
+        }
         let o = out.as_slice_mut().map_err(|e| slice_err("out", e))?;
-        check_len(o.len(), n, "out")?;
-        self.pool.random_actions(o);
+        let pool = &mut self.pool;
+        py.detach(|| pool.random_actions(o));
+        Ok(())
+    }
+
+    /// Fill `out` (int64 `(n, 4)`) with the action of the fair-information heuristic team agent
+    /// for every env's current state (parallel, GIL released).
+    fn teacher_actions(
+        &mut self,
+        py: Python<'_>,
+        mut out: PyReadwriteArray2<'_, i64>,
+    ) -> PyResult<()> {
+        let n = self.pool.num_envs();
+        if out.shape() != [n, 4] || !out.is_c_contiguous() {
+            return Err(val_err(format!(
+                "`out` must be a C-contiguous int64 array of shape ({n}, 4)"
+            )));
+        }
+        let o = out.as_slice_mut().map_err(|e| slice_err("out", e))?;
+        let pool = &mut self.pool;
+        py.detach(|| pool.teacher_actions(o));
         Ok(())
     }
 
     /// Episodes finished since the last call, as `(env, ante, done_code, steps, return,
-    /// blinds_beaten)` tuples (and cleared).
-    fn drain_finished(&mut self) -> Vec<(u32, i32, u8, u32, f32, u32)> {
+    /// blinds_beaten, invalid_actions)` tuples (and cleared).
+    #[allow(clippy::type_complexity)]
+    fn drain_finished(&mut self) -> Vec<(u32, i32, u8, u32, f32, u32, u32)> {
         self.pool
             .drain_finished()
             .into_iter()
-            .map(|f| (f.env, f.ante, f.code, f.steps, f.ret, f.rounds_won))
+            .map(|f| {
+                (
+                    f.env,
+                    f.ante,
+                    f.code,
+                    f.steps,
+                    f.ret,
+                    f.rounds_won,
+                    f.invalid,
+                )
+            })
             .collect()
-    }
-}
-
-fn check_len(got: usize, want: usize, name: &str) -> PyResult<()> {
-    if got == want {
-        Ok(())
-    } else {
-        Err(val_err(format!(
-            "`{name}` has length {got}, expected {want}"
-        )))
-    }
-}
-
-fn check_shape2(a: &PyReadwriteArray2<'_, f32>, n: usize, name: &str) -> PyResult<()> {
-    let sh = a.shape();
-    if sh == [n, OBS_DIM] {
-        // `as_slice_mut` also accepts Fortran-ordered arrays, which would silently scramble rows.
-        if !a.is_c_contiguous() {
-            return Err(val_err(format!("`{name}` must be C-contiguous")));
-        }
-        Ok(())
-    } else {
-        Err(val_err(format!(
-            "`{name}` has shape {sh:?}, expected ({n}, {OBS_DIM})"
-        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::derive_seed;
+    use crate::layout::Owned;
 
-    fn run(threads: usize, n: usize, steps: usize) -> (Vec<f32>, Vec<f32>, Vec<u8>) {
-        let mut p = EnvPool::new(n, 7, threads, GameConfig::default(), 500).unwrap();
-        let mut obs = vec![0.0; n * OBS_DIM];
-        let mut lc = vec![0; n];
-        p.reset(None, &mut obs, &mut lc);
-        let (mut rew, mut dn) = (vec![0.0; n], vec![0u8; n]);
-        let mut acts = vec![0i64; n];
+    fn run(threads: usize, n: usize, steps: usize) -> (Owned, Vec<f32>, Vec<u8>) {
+        let mut p = EnvPool::new(
+            n,
+            7,
+            threads,
+            GameConfig::default(),
+            500,
+            RewardConfig::default(),
+        )
+        .unwrap();
+        let mut o = Owned::new(n);
+        {
+            let b = o.bufs();
+            p.reset(None, &b);
+        }
+        let mut acts = vec![0i64; n * 4];
         let (mut all_r, mut all_d) = (Vec::new(), Vec::new());
         for _ in 0..steps {
             p.random_actions(&mut acts);
-            p.step(&acts, &mut obs, &mut rew, &mut dn, &mut lc).unwrap();
-            all_r.extend_from_slice(&rew);
-            all_d.extend_from_slice(&dn);
+            let b = o.bufs();
+            p.step(&acts, &b).unwrap();
+            all_r.extend_from_slice(&o.reward);
+            all_d.extend_from_slice(&o.done);
         }
-        (obs, all_r, all_d)
+        (o, all_r, all_d)
     }
 
     #[test]
     fn deterministic_across_thread_counts() {
         let a = run(1, 37, 400);
         let b = run(5, 37, 400);
-        assert_eq!(a, b);
+        assert_eq!(a.1, b.1);
+        assert_eq!(a.2, b.2);
+        assert_eq!(a.0.global_f, b.0.global_f);
+        assert_eq!(a.0.hand_f, b.0.hand_f);
+        assert_eq!(a.0.offer_i, b.0.offer_i);
+        assert_eq!(a.0.arg0_mask, b.0.arg0_mask);
+        assert_eq!(a.0.sel_candidates, b.0.sel_candidates);
         assert!(a.2.iter().any(|&d| d != 0), "some episode should end");
+        assert!(a.0.invalid.iter().all(|&i| i == 0));
     }
 
     #[test]
@@ -571,65 +477,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_index_without_side_effects() {
-        let mut p = EnvPool::new(2, 1, 1, GameConfig::default(), 100).unwrap();
-        let (mut obs, mut lc) = (vec![0.0; 2 * OBS_DIM], vec![0; 2]);
-        p.reset(None, &mut obs, &mut lc);
-        let (mut r, mut d) = (vec![0.0; 2], vec![0u8; 2]);
-        let bad = [0, lc[1] as i64];
-        assert!(p.step(&bad, &mut obs, &mut r, &mut d, &mut lc).is_err());
-        assert!(p.step(&[-1, 0], &mut obs, &mut r, &mut d, &mut lc).is_err());
-        assert!(p.step(&[0, 0], &mut obs, &mut r, &mut d, &mut lc).is_ok());
-    }
-
-    /// Cost split of one random-play env step (run with `--ignored --nocapture`, release).
-    #[test]
-    #[ignore]
-    fn cost_breakdown() {
-        use std::time::Instant;
-        let sh = Shared {
-            config: GameConfig::default(),
-            max_steps: 10_000,
-            base_seed: 3,
+    fn teacher_actions_are_valid_and_thread_independent() {
+        let go = |threads: usize| {
+            let n = 6;
+            let mut p = EnvPool::new(
+                n,
+                3,
+                threads,
+                GameConfig::default(),
+                2_000,
+                RewardConfig::default(),
+            )
+            .unwrap();
+            let mut o = Owned::new(n);
+            {
+                let b = o.bufs();
+                p.reset(None, &b);
+            }
+            let mut acts = vec![0i64; n * 4];
+            let mut log = Vec::new();
+            for _ in 0..120 {
+                p.teacher_actions(&mut acts);
+                log.extend_from_slice(&acts);
+                let b = o.bufs();
+                p.step(&acts, &b).unwrap();
+                assert!(o.invalid.iter().all(|&i| i == 0), "teacher action rejected");
+            }
+            log
         };
-        let mut e = Env::new(0, &sh);
-        let mut obs = [0.0f32; OBS_DIM];
-        let (mut t_step, mut t_obs, mut n) = (0u128, 0u128, 0u64);
-        let mut legal_total = 0u64;
-        let mut rng = 1u64;
-        while n < 400_000 {
-            rng = splitmix64(rng);
-            let a = ((u128::from(rng) * e.legal.len() as u128) >> 64) as usize;
-            let t = Instant::now();
-            e.step(a, &sh).unwrap(); // includes legal_actions_into (+ auto-reset)
-            t_step += t.elapsed().as_nanos();
-            legal_total += e.legal.len() as u64;
-            let t = Instant::now();
-            let mut lc = 0;
-            e.write_obs(&mut obs, &mut lc);
-            t_obs += t.elapsed().as_nanos();
-            n += 1;
-        }
-        // legal generation alone on the same kind of states
-        let mut e2 = Env::new(0, &sh);
-        let mut t_legal = 0u128;
-        let mut buf = Vec::new();
-        let mut m = 0u64;
-        while m < 400_000 {
-            rng = splitmix64(rng);
-            let a = ((u128::from(rng) * e2.legal.len() as u128) >> 64) as usize;
-            e2.step(a, &sh).unwrap();
-            let t = Instant::now();
-            e2.game.legal_actions_into(&mut buf);
-            t_legal += t.elapsed().as_nanos();
-            m += 1;
-        }
-        println!(
-            "step incl. legal+reset {:.0} | legal_actions alone {:.0} | obs {:.0} | avg legal {:.0}",
-            t_step as f64 / n as f64,
-            t_legal as f64 / m as f64,
-            t_obs as f64 / n as f64,
-            legal_total as f64 / n as f64
-        );
+        assert_eq!(go(1), go(3));
     }
 }
