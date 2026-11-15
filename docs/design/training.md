@@ -373,3 +373,18 @@ section 12); v1 checkpoints (`--init` / `--resume`, BC data) load through an exa
 Sampling happens in the Rust `VecEnv` (`decks=` / `stakes=` constructor arguments, a pure function of
 `(seed, env, episode)`), so it costs nothing and is independent of the thread count. Without the flags
 the env is the fixed Red/White one, bit for bit. The lists land in `config.json`.
+
+## 14. Phase 10F results: margin and zero_play rewards (2026-11-15)
+
+`scripts/chain_reward.sh`: 24M steps each, `e2e_long` recipe (BC init, seed 0, v2 interface with migrated BC), raw test
+(1000 games), paired differences vs `r_base`:
+
+| run | det ante / win | sampled ante / win | paired d_win vs base (det / sampled) |
+|---|---|---|---|
+| `r_base` | 7.01 / 35.9% (trunc 1.3%) | 6.93 / 35.4% | |
+| `r_margin` (`--margin 1.0`) | 7.10 / 37.0% (1.3%) | 6.94 / 34.5% | +1.1 +- 2.0 / -0.9 +- 2.0 |
+| `r_margin_zp` (`+ --zero-play -0.3`) | 7.09 / 39.7% (1.6%) | 7.02 / 39.1% | **+3.8 +- 2.0 / +3.7 +- 1.9** |
+
+Margin alone is neutral at 24M (validation curves overlap the baseline). Adding the zero-score-play cost gives ~+3.7 points
+in both modes (~2 standard errors, one seed; the loss analysis bounded the Eye/Mouth fix at ~+3.5 points at 100M).
+Adopted for later runs: `--margin 1.0 --zero-play -0.3` (margin kept: harmless, may matter on higher stakes).
