@@ -21,7 +21,9 @@ stage() {  # name, init, steps, decks, stakes, eval_stake
   done
 }
 
-stage st1 runs/e2e_long_fix/latest.pt 24e6 red white,red,green green
-stage st2 runs/st1/latest.pt 30e6 "$DECKS" white,red,green,black,blue black
-stage st3 runs/st2/latest.pt 40e6 "$DECKS" blue,purple,orange,gold orange
+# START=2 scripts/chain_stakes.sh resumes the ladder at stage 2 (stage 1 already done), etc.
+START=${START:-1}
+[ "$START" -le 1 ] && stage st1 runs/e2e_long_fix/latest.pt 24e6 red white,red,green green
+[ "$START" -le 2 ] && stage st2 runs/st1/latest.pt 30e6 "$DECKS" white,red,green,black,blue black
+[ "$START" -le 3 ] && stage st3 runs/st2/latest.pt 40e6 "$DECKS" blue,purple,orange,gold orange
 echo CHAIN_DONE
