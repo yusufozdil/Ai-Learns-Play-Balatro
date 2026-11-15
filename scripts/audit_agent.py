@@ -74,6 +74,13 @@ def _item(k) -> tuple[str, str]:
     return ("?", str(k))
 
 
+def _sell(k) -> int | None:
+    """Sell value of a shop joker (the price is about twice this); ``None`` for other items."""
+    if isinstance(k, dict) and "Joker" in k:
+        return k["Joker"]["sell_value"]
+    return None
+
+
 def replay(args: tuple[int, list]) -> dict:
     """Replay one recorded game and log one event per action (pre-state context + money)."""
     i, acts = args
@@ -85,6 +92,22 @@ def replay(args: tuple[int, list]) -> dict:
         kind = KINDS[a[0]]
         pre = s
         e = {"k": kind, "a": a, "ante": pre["ante"], "ph": pre["phase"], "money": pre["money"]}
+        # context for loss analysis (additive fields)
+        e.update(
+            blind=pre["blind"], target=pre["target"], boss=pre["boss"], rnd=pre["round"],
+            hl=pre["hands_left"], dl=pre["discards_left"], rs=pre["round_score"],
+            jk=[(j["id"], j["edition"]) for j in pre["jokers"]],
+            ncons=len(pre["consumables"]),
+        )  # fmt: skip
+        if kind in ("Play", "Discard"):
+            e["hand_cards"] = [_card(c) for c in pre["deck"]["hand"]]
+        elif kind == "EndShop":
+            sh = pre["shop"]
+            e["shop_left"] = [
+                (*_item(c["kind"]), _sell(c["kind"])) for c in sh["cards"] if c is not None
+            ]
+            e["packs_left"] = [f"{p['spec']['kind']}-{p['spec']['size']}" for p in sh["packs"] if p]
+            e["vouchers_left"] = [v["id"] for v in sh["vouchers"] if v]
         if kind in ("Buy", "BuyAndUse"):
             c = pre["shop"]["cards"][a[1]]
             if c is not None:
@@ -137,6 +160,17 @@ def replay(args: tuple[int, list]) -> dict:
         "hand_levels": s["hand_levels"],
         "deck_size": sum(len(deck[k]) for k in ("draw_pile", "hand", "discard_pile", "played")),
         "best_hand": s["stats"]["best_hand"],
+        "blind": s["blind"],
+        "boss": s["boss"],
+        "target": s["target"],
+        "round_score": s["round_score"],
+        "hands_left": s["hands_left"],
+        "discards_left": s["discards_left"],
+        "consumables": [c["id"] if isinstance(c, dict) else str(c) for c in s["consumables"]],
+        "hand_plays_run": s["hand_plays_run"],
+        "stats": s["stats"],
+        "joker_slots": s["joker_slots"],
+        "last_hand": s["last_hand"],
     }
     return {"ev": events, "fin": fin, "money_curve": money_curve}
 
