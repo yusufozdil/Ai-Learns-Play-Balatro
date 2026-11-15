@@ -47,6 +47,16 @@ pub struct RewardConfig {
     /// action that changes nothing but the joker order, so a policy can swap two jokers back and
     /// forth forever; a small negative value breaks that loop (0 = off).
     pub reorder: f32,
+    /// Weight of `ln(min(score / target, margin_cap))` added when a blind is beaten (0 = off).
+    pub margin: f32,
+    /// Cap of the score / target ratio inside the margin term.
+    pub margin_cap: f32,
+    /// Reward (cost when negative) of every played hand a boss rejected (score 0): The Psychic,
+    /// The Eye, The Mouth (0 = off).
+    pub zero_play: f32,
+    /// Endless runs only (`GameConfig.endless`): the episode ends (done, not truncated) after the
+    /// boss of this ante is beaten. Lives here so the env constructors keep their signatures.
+    pub endless_max_ante: i32,
 }
 
 impl Default for RewardConfig {
@@ -59,6 +69,10 @@ impl Default for RewardConfig {
             shaping: 0.0,
             invalid: -0.05,
             reorder: 0.0,
+            margin: 0.0,
+            margin_cap: 4.0,
+            zero_play: 0.0,
+            endless_max_ante: 12,
         }
     }
 }
@@ -74,6 +88,10 @@ impl RewardConfig {
             "shaping" => self.shaping = v,
             "invalid" => self.invalid = v,
             "reorder" => self.reorder = v,
+            "margin" => self.margin = v,
+            "margin_cap" => self.margin_cap = v,
+            "zero_play" => self.zero_play = v,
+            "endless_max_ante" => self.endless_max_ante = v as i32,
             _ => return false,
         }
         true
@@ -258,13 +276,20 @@ impl Env {
         self.refresh();
     }
 
-    fn reward_of(sh: &Shared, info: &StepInfo, game: &Game, before: f32) -> f32 {
+    fn reward_of(sh: &Shared, info: &StepInfo, game: &Game, before: f32, won_before: bool) -> f32 {
         let r = &sh.reward;
         let mut x = 0.0;
         let mut after = progress(game.state());
+        if r.zero_play != 0.0 && info.hand.is_some_and(|h| h.invalid) {
+            x += r.zero_play;
+        }
         if let Some(rr) = &info.round {
             if rr.won {
                 x += r.blind;
+                if r.margin != 0.0 && rr.target.is_finite() && rr.target > 0.0 {
+                    let ratio = (rr.round_score / rr.target).max(1.0);
+                    x += r.margin * (ratio.min(f64::from(r.margin_cap))).ln() as f32;
+                }
                 if rr.blind == BlindKind::Boss {
                     x += r.ante;
                 }
@@ -275,10 +300,13 @@ impl Env {
                 0.0
             };
         }
-        match game.outcome() {
-            Some(Outcome::Win) => x += r.win,
-            Some(Outcome::Loss) => x += r.loss,
-            None => {}
+        // `won` flips exactly once per run (at the ante-8 boss; in a non-endless run that is also
+        // the `Outcome::Win` transition), so an endless run that continues pays `win` once.
+        if !won_before && game.state().won {
+            x += r.win;
+        }
+        if game.outcome() == Some(Outcome::Loss) {
+            x += r.loss;
         }
         if r.shaping != 0.0 {
             x += r.shaping * (after - before);
@@ -294,18 +322,22 @@ impl Env {
         auto_reset: bool,
     ) -> Result<StepOut, String> {
         let action = parse_action(parts).filter(|a| self.game.validate(*a).is_ok());
-        let (reward, invalid) = match action {
-            None => (sh.reward.invalid, true),
+        let (reward, invalid, cap_hit) = match action {
+            None => (sh.reward.invalid, true, false),
             Some(a) => {
                 let before = progress(self.game.state());
+                let won_before = self.game.state().won;
                 let info = self.game.step(a).map_err(|e| {
                     format!("env {}: validated action {a:?} rejected: {e}", self.idx)
                 })?;
-                let mut x = Self::reward_of(sh, &info, &self.game, before);
+                let mut x = Self::reward_of(sh, &info, &self.game, before, won_before);
                 if matches!(a, Action::MoveJoker { .. }) {
                     x += sh.reward.reorder;
                 }
-                (x, false)
+                let cap = info.round.is_some_and(|r| {
+                    r.won && r.blind == BlindKind::Boss && r.ante >= sh.reward.endless_max_ante
+                });
+                (x, false, cap)
             }
         };
         self.steps += 1;
@@ -319,6 +351,16 @@ impl Env {
             None if self.game.is_terminal() => DONE_LOSS,
             None => DONE_NO,
         };
+        if sh.config.endless {
+            // Endless: a run that passed ante 8 reports as won even if it dies later; the episode
+            // also ends (done, terminal value 0) once the boss of `endless_max_ante` is beaten.
+            if done == DONE_NO && cap_hit {
+                done = DONE_LOSS;
+            }
+            if done != DONE_NO && self.game.state().won {
+                done = DONE_WIN;
+            }
+        }
         if done == DONE_NO && self.steps >= sh.max_steps {
             done = DONE_TRUNCATED;
         }
@@ -531,5 +573,264 @@ mod tests {
             let mut row = unsafe { b.row(0) };
             e.write(&mut row);
         }
+    }
+
+    // ----- Phase 10F reward options ---------------------------------------------------------
+
+    fn blind_report(blind: BlindKind, round_score: f64, target: f64, saved: bool) -> StepInfo {
+        use balatro_core::game::RoundReport;
+        StepInfo {
+            action: Action::EndShop,
+            phase_before: Phase::Play,
+            phase_after: Phase::Shop,
+            money_before: 0,
+            money_after: 0,
+            hand: None,
+            round: Some(RoundReport {
+                won: true,
+                saved,
+                out_of_cards: false,
+                ante: 1,
+                blind,
+                round_score,
+                target,
+                held_money: 0,
+                cash_out: None,
+            }),
+            tag: None,
+            sold_for: None,
+            spent: None,
+            used: None,
+            cards_destroyed: 0,
+            cards_added: 0,
+        }
+    }
+
+    fn reward_for(sh: &Shared, info: &StepInfo) -> f32 {
+        let g = Game::new(1, GameConfig::default());
+        Env::reward_of(sh, info, &g, 0.0, false)
+    }
+
+    #[test]
+    fn margin_term_value_and_cap() {
+        let mut sh = shared();
+        let base = reward_for(&sh, &blind_report(BlindKind::Small, 450.0, 300.0, false));
+        assert_eq!(base, 1.0);
+        sh.reward.margin = 0.5;
+        let r = reward_for(&sh, &blind_report(BlindKind::Small, 450.0, 300.0, false));
+        assert!((r - (1.0 + 0.5 * 1.5f32.ln())).abs() < 1e-6, "{r}");
+        // Exactly at target: no bonus. Capped at margin_cap (default 4).
+        let r = reward_for(&sh, &blind_report(BlindKind::Small, 300.0, 300.0, false));
+        assert_eq!(r, 1.0);
+        let r = reward_for(&sh, &blind_report(BlindKind::Small, 1e9, 300.0, false));
+        assert!((r - (1.0 + 0.5 * 4.0f32.ln())).abs() < 1e-6, "{r}");
+        sh.reward.set("margin_cap", 2.0);
+        let r = reward_for(&sh, &blind_report(BlindKind::Boss, 1e9, 300.0, false));
+        assert!((r - (2.0 + 0.5 * 2.0f32.ln())).abs() < 1e-6, "{r}");
+        // A blind saved below its target never pays a negative margin.
+        let r = reward_for(&sh, &blind_report(BlindKind::Small, 100.0, 300.0, true));
+        assert_eq!(r, 1.0);
+    }
+
+    /// Beat the blind in play by seeding the round score at the target, then playing 5 cards.
+    fn beat_blind(e: &mut Env, sh: &Shared) -> StepOut {
+        assert!(
+            !e.step_parts(action_row(&Action::SelectBlind), sh, true)
+                .unwrap()
+                .invalid
+        );
+        let t = e.game.state().target;
+        e.game.state_mut().round_score = t;
+        e.refresh();
+        let n = e.game.state().deck.hand.len().min(5);
+        let play = action_row(&Action::Play((1u32 << n) - 1));
+        let out = e.step_parts(play, sh, true).unwrap();
+        assert!(!out.invalid);
+        out
+    }
+
+    /// Beat blinds (ending shops) until the first `done`; the rewards of the boss steps by ante.
+    fn run_to_done(sh: &Shared, max_blinds: usize) -> (Env, Vec<(i32, BlindKind, f32, u8)>) {
+        let mut e = Env::new(0, sh);
+        let mut log = Vec::new();
+        for _ in 0..max_blinds {
+            let (ante, blind) = (e.game.state().ante, e.game.state().blind);
+            let out = beat_blind(&mut e, sh);
+            log.push((ante, blind, out.reward, out.done));
+            if out.done != DONE_NO {
+                break;
+            }
+            if e.game.state().phase == Phase::Shop {
+                let p = action_row(&Action::EndShop);
+                assert!(!e.step_parts(p, sh, true).unwrap().invalid);
+            }
+        }
+        (e, log)
+    }
+
+    fn boss_game(boss: balatro_core::content::BossId) -> (Env, Shared) {
+        let sh = shared();
+        let mut e = Env::new(0, &sh);
+        for _ in 0..2 {
+            beat_blind(&mut e, &sh);
+            let p = action_row(&Action::EndShop);
+            e.step_parts(p, &sh, true).unwrap();
+        }
+        e.game.state_mut().boss = Some(boss);
+        assert!(
+            !e.step_parts(action_row(&Action::SelectBlind), &sh, true)
+                .unwrap()
+                .invalid
+        );
+        assert!(e.game.state().boss_in_effect());
+        (e, sh)
+    }
+
+    fn plain_hand(e: &mut Env, pair: bool) {
+        use balatro_core::enums::{Edition, Enhancement, Rank, Seal, Suit};
+        let ranks = [
+            Rank::Two,
+            Rank::Three,
+            Rank::Four,
+            Rank::Five,
+            Rank::Six,
+            Rank::Seven,
+        ];
+        for (c, r) in e.game.state_mut().deck.hand.iter_mut().zip(ranks) {
+            c.rank = r;
+            c.suit = Suit::Spades;
+            c.enhancement = Enhancement::None;
+            c.edition = Edition::Base;
+            c.seal = Seal::None;
+            c.perma_bonus = 0;
+        }
+        if pair {
+            e.game.state_mut().deck.hand[1].rank = Rank::Two;
+            e.game.state_mut().deck.hand[1].suit = Suit::Hearts;
+        }
+        e.refresh();
+    }
+
+    fn play_mask(e: &mut Env, sh: &Shared, mask: u32) -> f32 {
+        let out = e
+            .step_parts(action_row(&Action::Play(mask)), sh, true)
+            .unwrap();
+        assert!(!out.invalid && out.done == DONE_NO);
+        out.reward
+    }
+
+    #[test]
+    fn zero_play_under_the_eye() {
+        use balatro_core::content::BossId;
+        let (mut e, mut sh) = boss_game(BossId::TheEye);
+        sh.reward.zero_play = -0.3;
+        plain_hand(&mut e, false);
+        assert_eq!(play_mask(&mut e, &sh, 0b1), 0.0, "first High Card is valid");
+        plain_hand(&mut e, false);
+        assert_eq!(
+            play_mask(&mut e, &sh, 0b1),
+            -0.3,
+            "repeated High Card scores 0"
+        );
+    }
+
+    #[test]
+    fn zero_play_under_the_mouth_and_off_by_default() {
+        use balatro_core::content::BossId;
+        let (mut e, mut sh) = boss_game(BossId::TheMouth);
+        sh.reward.zero_play = 0.7;
+        plain_hand(&mut e, true);
+        assert_eq!(play_mask(&mut e, &sh, 0b100), 0.0);
+        plain_hand(&mut e, true);
+        assert_eq!(
+            play_mask(&mut e, &sh, 0b11),
+            0.7,
+            "Pair after High Card is rejected"
+        );
+        // Off by default: the same rejected hand pays nothing.
+        let (mut e, sh) = boss_game(BossId::TheMouth);
+        plain_hand(&mut e, true);
+        play_mask(&mut e, &sh, 0b100);
+        plain_hand(&mut e, true);
+        assert_eq!(play_mask(&mut e, &sh, 0b11), 0.0);
+    }
+
+    #[test]
+    fn non_endless_ante_8_boss_wins_and_ends() {
+        let sh = shared();
+        let (e, log) = run_to_done(&sh, 100);
+        let (ante, blind, reward, done) = *log.last().unwrap();
+        assert_eq!((ante, blind, done), (8, BlindKind::Boss, DONE_WIN));
+        assert_eq!(reward, 1.0 + 1.0 + 10.0);
+        assert_eq!(log.len(), 24);
+        assert_eq!(e.finished.len(), 1);
+    }
+
+    #[test]
+    fn endless_continues_pays_win_once_and_stops_at_max_ante() {
+        let mut sh = shared();
+        sh.config.endless = true;
+        sh.reward.endless_max_ante = 10;
+        let (e, log) = run_to_done(&sh, 100);
+        let wins = log.iter().filter(|l| l.2 >= 12.0).count();
+        assert_eq!(wins, 1, "win pays once");
+        let ante8 = log
+            .iter()
+            .find(|l| l.0 == 8 && l.1 == BlindKind::Boss)
+            .unwrap();
+        assert_eq!(
+            (ante8.2, ante8.3),
+            (12.0, DONE_NO),
+            "run continues after the win"
+        );
+        let (ante, blind, reward, done) = *log.last().unwrap();
+        assert_eq!((ante, blind, done), (10, BlindKind::Boss, DONE_WIN));
+        assert_eq!(reward, 2.0, "no second win payment");
+        assert_eq!(log.len(), 30);
+        let f = e.finished.last().unwrap();
+        assert_eq!(f.code, DONE_WIN);
+    }
+
+    #[test]
+    fn endless_death_after_ante_8_reports_won_and_before_reports_loss() {
+        let mut sh = shared();
+        sh.config.endless = true;
+        // Die at once: not won.
+        let mut e = Env::new(0, &sh);
+        e.step_parts(action_row(&Action::SelectBlind), &sh, true)
+            .unwrap();
+        e.game.state_mut().hands_left = 1;
+        let out = e
+            .step_parts(action_row(&Action::Play(0b1)), &sh, true)
+            .unwrap();
+        assert_eq!(out.done, DONE_LOSS);
+        // Pass ante 8, then die in ante 9.
+        let mut e = Env::new(0, &sh);
+        let mut last = beat_blind(&mut e, &sh);
+        for _ in 0..24 {
+            let p = action_row(&Action::EndShop);
+            e.step_parts(p, &sh, true).unwrap();
+            let (ante, blind) = (e.game.state().ante, e.game.state().blind);
+            if ante == 9 && blind == BlindKind::Small {
+                break;
+            }
+            last = beat_blind(&mut e, &sh);
+        }
+        assert_eq!(last.done, DONE_NO);
+        assert!(e.game.state().won);
+        e.step_parts(action_row(&Action::SelectBlind), &sh, true)
+            .unwrap();
+        e.game.state_mut().hands_left = 1;
+        let out = e
+            .step_parts(action_row(&Action::Play(0b1)), &sh, true)
+            .unwrap();
+        assert_eq!(
+            out.done, DONE_WIN,
+            "died in endless after passing ante 8 -> won"
+        );
+        assert_eq!(out.reward, 0.0);
+        assert_eq!(e.finished.last().unwrap().ante, 9);
+        // The auto-reset started a fresh, non-won run.
+        assert!(!e.game.state().won);
     }
 }

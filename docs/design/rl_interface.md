@@ -302,6 +302,20 @@ legal. This is **exactly** `CardSelect::next_candidates` / `CardSelect::can_fini
 | `shaping` | 0.0 | `shaping * (progress_after - progress_before)` of `min(round_score / target, 1)` within a round (telescopes to <= `shaping` per round; 0 = off) |
 | `invalid` | -0.05 | per invalid action (the reward replaces the others: nothing else happens) |
 | `reorder` | 0.0 | added to every *valid* `MoveJoker` action (set negative, e.g. -0.05, to break swap-back-and-forth loops: reordering changes nothing but the joker order and costs neither money nor a hand, so it is the one action a policy can repeat forever; added in Phase 10B, backward compatible, `INTERFACE_VERSION` unchanged) |
+| `margin` | 0.0 | when a blind is beaten, `margin * ln(min(score / target, margin_cap))` (>= 0; a Mr. Bones save below target adds 0; 0 = off; Phase 10F) |
+| `margin_cap` | 4.0 | cap of `score / target` inside the margin term |
+| `zero_play` | 0.0 | added to every played hand that a boss rejected (score 0): The Psychic (not 5 cards), The Eye (repeated hand type), The Mouth (not the first hand type), i.e. every use of `PlayCtx::invalidate` (`HandReport.invalid`); set negative for a cost (Phase 10F) |
+| `endless_max_ante` | 12 | endless runs only (see below) |
+
+**Endless runs** (`VecEnv(..., endless=True, endless_max_ante=12)`): the ante-8 boss still pays
+`blind + ante + win` (`win` exactly once per run), but the run continues; `blind`, `ante`, `margin`
+and `zero_play` keep paying. The episode ends with `done` (never truncation, terminal value 0) when
+the run is lost or the boss of `endless_max_ante` is beaten (must be >= 8). The done code is 2 (won)
+whenever the run passed ante 8, also if it then dies; 1 only for runs lost before ante 8. In
+`drain_finished`, `ante` is the ante of the final state (`endless_max_ante + 1` after a cap exit).
+`endless_max_ante` is also accepted as a key of the `reward` dict (the Python constructor merges it
+there). All Phase 10F options default to the previous behaviour bit for bit; observation and
+`INTERFACE_VERSION` are unchanged.
 
 Rewards are added when they happen in the same transition. Truncation (`max_episode_steps`) gives no
 terminal reward and is *not* a loss.

@@ -44,7 +44,12 @@ class BalatroVecEnv:
       ``masks[*][i]`` are the first state of the next episode and ``reward[i]`` belongs to the
       finishing transition. ``done``: 0 running, 1 lost, 2 won, 3 truncated.
     * ``reward`` (constructor) overrides terms of the default reward: ``blind``, ``ante``,
-      ``win``, ``loss``, ``shaping``, ``invalid``, ``reorder``.
+      ``win``, ``loss``, ``shaping``, ``invalid``, ``reorder``, ``margin`` (weight of
+      ``ln(min(score / target, margin_cap))`` per beaten blind), ``margin_cap`` (default 4),
+      ``zero_play`` (reward of a hand the boss rejected: Psychic/Eye/Mouth).
+    * ``endless=True`` keeps the run going after the ante-8 win (``win`` is paid once, ``done``
+      is 2 once the run ends having passed ante 8). The episode ends (done, terminal value 0)
+      when the run is lost or the boss of ``endless_max_ante`` (default 12, >= 8) is beaten.
     """
 
     def __init__(
@@ -57,7 +62,12 @@ class BalatroVecEnv:
         stake: str = "white",
         endless: bool = False,
         reward: dict[str, float] | None = None,
+        endless_max_ante: int = 12,
     ) -> None:
+        if endless_max_ante < 8:
+            raise ValueError("endless_max_ante must be >= 8")
+        if endless and endless_max_ante != 12:
+            reward = {**(reward or {}), "endless_max_ante": float(endless_max_ante)}
         self._env = _engine.VecEnv(
             num_envs, seed, num_threads, max_episode_steps, deck, stake, endless, reward
         )

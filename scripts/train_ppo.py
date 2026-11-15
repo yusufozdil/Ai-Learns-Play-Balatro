@@ -59,6 +59,19 @@ def main() -> None:
         default=0.0,
         help="env reward of every MoveJoker action (negative = cost; breaks swap loops)",
     )
+    ap.add_argument(
+        "--margin",
+        type=float,
+        default=0.0,
+        help="env reward weight of ln(min(score/target, margin-cap)) per beaten blind (0 = off)",
+    )
+    ap.add_argument("--margin-cap", type=float, default=4.0, help="cap of score/target in --margin")
+    ap.add_argument(
+        "--zero-play",
+        type=float,
+        default=0.0,
+        help="env reward of a hand rejected by a boss (Psychic/Eye/Mouth; negative = cost)",
+    )
     ap.add_argument("--memory", choices=["gru", "none"], default="gru")
     ap.add_argument("--d-model", type=int, default=128)
     ap.add_argument("--layers", type=int, default=4)
@@ -83,6 +96,7 @@ def main() -> None:
         "seed",
         "max_episode_steps",
         "threads",
+        "endless_max_ante",
     ):
         kw[k] = int(kw[k])
     kw["total_steps"] = float(kw["total_steps"])
@@ -105,6 +119,11 @@ def main() -> None:
         kw["reward"]["loss"] = args.loss_reward
     if args.reorder_cost:
         kw["reward"]["reorder"] = args.reorder_cost
+    if args.margin:
+        kw["reward"]["margin"] = args.margin
+        kw["reward"]["margin_cap"] = args.margin_cap
+    if args.zero_play:
+        kw["reward"]["zero_play"] = args.zero_play
     cfg = PPOConfig(**kw)
     Trainer(cfg, resume=args.resume).train()
 

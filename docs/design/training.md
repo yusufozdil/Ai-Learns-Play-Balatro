@@ -338,3 +338,22 @@ fine-tune):
 
 The recipe reproduces; seed 0 is on the lucky side. A 150M run was skipped (flat ante curve after 24M, win rate in a
 62-65% band over the last 8M steps of each run).
+
+## 12. Phase 10F: reward options (margin, zero-play, endless)
+
+New `scripts/train_ppo.py` flags (all default to off; semantics in `rl_interface.md` section 7):
+
+| flag | meaning |
+|---|---|
+| `--margin M` | adds `M * ln(min(score/target, cap))` per beaten blind; a typical 1.2-1.5x margin pays `M * 0.18..0.41` |
+| `--margin-cap C` | cap of score/target (default 4) |
+| `--zero-play Z` | reward (negative = cost) per hand a boss rejected (Psychic/Eye/Mouth) |
+| `--endless` | training envs continue after the ante-8 win (`win` paid once) |
+| `--endless-max-ante A` | endless episodes end after the ante-A boss is beaten (default 12) |
+
+The reward terms land in `config.json` under `reward`, the endless flags as `endless` /
+`endless_max_ante`. Evaluation (`scripts/evaluate.py`, the periodic validation inside training) always
+builds its own non-endless env with the default reward. Endless episodes are longer (up to 36 blinds
+instead of 24, and the weaker the policy the earlier they end), so check `max_episode_steps` (3000 by
+default) and the steps/s of the rollout; `drain_finished` reports `done == 2` for any run that passed
+ante 8.

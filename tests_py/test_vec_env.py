@@ -388,3 +388,50 @@ def test_game_env_index_matches_vec_env_env():
         for k in ("global_f", "hand_f", "hand_i"):
             assert np.array_equal(obs[k][i], gobs[k]), (i, k)
     assert not np.array_equal(obs["hand_i"][0], obs["hand_i"][1])
+
+
+# ---- Phase 10F reward options -------------------------------------------------------------
+
+# sha256 of (reward, done) bytes of a fixed rollout, recorded with the pre-10F engine
+GOLDEN_DEFAULT_REWARD = "808a454b21cd9eb43609f560a4587821d4aba1eac2473c4def8a90b3f611329a"
+
+
+def _reward_hash(reward=None, **kw):
+    import hashlib
+
+    env = BalatroVecEnv(16, seed=3, num_threads=0, max_episode_steps=3000, reward=reward, **kw)
+    env.reset()
+    h = hashlib.sha256()
+    for i in range(1200):
+        a = env.random_actions() if i % 3 == 0 else env.teacher_actions()
+        env.step(a.copy())
+        h.update(env.reward.tobytes())
+        h.update(env.done.tobytes())
+    return h.hexdigest()
+
+
+def test_default_rewards_unchanged_and_new_keys_accepted():
+    assert _reward_hash() == GOLDEN_DEFAULT_REWARD
+    off = {"margin": 0.0, "margin_cap": 4.0, "zero_play": 0.0}
+    assert _reward_hash(off) == GOLDEN_DEFAULT_REWARD
+    assert _reward_hash(None, endless_max_ante=12) == GOLDEN_DEFAULT_REWARD
+    # the terms are live
+    assert _reward_hash({"margin": 0.3}) != GOLDEN_DEFAULT_REWARD
+    assert _reward_hash({"zero_play": -0.2}) != GOLDEN_DEFAULT_REWARD
+    Game(0, reward={"margin": 0.2, "margin_cap": 3.0, "zero_play": -0.1})
+    with pytest.raises(ValueError):
+        BalatroVecEnv(1, reward={"margn": 1.0})
+    with pytest.raises(ValueError):
+        BalatroVecEnv(1, endless=True, endless_max_ante=7)
+
+
+def test_endless_env_runs_and_reports_won_codes():
+    env = BalatroVecEnv(
+        8, seed=1, num_threads=0, max_episode_steps=3000, endless=True, endless_max_ante=9
+    )
+    env.reset()
+    for _ in range(400):
+        env.step(env.teacher_actions().copy())
+    fin = env.drain_finished()
+    assert fin
+    assert {r[2] for r in fin} <= {1, 2, 3}

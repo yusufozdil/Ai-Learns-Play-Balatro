@@ -65,7 +65,9 @@ class PPOConfig:
     reward_scale: float = 0.1
     reward: dict = field(
         default_factory=dict
-    )  # env reward terms (blind/ante/win/loss/shaping/invalid/reorder)
+    )  # env reward terms (blind/ante/win/loss/shaping/invalid/reorder/margin/margin_cap/zero_play)
+    endless: bool = False  # TRAINING envs only: continue after the ante-8 win (eval stays normal)
+    endless_max_ante: int = 12  # endless: the episode ends after this ante's boss is beaten
     # --- PPO
     gamma: float = 0.997
     lam: float = 0.95
@@ -224,6 +226,8 @@ class Trainer:
             num_threads=cfg.threads,
             max_episode_steps=cfg.max_episode_steps,
             reward=cfg.reward or None,
+            endless=cfg.endless,
+            endless_max_ante=cfg.endless_max_ante,
         )
         self.obs, self.masks = self.env.reset()
         n = cfg.num_envs
