@@ -9,8 +9,10 @@
 //! Bump [`INTERFACE_VERSION`] on any change of names, shapes, dtypes, feature order, scaling,
 //! vocabulary, action or reward semantics.
 
+use balatro_core::content::decks::DeckKind;
 use balatro_core::content::ids::{BossId, ConsumableId, TagId, VoucherId};
 use balatro_core::content::jokers::JokerId;
+use balatro_core::content::stakes::StakeKind;
 use balatro_core::data::run_rules::MAX_SELECTABLE_HAND;
 use balatro_core::enums::{Edition, Enhancement, HandType, Rank, Seal, Suit};
 use numpy::{PyReadwriteArrayDyn, PyUntypedArrayMethods};
@@ -20,7 +22,7 @@ use pyo3::types::PyDict;
 use std::marker::PhantomData;
 
 /// Version of the whole interface (buffers, semantics, reward).
-pub const INTERFACE_VERSION: u32 = 1;
+pub const INTERFACE_VERSION: u32 = 2;
 
 /// Number of action kinds.
 pub const KINDS: usize = 17;
@@ -102,11 +104,27 @@ pub const GLOBAL_VECTORS: [(&str, usize); 11] = [
     ("pending_pack", PACK_SPECS),
 ];
 
+/// Scalar columns appended after the vector blocks (interface version 2): run configuration
+/// (stake, deck economy) and run-level base values.
+pub const GLOBAL_TAIL: [&str; 11] = [
+    "stake_idx",
+    "no_small_reward",
+    "eternal_on",
+    "perishable_on",
+    "rental_on",
+    "plasma_blind_x2",
+    "base_hands",
+    "base_discards",
+    "no_interest",
+    "money_per_hand",
+    "money_per_discard",
+];
+
 /// Booster specs (kind x size).
 pub const PACK_SPECS: usize = 15;
 
 /// Columns of `global_f`.
-pub const GLOBAL_F: usize = GLOBAL_SCALARS.len() + global_vector_len();
+pub const GLOBAL_F: usize = GLOBAL_SCALARS.len() + global_vector_len() + GLOBAL_TAIL.len();
 
 const fn global_vector_len() -> usize {
     let mut n = 0;
@@ -128,11 +146,12 @@ pub fn global_f_names() -> Vec<String> {
             v.extend((0..n).map(|i| format!("{p}.{i}")));
         }
     }
+    v.extend(GLOBAL_TAIL.iter().map(|s| (*s).to_string()));
     v
 }
 
 /// `global_i` columns with their vocabulary sizes.
-pub const GLOBAL_I: [(&str, usize); 8] = [
+pub const GLOBAL_I: [(&str, usize); 10] = [
     ("phase", 6),
     ("blind", 3),
     ("boss", 1 + BossId::COUNT),
@@ -141,6 +160,8 @@ pub const GLOBAL_I: [(&str, usize); 8] = [
     ("open_pack", 1 + PACK_SPECS),
     ("offered_tag", 1 + TagId::COUNT),
     ("offered_tag_hand", 1 + HandType::COUNT),
+    ("deck", DeckKind::COUNT),
+    ("stake", StakeKind::COUNT),
 ];
 
 /// Shared item vocabulary: 0 none, jokers, consumables, vouchers, booster specs.
@@ -528,7 +549,9 @@ mod tests {
     #[test]
     fn global_layout_is_consistent() {
         assert_eq!(global_f_names().len(), GLOBAL_F);
-        assert_eq!(GLOBAL_F, 203);
+        assert_eq!(GLOBAL_F, 214);
+        assert_eq!(global_f_names()[GLOBAL_F - GLOBAL_TAIL.len()], "stake_idx");
+        assert_eq!(GLOBAL_I.len(), 10);
         assert_eq!(OFFER_CAP, 21);
         assert_eq!(stride::arg0_mask, KINDS * MAX_ARG);
         assert_eq!(SPECS.len(), 24);

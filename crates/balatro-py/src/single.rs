@@ -2,7 +2,7 @@
 //! same structured actions, observation and masks as `VecEnv` (no auto-reset: a finished run
 //! stays inspectable). Not performance-critical; use `VecEnv` for training.
 
-use crate::env::{DEFAULT_MAX_EPISODE_STEPS, Env, RewardConfig, Shared, parse_config};
+use crate::env::{ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, RewardConfig, Shared, parse_config};
 use crate::layout::{MASK_NAMES, OBS_NAMES, Owned, sel_row};
 use crate::vec_env::parse_reward;
 use balatro_core::action_mask::ActionKind;
@@ -46,6 +46,7 @@ impl PyGame {
         let reward: RewardConfig = parse_reward(reward)?;
         let sh = Shared {
             config,
+            configs: ConfigPool::EMPTY,
             max_steps: max_episode_steps.max(1),
             base_seed: seed,
             reward,

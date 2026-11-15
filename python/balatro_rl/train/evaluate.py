@@ -182,10 +182,21 @@ def run_games(
     seed: int = TEST_SEED,
     max_episode_steps: int = MAX_EPISODE_STEPS,
     threads: int = 0,
+    deck: str = "red",
+    stake: str = "white",
 ) -> EvalResult:
-    """Play the first episode of each of ``games`` envs and summarise (see the module docs)."""
+    """Play the first episode of each of ``games`` envs and summarise (see the module docs).
+    ``deck`` / ``stake``: the run configuration of every game (default Red / White, the
+    configuration all existing baselines and validation numbers refer to)."""
     t0 = time.perf_counter()
-    env = BalatroVecEnv(games, seed=seed, num_threads=threads, max_episode_steps=max_episode_steps)
+    env = BalatroVecEnv(
+        games,
+        seed=seed,
+        num_threads=threads,
+        max_episode_steps=max_episode_steps,
+        deck=deck,
+        stake=stake,
+    )
     obs, masks = env.reset()
     first = np.ones(games, dtype=bool)
     active = np.ones(games, dtype=bool)

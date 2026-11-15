@@ -357,3 +357,19 @@ builds its own non-endless env with the default reward. Endless episodes are lon
 instead of 24, and the weaker the policy the earlier they end), so check `max_episode_steps` (3000 by
 default) and the steps/s of the rollout; `drain_finished` reports `done == 2` for any run that passed
 ante 8.
+
+## 13. Phase 10G: decks and stakes in training and evaluation
+
+The observation carries the run's deck and stake (`INTERFACE_VERSION = 2`, `rl_interface.md`
+section 12); v1 checkpoints (`--init` / `--resume`, BC data) load through an exact migration.
+
+| flag | meaning |
+|---|---|
+| `--decks red,plasma` | training envs: every episode of every env draws its deck uniformly from the list (default `red`) |
+| `--stakes white,red,green` | ... and its stake from this list (default `white`); the pairs are the product of both lists |
+| `--eval-deck D` / `--eval-stake S` | configuration of the periodic validation (default `red` / `white`, the configuration of all earlier numbers) |
+| `evaluate.py --deck D --stake S` | evaluation configuration (default red/white); the baseline cache is `baselines_<games>[_route]_<deck>_<stake>.json` for a non-default pair, the result file gets the same suffix |
+
+Sampling happens in the Rust `VecEnv` (`decks=` / `stakes=` constructor arguments, a pure function of
+`(seed, env, episode)`), so it costs nothing and is independent of the thread count. Without the flags
+the env is the fixed Red/White one, bit for bit. The lists land in `config.json`.

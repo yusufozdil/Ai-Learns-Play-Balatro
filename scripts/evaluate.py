@@ -4,10 +4,13 @@
     uv run --no-sync python scripts/evaluate.py --checkpoint runs/s1/best.pt --route play
 
 Baselines (teacher = fair-information heuristic, BC checkpoint, random) are cached in
-``runs/eval/baselines_<games>[_route].json`` and compared *paired* (same games). With ``--route``
+``runs/eval/baselines_<games>[_route][_<deck>_<stake>].json`` (the deck/stake part only for a
+non-default ``--deck`` / ``--stake``, so the Red/White cache names are unchanged) and compared
+*paired* (same games). With ``--route``
 (a curriculum phase set such as ``play``) the model plays only those phases, the teacher the rest
 (baselines are then teacher / BC under the same routing).
-Results go to ``runs/eval/<name>.json``.
+Results go to ``runs/eval/<name>.json`` (``<name>`` gets ``_<deck>_<stake>`` for a non-default
+configuration unless ``--name`` is given).
 """
 
 from __future__ import annotations
@@ -51,14 +54,18 @@ def main() -> None:
         help="evaluation repetition guard: mask MoveJoker after this many consecutive moves",
     )
     ap.add_argument("--max-episode-steps", type=int, default=ev.MAX_EPISODE_STEPS)
+    ap.add_argument("--deck", default="red", help="deck name of every game (default red)")
+    ap.add_argument("--stake", default="white", help="stake name of every game (default white)")
     args = ap.parse_args()
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.backends.cuda.matmul.allow_tf32 = True
     out_dir = ROOT / "runs" / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = args.name or args.checkpoint.parent.name
-    kw = {"max_episode_steps": args.max_episode_steps}
-    suffix = f"_{args.route}" if args.route else ""
+    default_cfg = (args.deck, args.stake) == ("red", "white")
+    cfg_suffix = "" if default_cfg else f"_{args.deck}_{args.stake}"
+    name = args.name or args.checkpoint.parent.name + cfg_suffix
+    kw = {"max_episode_steps": args.max_episode_steps, "deck": args.deck, "stake": args.stake}
+    suffix = (f"_{args.route}" if args.route else "") + cfg_suffix
 
     base: dict[str, ev.EvalResult] = {}
     cache = out_dir / f"baselines_{args.games}{suffix}.json"
@@ -104,6 +111,7 @@ def main() -> None:
             )
     payload = {m: _dump(r) for m, r in results.items()}
     payload["checkpoint"] = str(args.checkpoint)
+    payload["deck"], payload["stake"] = args.deck, args.stake
     payload["update"] = ck.get("update")
     payload["global_step"] = ck.get("global_step")
     (out_dir / f"{name}.json").write_text(json.dumps(payload))

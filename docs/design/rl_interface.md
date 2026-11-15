@@ -1,8 +1,10 @@
 # RL interface (Phase 8B): token observation, structured action codec, masks, reward
 
-`INTERFACE_VERSION = 1` (`balatro_rl._engine.INTERFACE_VERSION`, also `balatro_rl.INTERFACE_VERSION`).
+`INTERFACE_VERSION = 2` (`balatro_rl._engine.INTERFACE_VERSION`, also `balatro_rl.INTERFACE_VERSION`).
 Bump it on ANY change of a buffer name, shape, dtype, feature order, scaling, vocabulary, action
-semantics or reward semantics. Checkpoints must record it.
+semantics or reward semantics. Checkpoints must record it. Version 2 (Phase 10G) only *appended*
+inputs (the run's deck and stake); version-1 checkpoints load through an exact migration
+(section 12).
 
 Code map: `crates/balatro-py/src/{layout,encode,env,sample,vec_env,single}.rs`,
 `python/balatro_rl/{env,select}.py`. The feature lists below are the single source of truth for
@@ -19,7 +21,8 @@ The simulator side is `balatro-core`; the player-view rules (what may be observe
   `(num_envs, ...)`, filled in place by Rust (GIL released). Names below are the dict keys.
 * **Categorical features** are `int32` columns for embeddings. Rule: `value = index + 1`, and
   **0 means hidden / none / unknown** (an embedding row "no information"). Exceptions are listed
-  in the vocabulary column (`phase`, `blind` are always defined and use the plain index).
+  in the vocabulary column (`phase`, `blind`, `deck`, `stake` are always defined and use the plain
+  index).
   Padding rows are all-zero and are told apart by the `*_valid` mask, never by a 0 id.
 * **Continuous features** are `float32`. Scalings (all documented per feature):
   * `L(x) = log10(1 + min(max(x, 0), 1e30)) / 10` for large non-negative magnitudes (chip
@@ -50,8 +53,8 @@ The simulator side is `balatro-core`; the player-view rules (what may be observe
 
 | name | dtype | per-env shape | content |
 |---|---|---|---|
-| `global_f` | f32 | (203,) | section 3.2 |
-| `global_i` | i32 | (8,) | section 3.2 |
+| `global_f` | f32 | (214,) | section 3.2 |
+| `global_i` | i32 | (10,) | section 3.2 |
 | `hand_f` | f32 | (32, 6) | section 3.3 |
 | `hand_i` | i32 | (32, 5) | |
 | `hand_valid` | bool | (32,) | |
@@ -87,6 +90,8 @@ add a learned token-type embedding per type, and for jokers/consumables/offers t
 | 5 | `open_pack` | 16 | open booster spec + 1 (`kind * 3 + size`, kinds Arcana, Celestial, Spectral, Standard, Buffoon; sizes Normal, Jumbo, Mega), 0 when no pack is open |
 | 6 | `offered_tag` | 25 | tag id + 1 that skipping the current blind would give; only in BlindSelect on a Small/Big blind, else 0 |
 | 7 | `offered_tag_hand` | 13 | the Orbital tag's hand type + 1, else 0 |
+| 8 | `deck` | 15 | the run's starting deck, `DeckKind` index (Red 0, Blue 1, Yellow 2, Green 3, Black 4, Magic 5, Nebula 6, Ghost 7, Abandoned 8, Checkered 9, Zodiac 10, Painted 11, Anaglyph 12, Plasma 13, Erratic 14); plain index, always defined (v2) |
+| 9 | `stake` | 8 | the run's stake, `StakeKind` index (White 0 ... Gold 7); plain index, always defined (v2) |
 
 `global_f` scalars (cols 0..27):
 
@@ -135,6 +140,30 @@ add a learned token-type embedding per type, and for jokers/consumables/offers t
 | 132..164 | `voucher` | 32 | voucher owned (VoucherId order) |
 | 164..188 | `tag` | 24 | number of held tags of that id (TagId order), `count / 2` |
 | 188..203 | `pending_pack` | 15 | queued packs (from pack tags) by spec index, `count / 2` |
+
+`global_f` run-configuration scalars (cols 203..214, appended in v2; constant over a run except
+`base_hands` / `base_discards`, which Grabber/Wasteful-type vouchers change). These make the
+stake and deck rules visible: the deck's own effects on hands, discards, hand size and slots are
+already in the existing `hands_left` / `hand_size` / `*_capacity` columns, the stake's effects on
+shop stickers and rewards are not:
+
+| col | name | scaling |
+|---|---|---|
+| 203 | `stake_idx` | `stake / 7` (White 0 ... Gold 1) |
+| 204 | `no_small_reward` | Small Blind pays nothing (Red Stake and above) |
+| 205 | `eternal_on` | shop and pack jokers can be Eternal (Black Stake and above) |
+| 206 | `perishable_on` | ... can be Perishable (Orange Stake and above) |
+| 207 | `rental_on` | ... can be Rental (Gold Stake) |
+| 208 | `plasma_blind_x2` | blinds are twice as big (Plasma Deck; `blind_size_mult > 1`) |
+| 209 | `base_hands` | hands per round before joker modifiers (deck, vouchers), `/ 8` |
+| 210 | `base_discards` | discards per round before joker modifiers (deck, Blue Stake and above, vouchers), `/ 8` |
+| 211 | `no_interest` | no interest at cash-out (Green Deck) |
+| 212 | `money_per_hand` | dollars per unused hand at cash-out, `/ 2` (1 normally, 2 Green Deck) |
+| 213 | `money_per_discard` | dollars per unused discard at cash-out, `/ 2` (0 normally, 1 Green Deck) |
+
+The joker token's `perish_rounds_left` (`/ 5`, 0 when the joker is not perishable) already existed
+in version 1 (section 3.4); nothing was added there. Joker slots, consumable slots and the
+effective hand size are `joker_capacity`, `consumable_capacity` and `hand_size` above.
 
 The draw-pile histogram is the in-game deck viewer (what is *left*): face-down hand cards are not in
 it and their identity is not given anywhere. Everything about the order of the pile is hidden.
@@ -382,3 +411,35 @@ The `teacher_actions` heuristic uses `fair_info = true` (it decides on `Game::fa
   than one round trip per decision. The masks are exact: a conforming chain is never invalid.
 * Phase heads can share the encoder: the phase is `global_i[:, 0]`, and `kind_mask` already
   restricts each phase to its own kinds.
+* `deck` and `stake` are two more embedded `global_i` columns (their own tables, appended after all
+  older tables of the shared embedding); the 11 run-configuration scalars are part of `global_f`.
+
+## 12. Version history and checkpoint migration
+
+| version | change |
+|---|---|
+| 1 | Phase 8B: 203 `global_f`, 8 `global_i` columns. |
+| 2 | Phase 10G: `global_f` +11 scalars (cols 203..214, section 3.2), `global_i` +`deck`, `stake` (cols 8, 9). Every older column keeps its index. The simulator, masks, actions and reward are unchanged. |
+
+`balatro_rl.model.load_checkpoint` accepts version 1 and migrates it exactly
+(`balatro_rl/model/migrate.py`); any other version is refused. The new input columns of the first
+`global_proj` Linear get zero weights and the new embedding tables (`deck`, `stake`; appended after the
+older tables) get zero rows, all matched **by feature name** (the v1 name lists are the v2 lists
+minus the added names), so on a Red/White game the migrated model computes the same function as the
+v1 model. The encoder evaluates the old and the new global columns as separate matmul / embedding
+sums that are then added, which makes the result bit-identical in float32 (one wider GEMM would
+round differently and flip a few near-tied decisions); `tests_py/test_migration.py` checks it
+against a recorded v1 rollout of `runs/bc/model.pt` and `runs/e2e_long_fix/latest.pt`. The Adam
+moments of a resumable checkpoint are padded with zeros the same way, a migrated checkpoint
+re-saves as version 2 (`migrated_from` is not kept).
+
+Stored BC datasets of version 1 (`runs/bc_data`) load through `bc.load_gpu`, which appends the new
+columns with the Red/White start-of-run values (`deck = stake = 0`; `base_hands` / `base_discards`
+cannot be recovered when a voucher changed them). Datasets written by `bc.collect` record
+`interface_version` in `meta.json`.
+
+**Per-env configuration.** `VecEnv(..., deck="red", stake="white")` fixes one configuration;
+`VecEnv(..., decks=[...], stakes=[...])` (either list may be omitted, the single `deck` / `stake`
+is then used for it) makes every episode of every env draw `(deck, stake)` uniformly from the
+product, as a pure function of `(base_seed, env, episode)` (independent of the thread count and
+of the other envs; `Game` / `reset` semantics unchanged). Without the lists nothing changes.

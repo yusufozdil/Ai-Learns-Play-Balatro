@@ -13,7 +13,9 @@
 //!
 //! Interface: `docs/design/rl_interface.md`. Buffers: [`crate::layout`].
 
-use crate::env::{DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, parse_config};
+use crate::env::{
+    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, parse_config,
+};
 use crate::layout::{Bufs, PyBufs};
 use balatro_core::state::GameConfig;
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2, PyUntypedArrayMethods};
@@ -39,9 +41,11 @@ impl EnvPool {
         config: GameConfig,
         max_steps: u32,
         reward: RewardConfig,
+        configs: ConfigPool,
     ) -> Result<Self, String> {
         let shared = Shared {
             config,
+            configs,
             max_steps: max_steps.max(1),
             base_seed: seed,
             reward,
@@ -226,6 +230,33 @@ impl EnvPool {
     }
 }
 
+/// The `(deck, stake)` sampling pool of the constructor (empty when neither list is given).
+fn parse_config_pool(
+    decks: Option<Vec<String>>,
+    stakes: Option<Vec<String>>,
+    deck: &str,
+    stake: &str,
+) -> PyResult<ConfigPool> {
+    if decks.is_none() && stakes.is_none() {
+        return Ok(ConfigPool::EMPTY);
+    }
+    let decks = decks.unwrap_or_else(|| vec![deck.to_string()]);
+    let stakes = stakes.unwrap_or_else(|| vec![stake.to_string()]);
+    if decks.is_empty() || stakes.is_empty() {
+        return Err(val_err("`decks` and `stakes` must not be empty".into()));
+    }
+    let mut ds = Vec::new();
+    let mut ss = Vec::new();
+    for name in &decks {
+        // Reuse the name validation (and its error message) of the fixed-config parser.
+        ds.push(parse_config(name, "white", false).map_err(val_err)?.deck);
+    }
+    for name in &stakes {
+        ss.push(parse_config("red", name, false).map_err(val_err)?.stake);
+    }
+    Ok(ConfigPool::product(&ds, &ss))
+}
+
 fn val_err(e: String) -> PyErr {
     PyValueError::new_err(e)
 }
@@ -284,9 +315,13 @@ impl VecEnv {
     /// lowercase names, default "red"/"white". Episodes longer than `max_episode_steps` are truncated (done code 3).
     /// `reward` overrides terms of the default reward (blind, ante, win, loss, shaping, invalid, reorder, margin,
     /// margin_cap, zero_play, endless_max_ante).
+    /// `decks` / `stakes` (lists of names, either may be omitted: `deck` / `stake` is then the
+    /// single entry) make every episode of every env draw its (deck, stake) uniformly from the
+    /// product (a pure function of seed, env and episode index; independent of the thread count).
     #[new]
     #[pyo3(signature = (num_envs, seed=0, num_threads=0, max_episode_steps=DEFAULT_MAX_EPISODE_STEPS,
-                        deck="red", stake="white", endless=false, reward=None))]
+                        deck="red", stake="white", endless=false, reward=None, decks=None,
+                        stakes=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         num_envs: usize,
@@ -297,6 +332,8 @@ impl VecEnv {
         stake: &str,
         endless: bool,
         reward: Option<&Bound<'_, PyDict>>,
+        decks: Option<Vec<String>>,
+        stakes: Option<Vec<String>>,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(val_err("num_envs must be >= 1".into()));
@@ -306,6 +343,7 @@ impl VecEnv {
         }
         let config = parse_config(deck, stake, endless).map_err(val_err)?;
         let reward = parse_reward(reward)?;
+        let configs = parse_config_pool(decks, stakes, deck, stake)?;
         let pool = EnvPool::new(
             num_envs,
             seed,
@@ -313,6 +351,7 @@ impl VecEnv {
             config,
             max_episode_steps,
             reward,
+            configs,
         )
         .map_err(PyRuntimeError::new_err)?;
         Ok(VecEnv { pool })
@@ -449,7 +488,8 @@ impl VecEnv {
 mod tests {
     use super::*;
     use crate::env::derive_seed;
-    use crate::layout::Owned;
+    use crate::layout::{GLOBAL_I, Owned};
+    use balatro_core::content::{decks::DeckKind, stakes::StakeKind};
 
     fn run(threads: usize, n: usize, steps: usize) -> (Owned, Vec<f32>, Vec<u8>) {
         let mut p = EnvPool::new(
@@ -459,6 +499,7 @@ mod tests {
             GameConfig::default(),
             500,
             RewardConfig::default(),
+            ConfigPool::EMPTY,
         )
         .unwrap();
         let mut o = Owned::new(n);
@@ -512,6 +553,7 @@ mod tests {
                 GameConfig::default(),
                 2_000,
                 RewardConfig::default(),
+                ConfigPool::EMPTY,
             )
             .unwrap();
             let mut o = Owned::new(n);
@@ -543,6 +585,7 @@ mod tests {
             GameConfig::default(),
             2_000,
             RewardConfig::default(),
+            ConfigPool::EMPTY,
         )
         .unwrap();
         let mut o = Owned::new(n);
@@ -559,6 +602,7 @@ mod tests {
             GameConfig::default(),
             2_000,
             RewardConfig::default(),
+            ConfigPool::EMPTY,
         )
         .unwrap();
         let mut o2 = Owned::new(n);
@@ -577,5 +621,57 @@ mod tests {
                 assert_eq!(row, &[-7i64; 4]);
             }
         }
+    }
+
+    #[test]
+    fn sampled_configs_are_thread_independent_and_cover_the_pool() {
+        let pool = ConfigPool::product(
+            &[DeckKind::Red, DeckKind::Plasma, DeckKind::Green],
+            &[StakeKind::White, StakeKind::Gold],
+        );
+        assert_eq!(pool.len(), 6);
+        let go = |threads: usize| {
+            let n = 24;
+            let mut p = EnvPool::new(
+                n,
+                9,
+                threads,
+                GameConfig::default(),
+                300,
+                RewardConfig::default(),
+                pool,
+            )
+            .unwrap();
+            let mut o = Owned::new(n);
+            {
+                let b = o.bufs();
+                p.reset(None, &b);
+            }
+            let mut acts = vec![0i64; n * 4];
+            let mut seen = std::collections::HashSet::new();
+            let mut log = Vec::new();
+            for _ in 0..200 {
+                for i in 0..n {
+                    seen.insert((
+                        o.global_i[i * GLOBAL_I.len() + 8],
+                        o.global_i[i * GLOBAL_I.len() + 9],
+                    ));
+                }
+                log.extend_from_slice(&o.global_i);
+                p.random_actions(&mut acts);
+                let b = o.bufs();
+                p.step(&acts, &b).unwrap();
+            }
+            (seen, log)
+        };
+        let (a, la) = go(1);
+        let (b, lb) = go(4);
+        assert_eq!(la, lb);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 6, "every (deck, stake) pair is sampled: {a:?}");
+        assert!(
+            a.iter()
+                .all(|&(d, s)| [0, 3, 13].contains(&d) && [0, 7].contains(&s))
+        );
     }
 }

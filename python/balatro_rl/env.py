@@ -50,6 +50,11 @@ class BalatroVecEnv:
     * ``endless=True`` keeps the run going after the ante-8 win (``win`` is paid once, ``done``
       is 2 once the run ends having passed ante 8). The episode ends (done, terminal value 0)
       when the run is lost or the boss of ``endless_max_ante`` (default 12, >= 8) is beaten.
+    * ``deck`` / ``stake`` fix one configuration. With ``decks`` and/or ``stakes`` (name lists;
+      a missing one defaults to ``[deck]`` / ``[stake]``) every episode of every env instead
+      draws its (deck, stake) uniformly from the product, as a pure function of
+      ``(seed, env, episode)`` (the observation tells the policy which one: ``global_i`` ``deck``
+      and ``stake``).
     """
 
     def __init__(
@@ -63,13 +68,24 @@ class BalatroVecEnv:
         endless: bool = False,
         reward: dict[str, float] | None = None,
         endless_max_ante: int = 12,
+        decks: list[str] | None = None,
+        stakes: list[str] | None = None,
     ) -> None:
         if endless_max_ante < 8:
             raise ValueError("endless_max_ante must be >= 8")
         if endless and endless_max_ante != 12:
             reward = {**(reward or {}), "endless_max_ante": float(endless_max_ante)}
         self._env = _engine.VecEnv(
-            num_envs, seed, num_threads, max_episode_steps, deck, stake, endless, reward
+            num_envs,
+            seed,
+            num_threads,
+            max_episode_steps,
+            deck,
+            stake,
+            endless,
+            reward,
+            None if decks is None else list(decks),
+            None if stakes is None else list(stakes),
         )
         self.num_envs = num_envs
         self._buffers = allocate_buffers(num_envs)

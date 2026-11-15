@@ -136,6 +136,9 @@ fn write_global(s: &GameState, row: &mut Row<'_>) {
         }
     }
 
+    gi[8] = s.config.deck.index() as i32;
+    gi[9] = s.config.stake.index() as i32;
+
     let finite = s.target.is_finite() && s.target > 0.0;
     let ratio = if finite {
         s.round_score / s.target
@@ -216,6 +219,20 @@ fn write_global(s: &GameState, row: &mut Row<'_>) {
     for n in packs {
         w.put(n as f32 / 2.0);
     }
+    // Run configuration (interface version 2).
+    let stake = s.config.stake;
+    let ddef = s.config.deck.def();
+    w.put(div(stake.index() as f64, 7.0));
+    w.flag(stake.no_small_reward());
+    w.flag(stake.eternal_jokers());
+    w.flag(stake.perishable_jokers());
+    w.flag(stake.rental_jokers());
+    w.flag(ddef.blind_size_mult > 1.0);
+    w.put(div(f64::from(s.base_hands), 8.0));
+    w.put(div(f64::from(s.base_discards), 8.0));
+    w.flag(ddef.no_interest);
+    w.put(div(f64::from(ddef.hand_reward), 2.0));
+    w.put(div(f64::from(ddef.discard_reward), 2.0));
     debug_assert_eq!(w.i, GLOBAL_F);
 }
 
@@ -510,10 +527,12 @@ pub fn write_masks(v: &MaskView, row: &mut Row<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::{Env, RewardConfig, Shared};
+    use crate::env::{ConfigPool, Env, RewardConfig, Shared};
     use crate::layout::Owned;
+    use balatro_core::content::decks::DeckKind;
     use balatro_core::content::ids::BossId;
     use balatro_core::content::jokers::JokerId;
+    use balatro_core::content::stakes::StakeKind;
     use balatro_core::enums::{Enhancement, Rank, Suit};
     use balatro_core::game::Game;
     use balatro_core::joker::JokerInstance;
@@ -582,6 +601,70 @@ mod tests {
     }
 
     #[test]
+    fn run_configuration_columns() {
+        let names = global_f_names();
+        let col = |n: &str| names.iter().position(|x| x == n).unwrap();
+        let obs = |deck, stake| {
+            let g = Game::new(
+                4,
+                GameConfig {
+                    deck,
+                    stake,
+                    endless: false,
+                },
+            );
+            encode(g.state())
+        };
+        let o = obs(DeckKind::Red, StakeKind::White);
+        let f = |o: &Owned, n: &str| o.global_f[col(n)];
+        assert_eq!(&o.global_i[8..10], &[0, 0]);
+        assert_eq!(f(&o, "stake_idx"), 0.0);
+        for n in [
+            "no_small_reward",
+            "eternal_on",
+            "perishable_on",
+            "rental_on",
+        ] {
+            assert_eq!(f(&o, n), 0.0, "{n}");
+        }
+        assert_eq!(f(&o, "plasma_blind_x2"), 0.0);
+        assert_eq!(f(&o, "base_hands"), 0.5);
+        assert_eq!(f(&o, "base_discards"), 0.5);
+        assert_eq!(f(&o, "money_per_hand"), 0.5);
+        assert_eq!(f(&o, "money_per_discard"), 0.0);
+        assert_eq!(f(&o, "no_interest"), 0.0);
+
+        let o = obs(DeckKind::Plasma, StakeKind::Gold);
+        assert_eq!(
+            &o.global_i[8..10],
+            &[
+                DeckKind::Plasma.index() as i32,
+                StakeKind::Gold.index() as i32
+            ]
+        );
+        assert_eq!(f(&o, "stake_idx"), 1.0);
+        for n in [
+            "no_small_reward",
+            "eternal_on",
+            "perishable_on",
+            "rental_on",
+            "plasma_blind_x2",
+        ] {
+            assert_eq!(f(&o, n), 1.0, "{n}");
+        }
+        assert_eq!(f(&o, "base_discards"), 2.0 / 8.0); // 3 base, -1 Blue Stake and above
+
+        let o = obs(DeckKind::Green, StakeKind::Blue);
+        assert_eq!(f(&o, "no_interest"), 1.0);
+        assert_eq!(f(&o, "money_per_hand"), 1.0);
+        assert_eq!(f(&o, "money_per_discard"), 0.5);
+        assert_eq!(f(&o, "stake_idx"), 4.0 / 7.0);
+        assert_eq!(f(&o, "eternal_on"), 1.0);
+        assert_eq!(f(&o, "perishable_on"), 0.0);
+        assert_eq!(f(&o, "base_discards"), 2.0 / 8.0);
+    }
+
+    #[test]
     fn face_down_cards_are_interchangeable_in_the_observation() {
         let mut g = play_game(2);
         let s = g.state_mut();
@@ -628,6 +711,7 @@ mod tests {
     fn market_and_pack_offers_mirror_the_state() {
         let sh = Shared {
             config: GameConfig::default(),
+            configs: ConfigPool::EMPTY,
             max_steps: 100_000,
             base_seed: 11,
             reward: RewardConfig::default(),

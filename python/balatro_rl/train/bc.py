@@ -25,6 +25,7 @@ import numpy as np
 import torch
 
 from balatro_rl import LAYOUT, BalatroVecEnv
+from balatro_rl.model.migrate import upgrade_v1_global_f, upgrade_v1_global_i, v1_names
 
 OBS_NAMES = LAYOUT["obs_names"]
 MASK_NAMES = LAYOUT["mask_names"]
@@ -43,6 +44,7 @@ def _store_dtype(name: str) -> np.dtype:
 
 
 FIELDS = list(OBS_NAMES) + list(MASK_NAMES)
+_LEGACY_UPGRADE = {"global_f": upgrade_v1_global_f, "global_i": upgrade_v1_global_i}
 
 
 # --------------------------------------------------------------------------- data collection
@@ -120,6 +122,7 @@ def collect(
         "teacher_mean_ante": float(ante.mean()) if len(fin) else None,
         "teacher_win_rate": float(np.mean([r[2] == 2 for r in fin])) if len(fin) else None,
         "bytes": int(sum(a.nbytes for a in mm.values())),
+        "interface_version": LAYOUT["version"],
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     return meta
@@ -135,12 +138,19 @@ def load_gpu(data_dir: Path, device, max_envs: int | None = None) -> dict[str, t
             arr = arr[:, :max_envs]
         if arr.dtype == np.uint32:
             arr = arr.view(np.int32)
-        t = torch.empty(
-            arr.shape, dtype=torch.from_numpy(np.zeros(0, arr.dtype)).dtype, device=device
-        )
+        # A dataset collected under interface v1 has narrower global columns: append the v2 ones
+        # (Red/White values, ``model.migrate.upgrade_v1_*``) while copying.
+        legacy = name in _LEGACY_UPGRADE and arr.shape[-1] != _SPEC[name][1][-1]
+        if legacy:
+            assert arr.shape[-1] == len(v1_names(name)), f"{name}: unknown column count"
+        shape = (*arr.shape[:-1], _SPEC[name][1][-1]) if legacy else arr.shape
+        t = torch.empty(shape, dtype=torch.from_numpy(np.zeros(0, arr.dtype)).dtype, device=device)
         step = max(1, 64_000_000 // max(1, arr[0].nbytes))
         for t0 in range(0, arr.shape[0], step):
-            t[t0 : t0 + step] = torch.from_numpy(np.array(arr[t0 : t0 + step])).to(device)
+            part = np.array(arr[t0 : t0 + step])
+            if legacy:
+                part = _LEGACY_UPGRADE[name](part)
+            t[t0 : t0 + step] = torch.from_numpy(part).to(device)
         out[name] = t
     return out
 

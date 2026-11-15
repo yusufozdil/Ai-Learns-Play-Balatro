@@ -98,11 +98,56 @@ impl RewardConfig {
     }
 }
 
+/// Most distinct `(deck, stake)` pairs of a [`ConfigPool`].
+pub const MAX_CONFIGS: usize = DeckKind::COUNT * StakeKind::COUNT;
+
+/// A set of `(deck, stake)` pairs; every episode of every env draws one uniformly (a pure
+/// function of `(base_seed, env, episode)`). Empty = the fixed `Shared::config` for every episode.
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigPool {
+    len: usize,
+    items: [(DeckKind, StakeKind); MAX_CONFIGS],
+}
+
+impl ConfigPool {
+    /// No sampling.
+    pub const EMPTY: ConfigPool = ConfigPool {
+        len: 0,
+        items: [(DeckKind::Red, StakeKind::White); MAX_CONFIGS],
+    };
+
+    /// Cartesian product of `decks` and `stakes` (duplicates dropped, order kept).
+    pub fn product(decks: &[DeckKind], stakes: &[StakeKind]) -> ConfigPool {
+        let mut p = ConfigPool::EMPTY;
+        for &d in decks {
+            for &s in stakes {
+                if !p.items[..p.len].contains(&(d, s)) {
+                    p.items[p.len] = (d, s);
+                    p.len += 1;
+                }
+            }
+        }
+        p
+    }
+
+    /// Number of pairs.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// No pairs (the fixed config is used).
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
 /// Settings shared by all envs of a pool.
 #[derive(Debug, Clone, Copy)]
 pub struct Shared {
-    /// Run options.
+    /// Run options (the fixed config; `endless` also applies to sampled configs).
     pub config: GameConfig,
+    /// Per-episode `(deck, stake)` sampling (empty = off, `config` always).
+    pub configs: ConfigPool,
     /// Steps per episode before truncation.
     pub max_steps: u32,
     /// Base of the per-env, per-episode seeds.
@@ -110,6 +155,25 @@ pub struct Shared {
     /// Reward terms.
     pub reward: RewardConfig,
 }
+
+impl Shared {
+    /// Run options of episode `episode` of env `env`.
+    pub fn config_for(&self, env: u64, episode: u64) -> GameConfig {
+        if self.configs.is_empty() {
+            return self.config;
+        }
+        let h = splitmix64(derive_seed(self.base_seed, env, episode) ^ CONFIG_SALT);
+        let (deck, stake) = self.configs.items[(h % self.configs.len() as u64) as usize];
+        GameConfig {
+            deck,
+            stake,
+            endless: self.config.endless,
+        }
+    }
+}
+
+/// Salt that separates the config choice from the game seeds.
+const CONFIG_SALT: u64 = 0xC0F1_6000_0000_0001;
 
 fn splitmix64(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -226,7 +290,10 @@ pub struct StepOut {
 impl Env {
     /// New env at episode 0.
     pub fn new(idx: u32, sh: &Shared) -> Env {
-        let game = Game::new(derive_seed(sh.base_seed, u64::from(idx), 0), sh.config);
+        let game = Game::new(
+            derive_seed(sh.base_seed, u64::from(idx), 0),
+            sh.config_for(u64::from(idx), 0),
+        );
         let view = MaskView::compute(game.state());
         Env {
             idx,
@@ -251,7 +318,7 @@ impl Env {
     pub fn hard_reset(&mut self, sh: &Shared) {
         let idx = u64::from(self.idx);
         self.game
-            .reset_with_seed(derive_seed(sh.base_seed, idx, 0), sh.config);
+            .reset_with_seed(derive_seed(sh.base_seed, idx, 0), sh.config_for(idx, 0));
         self.episode = 0;
         self.steps = 0;
         self.ep_return = 0.0;
@@ -271,7 +338,7 @@ impl Env {
         self.teacher = None;
         self.game.reset_with_seed(
             derive_seed(sh.base_seed, u64::from(self.idx), self.episode),
-            sh.config,
+            sh.config_for(u64::from(self.idx), self.episode),
         );
         self.refresh();
     }
@@ -491,6 +558,7 @@ mod tests {
     fn shared() -> Shared {
         Shared {
             config: GameConfig::default(),
+            configs: ConfigPool::EMPTY,
             max_steps: 100_000,
             base_seed: 5,
             reward: RewardConfig::default(),

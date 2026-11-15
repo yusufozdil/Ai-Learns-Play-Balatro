@@ -25,12 +25,28 @@ VOCAB = LAYOUT["vocab"]
 # offer cards, the item vocabulary of jokers/consumables/offers, hand types (last played hand,
 # boss hand, tag hand, To Do List's hand).
 _COLUMN_TABLES: dict[str, tuple[str, ...]] = {
-    "global_i": ("phase", "blind", "boss", "handtype", "handtype", "open_pack", "tag", "handtype"),
+    "global_i": (
+        "phase",
+        "blind",
+        "boss",
+        "handtype",
+        "handtype",
+        "open_pack",
+        "tag",
+        "handtype",
+        "deck",
+        "stake",
+    ),
     "hand_i": ("rank", "suit", "enh", "edition", "seal"),
     "joker_i": ("item", "edition", "aux_suit", "aux_rank", "handtype"),
     "cons_i": ("item",),
     "offer_i": ("source", "item", "edition", "rank", "suit", "enh", "seal"),
 }
+
+
+# Tables added by interface version 2 (deck / stake of the run). They are laid out *after* every
+# older table, so a v1 checkpoint migrates by appending zero rows (``model.migrate``).
+NEW_TABLES_V2 = ("deck", "stake")
 
 
 def _table_sizes() -> dict[str, int]:
@@ -39,10 +55,28 @@ def _table_sizes() -> dict[str, int]:
         assert len(tables) == len(VOCAB[group]), group
         for table, size in zip(tables, VOCAB[group], strict=True):
             assert sizes.setdefault(table, size) == size, f"table {table}: vocab mismatch"
-    return sizes
+    old = {t: n for t, n in sizes.items() if t not in NEW_TABLES_V2}
+    return {**old, **{t: sizes[t] for t in NEW_TABLES_V2}}
+
+
+def table_offsets(sizes: dict[str, int] | None = None) -> dict[str, int]:
+    """First row of each table inside the shared embedding table (in ``sizes`` order)."""
+    offsets, total = {}, 0
+    for name, size in (sizes or TABLE_SIZES).items():
+        offsets[name] = total
+        total += size
+    return offsets
 
 
 TABLE_SIZES = _table_sizes()
+
+# Interface v1 had 203 ``global_f`` and 8 ``global_i`` columns; v2 appended to both. The global
+# token evaluates the old and the new columns as *separate* matmuls / sums that are then added, so a
+# migrated v1 checkpoint (zero weights on the new columns) reproduces the v1 float32 result bit
+# for bit: one wider GEMM would round differently (different blocking) and flip a few near-tied
+# decisions. Mathematically it is the same single Linear / embedding sum.
+V1_GLOBAL_F = 203
+V1_GLOBAL_I = 8
 TOKEN_TYPES = ("global", "hand", "joker", "cons", "offer")
 
 
@@ -73,10 +107,8 @@ class Encoder(nn.Module):
     ):
         super().__init__()
         self.d = d
-        offsets, total = {}, 0
-        for name, size in TABLE_SIZES.items():
-            offsets[name] = total
-            total += size
+        offsets = table_offsets()
+        total = sum(TABLE_SIZES.values())
         self.table = nn.Embedding(total, d)  # one table; each column adds its offset
         for group, tables in _COLUMN_TABLES.items():
             offs = torch.tensor([offsets[t] for t in tables], dtype=torch.long)
@@ -101,9 +133,19 @@ class Encoder(nn.Module):
             if isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, std=0.1)
 
-    def _cat(self, group: str, x: torch.Tensor) -> torch.Tensor:
-        """Sum of the categorical embeddings of the columns of ``x (..., ncols)``."""
-        return self.table(x + getattr(self, f"off_{group}")).sum(-2)
+    def _cat(self, group: str, x: torch.Tensor, split: int | None = None) -> torch.Tensor:
+        """Sum of the categorical embeddings of the columns of ``x (..., ncols)``; with ``split``
+        the first ``split`` columns and the rest are summed separately, then added."""
+        e = self.table(x + getattr(self, f"off_{group}"))
+        if split is None:
+            return e.sum(-2)
+        return e[..., :split, :].sum(-2) + e[..., split:, :].sum(-2)
+
+    def _global_proj(self, x: torch.Tensor) -> torch.Tensor:
+        first, act, last = self.global_proj
+        w = first.weight
+        lead = F.linear(x[:, :V1_GLOBAL_F], w[:, :V1_GLOBAL_F].contiguous(), first.bias)
+        return last(act(lead + x[:, V1_GLOBAL_F:] @ w[:, V1_GLOBAL_F:].t()))
 
     @staticmethod
     def _lengths(obs: dict[str, torch.Tensor]) -> list[int]:
@@ -129,7 +171,7 @@ class Encoder(nn.Module):
         dev = obs["global_f"].device
         te = self.type_emb.weight
 
-        g = self.global_proj(obs["global_f"]) + self._cat("global_i", obs["global_i"])
+        g = self._global_proj(obs["global_f"]) + self._cat("global_i", obs["global_i"], V1_GLOBAL_I)
         g = g.unsqueeze(1) + te[0]
         h = (
             self.hand_proj(obs["hand_f"][:, :nh])

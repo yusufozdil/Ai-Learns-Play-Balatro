@@ -3,8 +3,8 @@
 Code: `python/balatro_rl/model/{inputs,encoder,heads,cards,team}.py` (model),
 `python/balatro_rl/train/{bc,play}.py` + `scripts/bc_smoke.py` (behaviour cloning, game evaluation),
 tests `tests_py/test_model.py`, `tests_py/test_bc.py`. Interface it consumes:
-`docs/design/rl_interface.md` (`INTERFACE_VERSION = 1`; checkpoints record it and `load_checkpoint`
-asserts it).
+`docs/design/rl_interface.md` (`INTERFACE_VERSION = 2`; checkpoints record it, `load_checkpoint`
+migrates version-1 checkpoints exactly (section "Interface v2" below) and refuses other versions).
 
 PyTorch is an opt-in dependency group: `make setup-train` (torch 2.9.1 + CUDA 12.8 wheels from
 `download.pytorch.org/whl/cu128`, needed for Blackwell sm_120; ~6.6 GB in `.venv` including the
@@ -44,7 +44,8 @@ not installed, so `make test` works without it.
   (last hand, boss hand, tag hand, To Do List hand). Each categorical column of a token is looked up
   and summed with `Linear(continuous features)`, then the token-type embedding (5 types) and a
   learned slot-position embedding (hand 32, joker 20, consumable 8, offer 21) are added. The global
-  token uses a 2-layer MLP for its 203 features.
+  token uses a 2-layer MLP for its 214 features (203 in v1) plus the embeddings of its 10 categorical
+  columns (8 in v1; `deck` and `stake` are the new ones, own tables appended after all older ones).
 * **Slicing.** Every group is cut to the batch's highest valid row (`hand_valid`, `joker_valid`,
   ...) before the Transformer; joker/consumable/offer outputs are zero-padded back to the fixed
   capacities so the pointer table (joker 0..20 | consumable 20..28 | offer 28..49) has constant
@@ -65,9 +66,10 @@ not installed, so `make test` works without it.
 
 ### Sizes (`TeamModel.num_parameters()`)
 
-Default (`d=128`, 4 layers, 4 attention heads, GRU 128): **1,964,233** parameters: encoder
-903,808 (embeddings ~100k, Transformer 4 x 198k, projections), memory 99,072, ctx 49,664,
-4 heads x 219,666, critic 33,025. `memory="none"`: 1,832,393. `d=192, 6 heads`: 4,322,569.
+Default (`d=128`, 4 layers, 4 attention heads, GRU 128): **1,968,585** parameters (v1: 1,964,233; v2 added
+11 input columns and 23 embedding rows): encoder
+908,160 (embeddings ~100k, Transformer 4 x 198k, projections), memory 99,072, ctx 49,664,
+4 heads x 219,666, critic 33,025. `memory="none"`: 1,836,745. `d=192, 6 heads`: ~4.33M.
 Configurable through `ModelConfig(d_model, layers, heads, ff_mult, dropout, memory, mem_dim)`.
 
 ## 2. API
@@ -108,6 +110,19 @@ value, new_hidden = model.value(obs, masks, hidden, first=None)         # bootst
   expressible through the masks and the canonical order; false rows have logprob contributions 0 and
   must be masked in a loss).
 * Checkpoints: `save_checkpoint(path, model, **extra)` / `load_checkpoint(path, device)`.
+
+### Interface v2 (deck + stake in the observation) and v1 migration (Phase 10G)
+
+The global token carries the run configuration: `global_i` `deck` / `stake` (embedded) and 11
+appended `global_f` scalars (stake flags, deck economy, base hands/discards; `rl_interface.md`
+3.2). `load_checkpoint` converts a v1 checkpoint by name (`model/migrate.py`): the new columns of
+`global_proj[0]` get zero weights, the new embedding rows are zero, the Adam moments are padded the
+same way. The migrated model is the v1 function (the global projection / embedding sum of the old
+columns is computed separately from the new ones and added, so float32 results are bit-identical;
+`encoder.V1_GLOBAL_F`, `V1_GLOBAL_I`); once the new inputs are trained they matter. Re-saving writes
+version 2. `tests_py/test_migration.py` replays a recorded v1 rollout of `runs/bc/model.pt` and
+`runs/e2e_long_fix/latest.pt` (`tests_py/fixtures/v1_reference.npz`). `bc.load_gpu` also accepts v1
+datasets (new columns filled with the Red/White start-of-run values).
 
 ## 3. Canonical card order
 

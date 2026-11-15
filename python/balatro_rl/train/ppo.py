@@ -66,6 +66,10 @@ class PPOConfig:
     reward: dict = field(
         default_factory=dict
     )  # env reward terms (blind/ante/win/loss/shaping/invalid/reorder/margin/margin_cap/zero_play)
+    # Training run configuration: comma lists of deck / stake names; every episode of every env
+    # draws its (deck, stake) uniformly from the product (the observation tells the policy which).
+    decks: str = "red"
+    stakes: str = "white"
     endless: bool = False  # TRAINING envs only: continue after the ante-8 win (eval stays normal)
     endless_max_ante: int = 12  # endless: the episode ends after this ante's boss is beaten
     # --- PPO
@@ -97,6 +101,8 @@ class PPOConfig:
     eval_games: int = 512
     eval_sampled: bool = True
     eval_move_limit: int | None = None  # validation repetition guard (evaluate.ModelActor)
+    eval_deck: str = "red"  # validation configuration (default Red / White: comparable to history)
+    eval_stake: str = "white"
     save_every: int = 5
     ckpt_keep_best: bool = True
     # --- model (used when not initialised from a checkpoint)
@@ -228,6 +234,7 @@ class Trainer:
             reward=cfg.reward or None,
             endless=cfg.endless,
             endless_max_ante=cfg.endless_max_ante,
+            **self.env_configs(cfg),
         )
         self.obs, self.masks = self.env.reset()
         n = cfg.num_envs
@@ -238,6 +245,17 @@ class Trainer:
         self.stage_idx, self.stage = self.curriculum.stage_at(self.global_step)
         self.route = self.stage.route_table()
         self._alloc()
+
+    @staticmethod
+    def env_configs(cfg: PPOConfig) -> dict:
+        """``decks`` / ``stakes`` kwargs of the training env: none for the default Red / White (the
+        fixed-configuration path), else the name lists to sample from."""
+        decks = [x.strip() for x in cfg.decks.split(",") if x.strip()]
+        stakes = [x.strip() for x in cfg.stakes.split(",") if x.strip()]
+        assert decks and stakes, "decks / stakes must not be empty"
+        if decks == ["red"] and stakes == ["white"]:
+            return {}
+        return {"decks": decks, "stakes": stakes}
 
     # ------------------------------------------------------------------ buffers
 
@@ -559,6 +577,8 @@ class Trainer:
             route,
             max_episode_steps=cfg.max_episode_steps,
             move_limit=cfg.eval_move_limit,
+            deck=cfg.eval_deck,
+            stake=cfg.eval_stake,
         )
         rec = {"det_" + k: v for k, v in det.summary().items() if k not in ("name", "ante_hist")}
         rec["det_ante_hist"] = det.ante_hist
@@ -570,6 +590,8 @@ class Trainer:
                 route,
                 max_episode_steps=cfg.max_episode_steps,
                 move_limit=cfg.eval_move_limit,
+                deck=cfg.eval_deck,
+                stake=cfg.eval_stake,
             )
             rec.update(
                 {"sam_" + k: v for k, v in sam.summary().items() if k not in ("name", "ante_hist")}

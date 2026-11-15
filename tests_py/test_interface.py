@@ -35,7 +35,7 @@ def test_design_document_matches_the_layout():
     # Capacities appear as documented numbers.
     for key, want in (("hand", 32), ("joker", 20), ("cons", 8), ("offer", 21)):
         assert CAPS[key] == want
-    assert "(203,)" in text and "MAX_ARG = 20" in text
+    assert "(214,)" in text and "MAX_ARG = 20" in text
     # Tables of shapes in the document equal the layout.
     for name, _dtype, shape in LAYOUT["buffers"]:
         if len(shape) == 0:
@@ -46,7 +46,7 @@ def test_design_document_matches_the_layout():
 
 
 def test_interface_version_exposed_everywhere():
-    assert INTERFACE_VERSION == LAYOUT["version"] == 1
+    assert INTERFACE_VERSION == LAYOUT["version"] == 2
 
 
 # --------------------------------------------------------------------------- invariants
