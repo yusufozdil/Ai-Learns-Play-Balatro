@@ -23,6 +23,9 @@ use crate::data::shop_weights::{
     WEIGHT_SPECTRAL_GHOST_DECK, WEIGHT_TAROT, card_edition, card_surcharge, edition_surcharge,
     joker_edition, pack_price, pack_weight,
 };
+use crate::data::stakes::{
+    ETERNAL_CHANCE, PERISHABLE_CHANCE, PERISHABLE_ROUNDS, RENTAL_BUY_PRICE, RENTAL_CHANCE,
+};
 use crate::economy::{self, Discount};
 use crate::enums::{Edition, Rank, Rarity, Suit};
 use crate::hooks::{PackKind, RunFlag};
@@ -129,6 +132,11 @@ pub fn card_price(s: &GameState, c: &ShopCard) -> i32 {
     {
         return 0;
     }
+    if let ShopCardKind::Joker(j) = c.kind
+        && j.stickers.rental
+    {
+        return RENTAL_BUY_PRICE;
+    }
     economy::shop_price(
         card_base_cost(&c.kind),
         card_edition_surcharge(&c.kind),
@@ -184,6 +192,9 @@ pub fn rescale_sell_values(s: &mut GameState, old: Discount, new: Discount) {
     }
     for j in &mut s.jokers {
         let Some(d) = j.def() else { continue };
+        if j.stickers.rental {
+            continue; // Rental jokers cost $1 whatever the discount: their sell value stays.
+        }
         let base = i32::try_from(d.base_cost).unwrap_or(i32::MAX);
         let sur = edition_surcharge(j.edition);
         let old_part = economy::sell_value(economy::shop_price(base, sur, old), 0);
@@ -200,10 +211,32 @@ pub fn rescale_sell_values(s: &mut GameState, old: Discount, new: Discount) {
 
 // ----- joker creation ----------------------------------------------------------------------------
 
-/// Sticker roll of a new shop joker. White Stake has none; higher stakes (Eternal, Perishable,
-/// Rental) plug in here later (`GameConfig::stake`).
-pub fn roll_stickers(_s: &GameState) -> crate::joker::Stickers {
-    crate::joker::Stickers::default()
+/// Sticker roll of a new shop or pack joker (stakes.md §2). Below Black Stake nothing is rolled
+/// (no RNG consumed). One poll decides Eternal (top 30%) and, from Orange Stake, Perishable (next
+/// 30%), so they never combine; an incompatible joker (`JokerDef::eternal_compatible` /
+/// `perishable_compatible`) just gets nothing from its band. Rental (Gold) is an independent
+/// roll and can combine with either. Legendary jokers never get stickers (the caller skips this).
+pub fn roll_stickers(s: &mut GameState, key: RngKey, id: JokerId) -> crate::joker::Stickers {
+    let stake = s.config.stake;
+    let mut st = crate::joker::Stickers::default();
+    if !stake.eternal_jokers() {
+        return st;
+    }
+    let def = try_def(id);
+    let poll = s.rng.float(key);
+    if poll >= 1.0 - ETERNAL_CHANCE {
+        st.eternal = def.is_none_or(|d| d.eternal_compatible);
+    } else if stake.perishable_jokers()
+        && poll >= 1.0 - ETERNAL_CHANCE - PERISHABLE_CHANCE
+        && def.is_none_or(|d| d.perishable_compatible)
+    {
+        st.perishable = true;
+        st.perish_rounds_left = PERISHABLE_ROUNDS;
+    }
+    if stake.rental_jokers() {
+        st.rental = s.rng.float(key) >= 1.0 - RENTAL_CHANCE;
+    }
+    st
 }
 
 /// A fresh joker instance of `id` with `edition`, sell value from the discounted price. The uid
@@ -269,6 +302,24 @@ pub fn roll_joker(
     rarity: Option<Rarity>,
     extra_taken: &[JokerId],
 ) -> Option<JokerInstance> {
+    let mut j = roll_joker_plain(s, key, rarity, extra_taken)?;
+    if j.def().is_none_or(|d| d.rarity != Rarity::Legendary) {
+        j.stickers = roll_stickers(s, key, j.id);
+        if j.stickers.rental {
+            j.sell_value = economy::sell_value(RENTAL_BUY_PRICE, 0);
+        }
+    }
+    Some(j)
+}
+
+/// [`roll_joker`] without the stake stickers: jokers created outside the shop and packs
+/// (Judgement, Wraith, The Soul, Riff-raff, Top-up tag) never carry them.
+pub fn roll_joker_plain(
+    s: &mut GameState,
+    key: RngKey,
+    rarity: Option<Rarity>,
+    extra_taken: &[JokerId],
+) -> Option<JokerInstance> {
     let allow_dup = s.mods.allow_duplicates;
     let order: Vec<Rarity> = match rarity {
         Some(r) => vec![r],
@@ -293,9 +344,7 @@ pub fn roll_joker(
         let id = cands[s.rng.range(key, 0, cands.len())];
         let ed_roll = s.rng.float(key);
         let edition = joker_edition(ed_roll, s.shop_mods.edition_mult);
-        let mut j = joker_instance(s, id, edition);
-        j.stickers = roll_stickers(s);
-        return Some(j);
+        return Some(joker_instance(s, id, edition));
     }
     None
 }

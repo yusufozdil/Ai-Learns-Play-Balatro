@@ -87,6 +87,18 @@ impl Deck {
         }
     }
 
+    /// A deck with exactly `cards` in the draw pile (unshuffled), uids already allocated below
+    /// `next_uid` (non-standard starting decks).
+    pub fn from_cards(cards: Vec<Card>, next_uid: u32) -> Self {
+        Deck {
+            draw_pile: cards,
+            hand: Vec::new(),
+            played: Vec::new(),
+            discard_pile: Vec::new(),
+            next_uid,
+        }
+    }
+
     /// Total number of cards across all piles.
     pub fn len(&self) -> usize {
         self.draw_pile.len() + self.hand.len() + self.played.len() + self.discard_pile.len()

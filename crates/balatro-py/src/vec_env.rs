@@ -280,8 +280,8 @@ pub struct VecEnv {
 
 #[pymethods]
 impl VecEnv {
-    /// `num_threads = 0` uses all cores; 1 steps inline. `deck`/`stake` currently only accept
-    /// "red"/"white". Episodes longer than `max_episode_steps` are truncated (done code 3).
+    /// `num_threads = 0` uses all cores; 1 steps inline. `deck` (15 decks) and `stake` (8 stakes) are
+    /// lowercase names, default "red"/"white". Episodes longer than `max_episode_steps` are truncated (done code 3).
     /// `reward` overrides terms of the default reward (blind, ante, win, loss, shaping, invalid, reorder).
     #[new]
     #[pyo3(signature = (num_envs, seed=0, num_threads=0, max_episode_steps=DEFAULT_MAX_EPISODE_STEPS,

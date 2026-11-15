@@ -26,7 +26,7 @@ use balatro_core::game::Game;
 use balatro_core::joker::JokerInstance;
 use balatro_core::rng::{GameRng, RngKey};
 use balatro_core::serialize::Replay;
-use balatro_core::state::{GameConfig, GameState, Outcome};
+use balatro_core::state::{DeckKind, GameConfig, GameState, Outcome, StakeKind};
 
 /// Steps after which a game is cut off (an error for plain games that should terminate).
 const STEP_CAP: u64 = 24_000;
@@ -222,9 +222,21 @@ fn setup(seed: u64, ids: &[JokerId]) -> Setup {
     let kind = pct(&mut p, 100);
     let pure = pct(&mut p, 10) == 0;
     let endless = !pure && pct(&mut p, 4) == 0;
+    // Deck and stake come from their own stream (the other draws keep their sequence). Half of
+    // the games stay Red / White; the rest sample every deck and stake.
+    let mut dr = GameRng::new(seed ^ 0xDECC_57A4);
+    let (deck, stake) = if dr.range(RngKey::Misc, 0, 2) == 0 {
+        (DeckKind::default(), StakeKind::default())
+    } else {
+        (
+            DeckKind::ALL[dr.range(RngKey::Misc, 0, DeckKind::COUNT)],
+            StakeKind::ALL[dr.range(RngKey::Misc, 0, StakeKind::COUNT)],
+        )
+    };
     let config = GameConfig {
+        deck,
+        stake,
         endless,
-        ..GameConfig::default()
     };
     let mut g = Game::new(seed, config);
     let mut advanced = false;
@@ -286,7 +298,8 @@ fn setup(seed: u64, ids: &[JokerId]) -> Setup {
                 s.boss = Some(BossId::ALL[pct(&mut p, BossId::COUNT)]);
             }
             s.target =
-                blinds::requirement(s.ante, s.blind, s.boss_mult(), s.config.stake.scaling());
+                blinds::requirement(s.ante, s.blind, s.boss_mult(), s.config.stake.scaling())
+                    * s.config.deck.def().blind_size_mult;
             advanced = true;
         }
     }

@@ -426,14 +426,14 @@ pub fn random_selection(sel: &CardSelect, rng: &mut u64) -> u32 {
 
 /// Parse the deck/stake names accepted by the Python constructors.
 pub fn parse_config(deck: &str, stake: &str, endless: bool) -> Result<GameConfig, String> {
-    let deck = match deck.to_ascii_lowercase().as_str() {
-        "red" => DeckKind::Red,
-        other => return Err(format!("unknown deck {other:?} (implemented: \"red\")")),
-    };
-    let stake = match stake.to_ascii_lowercase().as_str() {
-        "white" => StakeKind::White,
-        other => return Err(format!("unknown stake {other:?} (implemented: \"white\")")),
-    };
+    let deck = DeckKind::from_name(deck).ok_or_else(|| {
+        let names: Vec<&str> = DeckKind::ALL.iter().map(|d| d.name()).collect();
+        format!("unknown deck {deck:?} (valid: {})", names.join(", "))
+    })?;
+    let stake = StakeKind::from_name(stake).ok_or_else(|| {
+        let names: Vec<&str> = StakeKind::ALL.iter().map(|d| d.name()).collect();
+        format!("unknown stake {stake:?} (valid: {})", names.join(", "))
+    })?;
     Ok(GameConfig {
         deck,
         stake,

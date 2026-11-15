@@ -673,7 +673,8 @@ fn set_debuffed_joker(s: &mut GameState, uid: Option<u32>) {
     if let Some(old) = s.boss_state.joker_uid.take()
         && let Some(j) = s.jokers.iter_mut().find(|j| j.uid == old)
     {
-        j.debuffed = false;
+        // An expired Perishable joker stays debuffed.
+        j.debuffed = j.stickers.perishable && j.stickers.perish_rounds_left == 0;
     }
     if let Some(new) = uid
         && let Some(j) = s.jokers.iter_mut().find(|j| j.uid == new)

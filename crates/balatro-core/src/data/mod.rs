@@ -8,3 +8,4 @@ pub mod hand_levels;
 pub mod prices;
 pub mod run_rules;
 pub mod shop_weights;
+pub mod stakes;

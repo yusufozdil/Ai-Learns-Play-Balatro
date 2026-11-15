@@ -20,6 +20,7 @@ use crate::consumable::{self, ConsumableInstance, ConsumableKind, UseCtx};
 use crate::content::ids::ConsumableId;
 use crate::content::try_consumable_def;
 use crate::data::run_rules::{MAX_EFFECT_CASCADE, MAX_SELECTABLE_HAND, WIN_ANTE};
+use crate::data::stakes::RENTAL_RENT;
 use crate::deck::Pile;
 use crate::economy::{self, CashOut, CashOutInput};
 use crate::enums::{Edition, HandType, Phase, Seal};
@@ -901,6 +902,13 @@ impl Game {
         // 2. Jokers' end of round (also on a loss: Mr. Bones). Their money is a cash-out item.
         let s = &mut self.state;
         s.round_hand_size = 0; // Juggle Tag lasts one round
+        // Perishable jokers tick when a round is won, before the end-of-round event (a joker
+        // that expires now pays nothing at this cash-out, stakes.md §2). Rent is charged for
+        // every Rental joker present now, even one that destroys itself below.
+        if won {
+            tick_perishable(s);
+        }
+        let rentals = s.jokers.iter().filter(|j| j.stickers.rental).count() as i32;
         let mut end = RoundEndInfo {
             won,
             saved: false,
@@ -921,6 +929,9 @@ impl Game {
         let rep = self.resolve_fx();
         let saved = !won && !out_of_cards && rep.prevent_death;
         debug_assert_eq!(saved, end.saved);
+        if saved {
+            tick_perishable(&mut self.state);
+        }
 
         let s = &mut self.state;
         // The boss's joker debuff lasted through the round end (Crimson Heart, bosses.md).
@@ -944,21 +955,29 @@ impl Game {
             return;
         }
 
-        // 3. Cash out (economy::cash_out; Gold cards were already paid in step 1).
-        let co = economy::cash_out(&CashOutInput {
-            money: s.money,
-            gold_cards_held: 0,
-            gold_red_seal_cards_held: 0,
-            kind: s.blind,
-            is_showdown: s.is_showdown(),
-            stake_no_small_reward: s.config.stake.no_small_reward(),
-            no_blind_reward: saved,
-            hands_left: i32::try_from(s.hands_left).unwrap_or(i32::MAX),
-            interest_cap: s.interest_cap,
-            interest_per_5_bonus: s.mods.interest_per_5,
-            no_interest: false,
-            joker_payout: joker_money,
-        });
+        // 3. Cash out (economy::cash_out; Gold cards were already paid in step 1). Rent comes
+        //    off first, so it lowers the balance interest is computed on.
+        s.money = s.money.saturating_sub(rentals.saturating_mul(RENTAL_RENT));
+        let ddef = s.config.deck.def();
+        let co = economy::cash_out_with(
+            &CashOutInput {
+                money: s.money,
+                gold_cards_held: 0,
+                gold_red_seal_cards_held: 0,
+                kind: s.blind,
+                is_showdown: s.is_showdown(),
+                stake_no_small_reward: s.config.stake.no_small_reward(),
+                no_blind_reward: saved,
+                hands_left: i32::try_from(s.hands_left).unwrap_or(i32::MAX),
+                interest_cap: s.interest_cap,
+                interest_per_5_bonus: s.mods.interest_per_5,
+                no_interest: ddef.no_interest,
+                joker_payout: joker_money,
+            },
+            ddef.hand_reward,
+            ddef.discard_reward,
+            i32::try_from(s.discards_left).unwrap_or(i32::MAX),
+        );
         s.money = co.final_money;
         report.cash_out = Some(co);
         info.round = Some(report);
@@ -968,6 +987,9 @@ impl Game {
             s.stats.run.bosses_defeated += 1;
             tag::fire_boss_defeated(s, &mut self.fx); // Investment, after the cash-out
             self.resolve_fx();
+            if ddef.double_tag_after_boss {
+                self.state.tags.push(TagId::Double); // Anaglyph Deck
+            }
         }
         let s = &mut self.state;
         gather_deck(s);
@@ -1006,6 +1028,23 @@ impl Game {
         self.fx = batch;
         self.fx.clear();
         rep
+    }
+}
+
+/// One round of a Perishable joker's life is over: count down, and debuff it at zero (for good).
+fn tick_perishable(s: &mut GameState) {
+    let mut changed = false;
+    for j in &mut s.jokers {
+        if j.stickers.perishable && j.stickers.perish_rounds_left > 0 {
+            j.stickers.perish_rounds_left -= 1;
+            if j.stickers.perish_rounds_left == 0 {
+                j.debuffed = true;
+            }
+            changed = true;
+        }
+    }
+    if changed {
+        s.refresh_modifiers();
     }
 }
 
@@ -1215,7 +1254,7 @@ fn apply_one(
             if !s.has_joker_room() {
                 return drop_effect(s, rep);
             }
-            match shop::roll_joker(s, RngKey::Jokers, rarity, &[]) {
+            match shop::roll_joker_plain(s, RngKey::Jokers, rarity, &[]) {
                 Some(mut j) => {
                     j.uid = s.alloc_joker_uid();
                     s.jokers.push(j);

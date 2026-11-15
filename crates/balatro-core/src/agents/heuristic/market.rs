@@ -253,7 +253,7 @@ impl HeuristicAgent {
             BlindKind::Boss,
             2.0,
             s.config.stake.scaling(),
-        );
+        ) * s.config.deck.def().blind_size_mult;
         self.pressure = need / power.max(1.0);
         Eval {
             sim,

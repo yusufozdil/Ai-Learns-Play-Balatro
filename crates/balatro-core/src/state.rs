@@ -5,7 +5,7 @@
 //! validation in [`crate::actions`]. This module holds the data, the config, derived values
 //! (effective hand size, slots, blind target), the [`RunView`] builder and the invariants.
 
-use crate::blinds::{self, BlindKind, MULT_BOSS_DEFAULT, StakeScaling};
+use crate::blinds::{self, BlindKind, MULT_BOSS_DEFAULT};
 use crate::boss::{self, BossState};
 use crate::consumable::ConsumableInstance;
 use crate::content::ids::{BossId, ConsumableId};
@@ -14,8 +14,7 @@ use crate::content::{try_boss_def, try_tag_def};
 use crate::data::prices::{INTEREST_CAP_BASE, STARTING_MONEY};
 use crate::data::run_rules::{
     BASE_CONSUMABLE_SLOTS, BASE_DISCARDS, BASE_HAND_SIZE, BASE_HANDS, BASE_JOKER_SLOTS,
-    MAX_HAND_SIZE, MIN_HAND_SIZE, MIN_HANDS_PER_ROUND, RED_DECK_EXTRA_DISCARDS,
-    SHOWDOWN_ANTE_INTERVAL, STANDARD_DECK_SIZE, STARTING_ANTE,
+    MAX_HAND_SIZE, MIN_HAND_SIZE, MIN_HANDS_PER_ROUND, SHOWDOWN_ANTE_INTERVAL, STARTING_ANTE,
 };
 use crate::deck::Deck;
 use crate::enums::{Edition, HandType, Phase};
@@ -29,39 +28,8 @@ pub use crate::shop::ShopState;
 use crate::voucher::ShopMods;
 use serde::{Deserialize, Serialize};
 
-/// Starting deck. Only Red is implemented (prd.md §1: Red Deck + White Stake).
-/// TODO(Phase 5E): move to `content/decks.rs` and add the other decks.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DeckKind {
-    /// +1 discard every round.
-    #[default]
-    Red,
-}
-
-/// Stake. Only White is implemented.
-/// TODO(Phase 5E): move to `content/stakes.rs` and add the other stakes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum StakeKind {
-    /// Base difficulty.
-    #[default]
-    White,
-}
-
-impl StakeKind {
-    /// Blind chip table of this stake.
-    pub fn scaling(self) -> StakeScaling {
-        match self {
-            StakeKind::White => StakeScaling::White,
-        }
-    }
-
-    /// Small blind pays no reward (Red Stake and above).
-    pub fn no_small_reward(self) -> bool {
-        match self {
-            StakeKind::White => false,
-        }
-    }
-}
+pub use crate::content::decks::DeckKind;
+pub use crate::content::stakes::StakeKind;
 
 /// Run options besides the seed. Extend with new fields (all must have a default).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -246,11 +214,16 @@ impl GameState {
     /// Fresh run: ante 1, Small blind selectable, $4, standard 52-card deck (unshuffled; the
     /// deck is shuffled when a blind is selected), tags rolled for ante 1.
     pub fn new(seed: u64, config: GameConfig) -> Self {
-        let deck_extra_discards = match config.deck {
-            DeckKind::Red => RED_DECK_EXTRA_DISCARDS,
-        };
-        let base_hands = BASE_HANDS;
-        let base_discards = BASE_DISCARDS + deck_extra_discards;
+        let ddef = config.deck.def();
+        let base_hands = add_i32(BASE_HANDS, ddef.hands, 1);
+        let base_discards = add_i32(
+            add_i32(BASE_DISCARDS, ddef.discards, 0),
+            -i32::try_from(config.stake.discard_penalty()).unwrap_or(0),
+            0,
+        );
+        let mut rng = GameRng::new(seed);
+        let deck = crate::content::decks::build_deck(ddef.composition, &mut rng);
+        let starting_deck_size = deck.len() as u32;
         let mut s = GameState {
             config,
             phase: Phase::BlindSelect,
@@ -266,7 +239,7 @@ impl GameState {
             boss_disabled: false,
             boss_seen: [0; BossId::COUNT],
             boss_state: BossState::default(),
-            money: STARTING_MONEY,
+            money: STARTING_MONEY + ddef.money,
             interest_cap: INTEREST_CAP_BASE,
             hands_left: base_hands,
             discards_left: base_discards,
@@ -276,16 +249,16 @@ impl GameState {
             last_hand: None,
             base_hands,
             base_discards,
-            base_hand_size: BASE_HAND_SIZE,
-            joker_slots: BASE_JOKER_SLOTS,
-            consumable_slots: BASE_CONSUMABLE_SLOTS,
+            base_hand_size: add_i32(BASE_HAND_SIZE, ddef.hand_size, MIN_HAND_SIZE),
+            joker_slots: add_i32(BASE_JOKER_SLOTS, ddef.joker_slots, 0),
+            consumable_slots: add_i32(BASE_CONSUMABLE_SLOTS, ddef.consumable_slots, 0),
             jokers: Vec::new(),
             mods: Modifiers::default(),
             consumables: Vec::new(),
             consumable_use_counts: vec![0; ConsumableId::COUNT],
             last_tarot_planet: None,
-            deck: Deck::standard(),
-            starting_deck_size: STANDARD_DECK_SIZE,
+            deck,
+            starting_deck_size,
             hand_levels: [1; HandType::COUNT],
             hand_plays_run: [0; HandType::COUNT],
             hand_plays_round: [0; HandType::COUNT],
@@ -301,8 +274,16 @@ impl GameState {
             shop: ShopState::default(),
             stats: GameStats::default(),
             next_joker_uid: 0,
-            rng: GameRng::new(seed),
+            rng,
         };
+        // Starting vouchers and consumables (before the first ante rolls its voucher, so a
+        // starting voucher is never offered again).
+        for &v in ddef.vouchers {
+            crate::voucher::redeem(&mut s, v);
+        }
+        for &c in ddef.consumables {
+            s.consumables.push(ConsumableInstance::new(c));
+        }
         s.start_ante();
         s
     }
@@ -361,9 +342,9 @@ impl GameState {
         }
     }
 
-    /// Spectral cards appear in shop card slots (Ghost Deck only; no implemented deck).
+    /// Spectral cards appear in shop card slots (Ghost Deck only).
     pub fn deck_spectral_in_shop(&self) -> bool {
-        false
+        self.config.deck.def().spectral_in_shop
     }
 
     /// Recompute `target` for the current ante and blind.
@@ -373,7 +354,7 @@ impl GameState {
             self.blind,
             self.boss_mult(),
             self.config.stake.scaling(),
-        );
+        ) * self.config.deck.def().blind_size_mult;
     }
 
     /// Boss blind multiplier: the boss's `mult` (Wall x4, Violet Vessel x6, Needle x1, else x2).
@@ -594,8 +575,7 @@ impl GameState {
             rules: self.mods.rules,
             prob_mult: self.mods.prob_mult,
             observatory: self.shop_mods.observatory,
-            // TODO(Phase 5E): Plasma Deck.
-            plasma_deck: false,
+            plasma_deck: self.config.deck.def().plasma,
             stats: self.stats.run,
         }
     }
@@ -734,6 +714,11 @@ pub fn fold_shop_mods(vouchers: &[VoucherId]) -> ShopMods {
         }
     }
     m
+}
+
+/// `base + delta` clamped to `lo..` (run-start values).
+fn add_i32(base: u32, delta: i32, lo: u32) -> u32 {
+    (i64::from(base) + i64::from(delta)).clamp(i64::from(lo), i64::from(u32::MAX)) as u32
 }
 
 /// `base + delta` clamped to `[lo, hi]`.

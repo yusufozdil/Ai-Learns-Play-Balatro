@@ -141,6 +141,18 @@ pub struct CashOut {
 /// balance (money + gold) -> blind reward -> hands money -> joker payouts. Interest therefore
 /// ignores the blind reward, hands money and joker cash-out money.
 pub fn cash_out(input: &CashOutInput) -> CashOut {
+    cash_out_with(input, HAND_REWARD, DISCARD_REWARD, 0)
+}
+
+/// [`cash_out`] with deck-specific rates: `hand_reward` dollars per unused hand and
+/// `discard_reward` per unused discard (`discards_left`). Green Deck pays $2 and $1 (decks.md);
+/// the hands money and the discards money share the `hands` item of the result.
+pub fn cash_out_with(
+    input: &CashOutInput,
+    hand_reward: i32,
+    discard_reward: i32,
+    discards_left: i32,
+) -> CashOut {
     let gold_cards = (input.gold_cards_held as i32)
         .saturating_mul(GOLD_CARD_PAYOUT)
         .saturating_add(
@@ -161,7 +173,11 @@ pub fn cash_out(input: &CashOutInput) -> CashOut {
     } else {
         blind_reward(input.kind, input.is_showdown, input.stake_no_small_reward)
     };
-    let hands = hands_reward(input.hands_left);
+    let hands = input
+        .hands_left
+        .max(0)
+        .saturating_mul(hand_reward)
+        .saturating_add(discards_left.max(0).saturating_mul(discard_reward));
     let jokers = input.joker_payout;
     let total = gold_cards
         .saturating_add(interest)
