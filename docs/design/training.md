@@ -318,3 +318,23 @@ Not tested: whether memory matters beyond 24M, where most of the `e2e_long` gain
 run would answer it (~4 h).
 
 Open: seed repeats; Phase 5E (other decks and stakes) deferred until after training.
+
+## 11. Phase 10D: head freeze and seed repeats (2026-11-15)
+
+**Head freeze** (`evaluate.py --route`, reference `e2e_long_fix/latest`, 1000 games, raw det; full model 7.51 / 68.6%):
+teacher plays SHOP → 6.15 / 16.7% (teacher level), BLIND → 6.77 / 39.7%, PLAY → 7.39 / 60.2%, PACK → 7.41 / 60.6%.
+Sampled mode gives the same picture. The gain over the teacher is almost entirely shop decisions, then not skipping blinds.
+Drops are not additive (the other heads never saw teacher-induced states). Results: `runs/eval/freeze_no_*.json`.
+
+**Seed repeats** (`scripts/chain_seeds.sh`: the `e2e_long` recipe, same BC init, PPO `--seed` 1 and 2, then the `_fix`
+fine-tune):
+
+| seed | 100M raw det | `_fix` raw det | `_fix` sampled |
+|---|---|---|---|
+| 0 (`e2e_long`) | 7.50 / 66.1% (trunc 1.1%) | 7.51 / 68.6% (0.1%) | 7.46 / 65.9% |
+| 1 (`e2e_s1`) | 7.47 / 64.9% (1.3%) | 7.46 / 63.9% (0.2%) | 7.38 / 64.5% |
+| 2 (`e2e_s2`) | 7.42 / 61.9% (1.6%) | 7.48 / 62.1% (0.5%) | 7.39 / 61.6% |
+| **mean ± sd** | | **7.48 ± 0.02 / 64.9 ± 3.4%** | **7.41 ± 0.05 / 64.0 ± 2.2%** |
+
+The recipe reproduces; seed 0 is on the lucky side. A 150M run was skipped (flat ante curve after 24M, win rate in a
+62-65% band over the last 8M steps of each run).
