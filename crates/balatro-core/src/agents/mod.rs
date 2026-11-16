@@ -4,6 +4,7 @@
 
 pub mod greedy;
 pub mod heuristic;
+pub mod power;
 pub mod random;
 
 use crate::actions::Action;

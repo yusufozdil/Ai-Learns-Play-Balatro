@@ -10,6 +10,7 @@
 mod encode;
 mod env;
 mod layout;
+mod power;
 mod single;
 mod vec_env;
 
@@ -140,6 +141,7 @@ fn layout_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 fn _engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(layout_py, m)?)?;
+    m.add_function(wrap_pyfunction!(power::power_py, m)?)?;
     m.add_class::<vec_env::VecEnv>()?;
     m.add_class::<single::PyGame>()?;
     m.add("INTERFACE_VERSION", layout::INTERFACE_VERSION)?;
