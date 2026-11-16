@@ -103,6 +103,7 @@ class PPOConfig:
     eval_move_limit: int | None = None  # validation repetition guard (evaluate.ModelActor)
     eval_deck: str = "red"  # validation configuration (default Red / White: comparable to history)
     eval_stake: str = "white"
+    eval_set: str = "dev"  # evaluate.EVAL_SETS: dev = prefix of the test set (history), val = opt-in
     save_every: int = 5
     ckpt_keep_best: bool = True
     # --- model (used when not initialised from a checkpoint)
@@ -577,6 +578,7 @@ class Trainer:
             route,
             max_episode_steps=cfg.max_episode_steps,
             move_limit=cfg.eval_move_limit,
+            seed=ev.EVAL_SETS[cfg.eval_set][0],
             deck=cfg.eval_deck,
             stake=cfg.eval_stake,
         )
@@ -590,6 +592,7 @@ class Trainer:
                 route,
                 max_episode_steps=cfg.max_episode_steps,
                 move_limit=cfg.eval_move_limit,
+                seed=ev.EVAL_SETS[cfg.eval_set][0],
                 deck=cfg.eval_deck,
                 stake=cfg.eval_stake,
             )

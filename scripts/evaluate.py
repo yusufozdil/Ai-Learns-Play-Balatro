@@ -1,4 +1,4 @@
-"""Evaluate checkpoints on the fixed test set (1000 games, seed ``TEST_SEED``) against baselines.
+"""Evaluate checkpoints on a fixed game set (default dev: 1000 games, seed ``TEST_SEED``) against baselines.
 
     uv run --no-sync python scripts/evaluate.py --checkpoint runs/e2e/best.pt --name e2e
     uv run --no-sync python scripts/evaluate.py --checkpoint runs/s1/best.pt --route play
@@ -9,6 +9,9 @@ non-default ``--deck`` / ``--stake``, so the Red/White cache names are unchanged
 *paired* (same games). With ``--route``
 (a curriculum phase set such as ``play``) the model plays only those phases, the teacher the rest
 (baselines are then teacher / BC under the same routing).
+``--set {dev,holdout,val}`` / ``--seed-base`` pick the games (see ``evaluate.py`` docs; default dev
+is bit-identical to the historical protocol); a non-dev set adds ``_<set>`` to the baseline cache
+and result names. ``--memory {zero,shuffle}`` is the recurrent-memory knockout (adds ``_mem<mode>``).
 Results go to ``runs/eval/<name>.json`` (``<name>`` gets ``_<deck>_<stake>`` for a non-default
 configuration unless ``--name`` is given).
 """
@@ -42,7 +45,23 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", type=Path, required=True)
     ap.add_argument("--name", default=None)
-    ap.add_argument("--games", type=int, default=ev.TEST_GAMES)
+    ap.add_argument(
+        "--set",
+        dest="eval_set",
+        choices=sorted(ev.EVAL_SETS),
+        default="dev",
+        help="named game set (dev = historical test set, holdout = 10k, val = 512)",
+    )
+    ap.add_argument("--seed-base", type=int, default=None, help="raw base seed (overrides --set)")
+    ap.add_argument(
+        "--games", type=int, default=None, help="default: the set's size (dev 1000, holdout 10000)"
+    )
+    ap.add_argument(
+        "--memory",
+        choices=ev.MEMORY_MODES,
+        default="normal",
+        help="recurrent-memory knockout: zero = reset hidden each step, shuffle = permute across envs",
+    )
     ap.add_argument("--modes", default="det,sample", help="comma list of det,sample")
     ap.add_argument("--route", default=None, help="phases the model plays (rest: teacher)")
     ap.add_argument("--bc", type=Path, default=ROOT / "runs" / "bc" / "model.pt")
@@ -57,15 +76,30 @@ def main() -> None:
     ap.add_argument("--deck", default="red", help="deck name of every game (default red)")
     ap.add_argument("--stake", default="white", help="stake name of every game (default white)")
     args = ap.parse_args()
+    set_seed, set_games = ev.EVAL_SETS[args.eval_set]
+    if args.games is None:
+        args.games = set_games
+    seed = set_seed if args.seed_base is None else args.seed_base
+    set_suffix = ""
+    if args.seed_base is not None:
+        set_suffix = f"_seed{args.seed_base}"
+    elif args.eval_set != "dev":
+        set_suffix = f"_{args.eval_set}"
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.backends.cuda.matmul.allow_tf32 = True
     out_dir = ROOT / "runs" / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
     default_cfg = (args.deck, args.stake) == ("red", "white")
     cfg_suffix = "" if default_cfg else f"_{args.deck}_{args.stake}"
-    name = args.name or args.checkpoint.parent.name + cfg_suffix
-    kw = {"max_episode_steps": args.max_episode_steps, "deck": args.deck, "stake": args.stake}
-    suffix = (f"_{args.route}" if args.route else "") + cfg_suffix
+    mem_suffix = "" if args.memory == "normal" else f"_mem{args.memory}"
+    name = (args.name or args.checkpoint.parent.name + cfg_suffix) + set_suffix + mem_suffix
+    kw = {
+        "max_episode_steps": args.max_episode_steps,
+        "deck": args.deck,
+        "stake": args.stake,
+        "seed": seed,
+    }
+    suffix = (f"_{args.route}" if args.route else "") + cfg_suffix + set_suffix
 
     base: dict[str, ev.EvalResult] = {}
     cache = out_dir / f"baselines_{args.games}{suffix}.json"
@@ -98,6 +132,7 @@ def main() -> None:
             args.route,
             name=f"{name}_{mode}",
             move_limit=args.move_limit,
+            memory=args.memory,
             **kw,
         )
         results[mode] = r
@@ -110,6 +145,8 @@ def main() -> None:
                 f"d_win={100 * c['win_diff']:+.1f}+-{100 * c['win_diff_sem']:.1f}%"
             )
     payload = {m: _dump(r) for m, r in results.items()}
+    payload["set"] = "custom" if args.seed_base is not None else args.eval_set
+    payload["seed_base"], payload["memory"] = seed, args.memory
     payload["checkpoint"] = str(args.checkpoint)
     payload["deck"], payload["stake"] = args.deck, args.stake
     payload["update"] = ck.get("update")

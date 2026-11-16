@@ -6,6 +6,16 @@
   the test games are never trained on. A smaller validation subset (the first ``k`` games) is
   literally a prefix of the test set; every policy plays the *same* games, which makes paired
   comparisons possible (``compare``).
+* **Named sets** (``EVAL_SETS``): ``dev`` = ``TEST_SEED`` x 1000 (the historical test set, all old
+  numbers refer to it), ``holdout`` = ``HOLDOUT_SEED`` x 10_000 (final reporting only), ``val`` =
+  ``VAL_SEED`` x 512 (``best.pt`` selection during training, opt-in via ``--eval-set val``).
+  Disjointness: env ``i`` / episode ``k`` of base ``b`` plays the game with seed
+  ``derive_seed(b, i, k)`` = three chained SplitMix64 rounds (``crates/balatro-py/src/env.rs``),
+  so every game seed is a 64-bit hash of ``(b, i, k)``; the bases are all different (training
+  bases are ``20_000_003 + 1_000_003 s + 7_919 r`` < 6e7 for s, r in 0..9; the new bases are
+  far outside that range), hence game seeds of different sets can only coincide by a 2^-64
+  hash collision. ``tests_py/test_eval_sets.py`` checks this empirically on the engine (first
+  observation of every game of every set and of the training bases, no duplicates).
 * **Policies** are ``act(env, obs, masks, first, active) -> int64 (n, 4)`` callables;
   ``ModelActor`` (model deterministic/sampled, optionally routed: the model plays only some
   phases and the heuristic teacher the rest), ``teacher_actor``, ``random_actor``. Only envs that
@@ -28,13 +38,25 @@ from balatro_rl.train.curriculum import Curriculum
 
 TEST_SEED = 10_000_019
 TEST_GAMES = 1000
+HOLDOUT_SEED = 777_000_017
+HOLDOUT_GAMES = 10_000
+VAL_SEED = 555_000_031
+VAL_GAMES = 512
 MAX_EPISODE_STEPS = 3000
+
+#: name -> (base seed, default number of games)
+EVAL_SETS: dict[str, tuple[int, int]] = {
+    "dev": (TEST_SEED, TEST_GAMES),
+    "holdout": (HOLDOUT_SEED, HOLDOUT_GAMES),
+    "val": (VAL_SEED, VAL_GAMES),
+}
+MEMORY_MODES = ("normal", "zero", "shuffle")
 
 
 def train_seed(seed: int, resume: int = 0) -> int:
     """Base env seed for training runs; never equal to ``TEST_SEED``."""
     s = 20_000_003 + 1_000_003 * int(seed) + 7_919 * int(resume)
-    assert s != TEST_SEED
+    assert s not in (TEST_SEED, HOLDOUT_SEED, VAL_SEED)
     return s
 
 
@@ -108,8 +130,16 @@ class ModelActor:
         seed: int = 0,
         route: str | None = None,
         move_limit: int | None = None,
+        memory: str = "normal",
     ):
         import torch
+
+        assert memory in MEMORY_MODES, memory
+        # Memory knockout (diagnostic): "zero" = hidden state reset to zeros before every model
+        # step; "shuffle" = hidden vectors permuted across the envs acted on in this step
+        # (in-distribution but uninformative). "normal" = untouched.
+        self.memory = memory
+        self.shuffle_gen = torch.Generator().manual_seed(seed + 7919)
 
         self.torch = torch
         self.model = model.eval()
@@ -156,6 +186,11 @@ class ModelActor:
                 block &= other.any(axis=1)  # never leave a state without any legal kind
                 km[block, MOVE_JOKER] = False
                 m = {**m, "kind_mask": km}
+        if self.memory == "zero":
+            h = torch.zeros_like(h)
+        elif self.memory == "shuffle" and len(idx) > 1:
+            perm = torch.randperm(len(idx), generator=self.shuffle_gen).to(h.device)
+            h = h[perm]
         a, _, _, _, h2 = self.model.act(o, m, h, self.deterministic, first=f, generator=self.gen)
         if sub:
             self.hidden[idx_t] = h2
@@ -242,8 +277,9 @@ def evaluate_model(
     actor_seed: int = 1,
     name: str | None = None,
     move_limit: int | None = None,
+    memory: str = "normal",
     **kw,
 ) -> EvalResult:
-    actor = ModelActor(model, deterministic, actor_seed, route, move_limit)
+    actor = ModelActor(model, deterministic, actor_seed, route, move_limit, memory)
     name = name or f"model_{'det' if deterministic else 'sample'}" + (f"[{route}]" if route else "")
     return run_games(name, actor, games, seed, **kw)
