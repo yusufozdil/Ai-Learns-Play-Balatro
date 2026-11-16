@@ -250,29 +250,35 @@ impl Agent for GreedyAgent {
 }
 
 impl GreedyAgent {
+    /// Play-phase decision against an explicit blind `target` (the game's own target is used by
+    /// [`Agent::act`]): play the best hand if it reaches what is still needed or no discard is
+    /// left, otherwise the heuristic discard (falling back to the best play).
+    pub fn act_play(&mut self, game: &Game, target: f64) -> Action {
+        let s = game.state();
+        let Some((mask, score, ht)) = self.best_play(game) else {
+            // No playable hand: take any legal action.
+            return game
+                .legal_actions()
+                .into_iter()
+                .next()
+                .unwrap_or(Action::EndShop);
+        };
+        let need = target - s.round_score;
+        if score >= need || s.discards_left == 0 {
+            return Action::Play(mask);
+        }
+        // A boss may forbid the planned discard (Cerulean Bell's forced card).
+        match Self::discard_plan(game, mask, ht) {
+            Some(d) if game.validate(Action::Discard(d)).is_ok() => Action::Discard(d),
+            _ => Action::Play(mask),
+        }
+    }
+
     fn act_on(&mut self, game: &Game) -> Action {
         let s = game.state();
         match s.phase {
             Phase::BlindSelect => Action::SelectBlind,
-            Phase::Play => {
-                let Some((mask, score, ht)) = self.best_play(game) else {
-                    // No playable hand: take any legal action.
-                    return game
-                        .legal_actions()
-                        .into_iter()
-                        .next()
-                        .unwrap_or(Action::EndShop);
-                };
-                let need = s.target - s.round_score;
-                if score >= need || s.discards_left == 0 {
-                    return Action::Play(mask);
-                }
-                // A boss may forbid the planned discard (Cerulean Bell's forced card).
-                match Self::discard_plan(game, mask, ht) {
-                    Some(d) if game.validate(Action::Discard(d)).is_ok() => Action::Discard(d),
-                    _ => Action::Play(mask),
-                }
-            }
+            Phase::Play => self.act_play(game, s.target),
             Phase::Shop => Self::shop_action(game),
             Phase::PackOpen => Self::pack_action(game),
             _ => game
