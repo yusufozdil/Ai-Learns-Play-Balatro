@@ -136,3 +136,53 @@ class BalatroVecEnv:
         """Episodes finished since the last call: ``(env, ante, done_code, steps, return,
         blinds_beaten, invalid_actions)``."""
         return self._env.drain_finished()
+
+    # ------------------------------------------------------------------ branching API (I0)
+
+    def drain_finished_ex(self) -> list[dict]:
+        """Like ``drain_finished`` (same queue: draining one empties both) but with named
+        fields: ``env, ante, code, steps, return, blinds_beaten, invalid`` plus ``deck`` and
+        ``stake`` (names), ``imported`` (the episode began from ``import_state``; its ``steps``
+        and ``return`` count from the import) and ``start_joker`` (display name or ``None``)."""
+        return self._env.drain_finished_ex()
+
+    def export_state(self, i: int) -> str:
+        """Full state of env ``i`` as a JSON string (RNG streams included). Feed it to
+        ``import_state`` or ``balatro_rl._engine.Game.from_state``."""
+        return self._env.export_state(i)
+
+    def import_state(
+        self,
+        i: int,
+        state: str,
+        reseed: int | None = None,
+        streams: list[str] | None = None,
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Replace env ``i``'s run by an exported state, mid-episode; returns ``(obs, masks)``
+        (buffer views, row ``i`` now holds the imported state; ``reward/done/invalid[i] = 0``).
+
+        Episode bookkeeping: the imported run is a *fresh episode* for the interface. Step count,
+        return and invalid count restart at 0 (so ``max_episode_steps`` counts from the import),
+        the episode is flagged ``imported=True`` in ``drain_finished_ex``, the replaced episode
+        is abandoned without a finished record, and the env's episode counter is not advanced
+        (after the imported episode ends the env auto-resets exactly as the replaced one would
+        have: other episodes' seeds do not depend on imports). The deck and stake come from the
+        state. A finished run cannot be imported.
+
+        ``reseed`` (int) re-samples the hidden information first (draw order, face-down cards,
+        RNG streams): without it the imported env replays the exported future exactly. With
+        ``streams`` (names among deck, shop, packs, bosses, tags, jokers, cards, consumables,
+        misc) only those streams are re-derived; see ``Game.reseed``."""
+        self._env.import_state(self._buffers, i, state, reseed, streams)
+        return self.obs, self.masks
+
+    def set_start_jokers(self, jokers: str | list[str | None] | None) -> None:
+        """Start every future episode of env ``j`` with the joker ``jokers[j]`` (display name
+        such as ``"Greedy Joker"``, id ``"GreedyJoker"`` or snake case; ``None`` = none). A single
+        name or ``None`` applies to all envs. Takes effect at the next ``reset()`` or auto-reset
+        (the running episodes are untouched); ``reset()`` replays the same seeds, so the same
+        episode with different start jokers is a paired comparison. Default (never called) is
+        bit-identical to the previous behaviour."""
+        if jokers is None or isinstance(jokers, str):
+            jokers = [jokers] * self.num_envs
+        self._env.set_start_jokers(list(jokers))

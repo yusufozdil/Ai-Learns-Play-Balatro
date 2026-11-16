@@ -12,6 +12,9 @@ use balatro_core::action_mask::{ActionKind, CardSelect};
 use balatro_core::actions::Action;
 use balatro_core::agents::{Agent, HeuristicAgent};
 use balatro_core::blinds::BlindKind;
+use balatro_core::content::jokers::{JokerId, all_defs};
+use balatro_core::joker::JokerInstance;
+use balatro_core::rng::RngKey;
 use balatro_core::enums::Phase;
 use balatro_core::game::{Game, StepInfo};
 use balatro_core::state::{DeckKind, GameConfig, GameState, Outcome, StakeKind};
@@ -223,6 +226,15 @@ pub struct Finished {
     pub rounds_won: u32,
     /// Invalid actions taken.
     pub invalid: u32,
+    /// Deck of the run (`DeckKind::index`).
+    pub deck: DeckKind,
+    /// Stake of the run.
+    pub stake: StakeKind,
+    /// The episode started from an imported state (`Env::import_game`), not from a seed: it
+    /// began mid-run and its steps / return count from the import only.
+    pub imported: bool,
+    /// The start joker the episode began with (`Env::start_joker`; `None` for imported episodes).
+    pub start_joker: Option<JokerId>,
 }
 
 /// Progress `min(score / target, 1)` of the round in play (0 outside `Play`).
@@ -268,6 +280,13 @@ pub struct Env {
     steps: u32,
     ep_return: f32,
     ep_invalid: u32,
+    /// The current episode started from an imported state.
+    imported: bool,
+    /// Joker added at every (hard or auto) reset; `None` = none (bit-identical default).
+    pub start_joker: Option<JokerId>,
+    /// The start joker the CURRENT episode actually began with (`start_joker` may have been
+    /// changed since).
+    ep_start_joker: Option<JokerId>,
     /// SplitMix64 state of `random_actions`.
     act_rng: u64,
     /// The teacher (heuristic) agent, created on first use, dropped on every reset.
@@ -303,6 +322,9 @@ impl Env {
             steps: 0,
             ep_return: 0.0,
             ep_invalid: 0,
+            imported: false,
+            start_joker: None,
+            ep_start_joker: None,
             act_rng: splitmix64(derive_seed(sh.base_seed, u64::from(idx), u64::MAX)),
             teacher: None,
             finished: Vec::new(),
@@ -323,10 +345,76 @@ impl Env {
         self.steps = 0;
         self.ep_return = 0.0;
         self.ep_invalid = 0;
+        self.imported = false;
         self.act_rng = splitmix64(derive_seed(sh.base_seed, idx, u64::MAX));
         self.teacher = None;
         self.finished.clear();
+        self.apply_start_joker();
         self.refresh();
+    }
+
+    /// An independent copy of this env (state, counters, sampler stream, pending finished
+    /// records). The teacher agent is not copied: the clone creates a new one on first use.
+    pub fn fork(&self) -> Env {
+        Env {
+            idx: self.idx,
+            game: self.game.clone(),
+            view: self.view,
+            episode: self.episode,
+            steps: self.steps,
+            ep_return: self.ep_return,
+            ep_invalid: self.ep_invalid,
+            imported: self.imported,
+            start_joker: self.start_joker,
+            ep_start_joker: self.ep_start_joker,
+            act_rng: self.act_rng,
+            teacher: None,
+            finished: self.finished.clone(),
+        }
+    }
+
+    /// Give the fresh run its start joker (no-op without one).
+    fn apply_start_joker(&mut self) {
+        self.ep_start_joker = self.start_joker;
+        if let Some(id) = self.start_joker {
+            // A fresh run has an empty joker row, so there is always room.
+            let _ = self.game.add_joker(JokerInstance::new(0, id));
+        }
+    }
+
+    /// Replace the run mid-episode by `game` (branching; see `docs/design/rl_interface.md`).
+    /// The imported run starts a fresh episode as far as the interface is concerned: step counter,
+    /// return and invalid counter restart at 0, the teacher agent is dropped, the episode is
+    /// flagged `imported` in its `Finished` record. The episode counter is NOT advanced: the next
+    /// auto-reset after the imported episode is the same one the replaced episode would have
+    /// reached (the abandoned episode produces no `Finished` record), so the seeds of the other
+    /// episodes of this env do not depend on whether an import happened. `act_rng` keeps running.
+    pub fn import_game(&mut self, game: Game, sh: &Shared) -> Result<(), String> {
+        if game.is_terminal() {
+            return Err("cannot import a finished run".into());
+        }
+        if game.state().config.endless != sh.config.endless {
+            return Err(format!(
+                "state has endless={} but this env was built with endless={} (done codes and \
+                 the ante cap depend on it)",
+                game.state().config.endless,
+                sh.config.endless
+            ));
+        }
+        let view = MaskView::compute(game.state());
+        if view.kinds == 0 {
+            return Err("imported state has no addressable action".into());
+        }
+        // Everything is validated: from here on the import cannot fail.
+        self.game = game;
+        self.view = view;
+        self.ep_start_joker = None;
+        self.steps = 0;
+        self.ep_return = 0.0;
+        self.ep_invalid = 0;
+        self.imported = true;
+        self.teacher = None;
+        Ok(())
     }
 
     /// Start the next episode (auto-reset) with a derived seed.
@@ -335,11 +423,13 @@ impl Env {
         self.steps = 0;
         self.ep_return = 0.0;
         self.ep_invalid = 0;
+        self.imported = false;
         self.teacher = None;
         self.game.reset_with_seed(
             derive_seed(sh.base_seed, u64::from(self.idx), self.episode),
             sh.config_for(u64::from(self.idx), self.episode),
         );
+        self.apply_start_joker();
         self.refresh();
     }
 
@@ -441,6 +531,10 @@ impl Env {
                 ret: self.ep_return,
                 rounds_won: s.stats.rounds_won,
                 invalid: self.ep_invalid,
+                deck: s.config.deck,
+                stake: s.config.stake,
+                imported: self.imported,
+                start_joker: self.ep_start_joker,
             });
             if auto_reset {
                 self.next_episode(sh);
@@ -531,6 +625,64 @@ pub fn random_selection(sel: &CardSelect, rng: &mut u64) -> u32 {
         }
         partial |= 1 << nth_bit(next, r - u32::from(can_stop));
     }
+}
+
+/// RNG streams by name (`"deck"`, `"shop"`, `"packs"`, `"bosses"`, `"tags"`, `"jokers"`,
+/// `"cards"`, `"consumables"`, `"misc"`); `None` = all (see `Game::reseed_hidden`).
+pub fn parse_streams(names: Option<Vec<String>>) -> Result<Option<Vec<RngKey>>, String> {
+    let Some(names) = names else {
+        return Ok(None);
+    };
+    names
+        .iter()
+        .map(|n| {
+            RngKey::ALL
+                .iter()
+                .copied()
+                .find(|k| k.name() == n.to_ascii_lowercase())
+                .ok_or_else(|| {
+                    let all: Vec<&str> = RngKey::ALL.iter().map(|k| k.name()).collect();
+                    format!("unknown rng stream {n:?} (valid: {})", all.join(", "))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// Decode an exported state (`Env::export_json` / `state_json`) into a game, checking its
+/// invariants; `reseed = Some(seed)` re-samples the hidden information (see
+/// `Game::reseed_hidden`; `streams` picks the streams, `None` = all).
+pub fn game_from_json(
+    json: &str,
+    reseed: Option<u64>,
+    streams: Option<&[RngKey]>,
+) -> Result<Game, String> {
+    let state = balatro_core::serialize::state_from_json(json).map_err(|e| e.to_string())?;
+    let mut g = Game::from_state(state);
+    if let Some(seed) = reseed {
+        g.reseed_hidden(seed, streams);
+    }
+    Ok(g)
+}
+
+/// A joker by name: the display name (`"Greedy Joker"`), the id (`"GreedyJoker"`) or snake case
+/// (`"greedy_joker"`), compared ignoring case and every non-alphanumeric character.
+pub fn parse_joker(name: &str) -> Result<JokerId, String> {
+    let norm = |s: &str| {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    let want = norm(name);
+    if !want.is_empty() {
+        for d in all_defs() {
+            if norm(d.name) == want || norm(&format!("{:?}", d.id)) == want {
+                return Ok(d.id);
+            }
+        }
+    }
+    Err(format!("unknown joker {name:?} (display name, e.g. \"Greedy Joker\")"))
 }
 
 /// Parse the deck/stake names accepted by the Python constructors.
