@@ -443,3 +443,92 @@ cannot be recovered when a voucher changed them). Datasets written by `bc.collec
 is then used for it) makes every episode of every env draw `(deck, stake)` uniformly from the
 product, as a pure function of `(base_seed, env, episode)` (independent of the thread count and
 of the other envs; `Game` / `reset` semantics unchanged). Without the lists nothing changes.
+
+## 13. Branching API (additive, `INTERFACE_VERSION` unchanged)
+
+Tools for counterfactual analysis, search and scenario starts. Nothing here changes an
+observation, mask, reward, seed or reset: an env that never calls these behaves bit-identically.
+
+**Fairness rule.** A clone carries the same RNG streams, so advancing it replays the real future
+(it peeks). Every branch used to *decide* something must be reseeded; a branch used only to
+replay (same future) must not be.
+
+`Game` (single run):
+
+* `clone() -> Game` (also `copy.copy`): an independent copy (state, all RNG streams, counters,
+  sampler stream). Same actions give the same observations and rewards. The teacher agent is not
+  copied (the clone builds a fresh one lazily).
+* `export_state() -> str`: the full state as JSON (`state_json()` is the same string); RNG
+  streams included. `Game.from_state(state, reseed=None, streams=None, reward=None,
+  max_episode_steps=10000, env_index=0) -> Game`: resume from it. Deck, stake and endless come
+  from the state; step counter and return start at 0. Invariants are checked; a finished run or
+  malformed JSON raises `ValueError`.
+* `reseed(seed, streams=None)`: re-sample the hidden information from a caller-given `u64`.
+  What is visible (observation, masks, legal actions) is unchanged.
+  * `streams=None`: **everything**. The nine RNG streams (`deck, shop, packs, bosses, tags,
+    jokers, cards, consumables, misc`) are re-derived from `seed` exactly as `GameRng::new(seed)`
+    does, the draw pile gets a fresh uniform order (from the new `deck` stream) and the
+    face-down hand cards swap identities among themselves (the draw pile's composition is
+    visible, so permuting the face-down multiset is exactly the posterior given the observation;
+    this is the `debug_scramble_hidden` rule, not the `fair_view` sampling from the unseen pool,
+    which would change the visible pile composition). The ante voucher is re-rolled too while it
+    is still unseen (before the first shop of the run; from ante 2 on a new ante starts right
+    before its shop, so it is already visible). A completely new future. Not resampled: the joker
+    order under Amber Acorn (real in the observation as well) and everything the player has
+    already seen (boss, skip tags, shop, open pack).
+  * `streams=[names]`: only the listed streams are re-derived (the others keep their state,
+    including their position). `"deck"` additionally re-samples the card information (draw pile
+    order, face-down identities; later reshuffles use the new stream). Without `"deck"` the cards
+    stay as they are. Typical uses: `["deck"]` = same shop/pack/boss/joker luck, new draws;
+    `["shop", "packs", ...]` without `deck` = same draws, new market luck; counterfactual twins
+    that differ in one decision share every stream the decision does not consume (the streams
+    are independent, so an extra shop purchase does not shift the deck shuffles) and need no
+    reseed at all.
+* `Game(..., start_joker=None)`: start joker by name (see below).
+
+`VecEnv` / `BalatroVecEnv`:
+
+* `export_state(i) -> str`; `import_state(i, state, reseed=None, streams=None) -> (obs, masks)`
+  replaces env `i`'s run mid-episode and writes the imported observation and masks into row `i`
+  (`reward/done/invalid[i] = 0`). Other envs are untouched; results are independent of the thread
+  count. `reseed` / `streams` as above.
+* Episode bookkeeping of an import: the imported run is a **fresh episode** for the interface.
+  `steps`, return and invalid count restart at 0 (so `max_episode_steps` counts from the import),
+  the teacher agent is dropped, the replaced episode is abandoned without a finished record, and
+  the episode is flagged `imported`. **No `done` is emitted for the abandoned episode**: the
+  caller must treat the import as an episode boundary itself (cut GAE / reset recurrent state /
+  drop that env's pending transitions). The env's episode counter is **not** advanced: when the
+  imported episode ends, auto-reset starts the episode the replaced one would have been
+  followed by, so the seeds of every other episode do not depend on imports. The sampler stream
+  of `random_actions` keeps running.
+* `drain_finished_ex() -> list[dict]`: same queue as `drain_finished()` (the 7-tuples are
+  unchanged), with named fields `env, ante, code, steps, return, blinds_beaten, invalid` and the
+  additions `deck`, `stake` (names), `imported` (bool) and `start_joker` (name or `None`).
+* `set_start_jokers(jokers)`: per-env start joker, `list[str | None]` (or one name for all, or
+  `None` to clear). A name is a display name (`"Greedy Joker"`), the id (`"GreedyJoker"`) or snake
+  case. The joker is added (through `Game::add_joker`: `on_acquire` fires, uid assigned) to every
+  fresh run of that env at the next `reset()` and at every later auto-reset; running episodes
+  are untouched. `reset()` replays episode 0 with the same seeds, so resetting under different
+  start jokers is a paired comparison. Unknown names and a wrong list length raise `ValueError`.
+
+Supported everywhere the run is not finished: Blind select, Play, Shop, open Pack, with or
+without face-down cards (every phase is round-trip tested). Not supported / caveats:
+
+* A finished run (`Won`, `GameOver`) cannot be imported, nor a state whose `endless` flag differs
+  from the env's (done codes and the ante cap depend on it): both raise `ValueError` and leave
+  the env unchanged.
+* A state holding a non-finite `f64` (blind target past the `f64` range, endless ante far beyond
+  the default `endless_max_ante = 12`) is expected not to survive JSON (`serde_json` writes
+  non-finite floats as `null`); untested because it is not reachable at the default settings.
+* JSON size is ~11-13 KB; export is not meant for hot loops (see costs). Use `clone()` for
+  in-process branching.
+* The JSON reader now parses floats exactly (`serde_json` feature `float_roundtrip` in
+  `crates/balatro-core/Cargo.toml`, the only change outside `balatro-py` apart from the new
+  `Game::reseed_hidden` / `GameRng::reseed_streams`), needed for a bit-exact import: without
+  it re-serialising an imported state changed some `f64` values in the last digit.
+
+Cost per call (release build, one core, idle machine, Python call overhead included; early /
+mid / late states of a 168-step teacher game differ by < 15%): `Game.clone()` 0.2 us, `reseed`
+0.6-0.8 us, `export_state` 9-11 us (11-12.5 KB of JSON), `Game.from_state` 16-18 us,
+`VecEnv.import_state` 18-21 us (including the observation write, with or without reseed),
+`clone() + reseed() + observation()` 5 us.

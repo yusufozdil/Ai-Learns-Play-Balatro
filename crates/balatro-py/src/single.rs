@@ -2,7 +2,10 @@
 //! same structured actions, observation and masks as `VecEnv` (no auto-reset: a finished run
 //! stays inspectable). Not performance-critical; use `VecEnv` for training.
 
-use crate::env::{ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, RewardConfig, Shared, parse_config};
+use crate::env::{
+    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, RewardConfig, Shared, game_from_json,
+    parse_config, parse_joker, parse_streams,
+};
 use crate::layout::{MASK_NAMES, OBS_NAMES, Owned, sel_row};
 use crate::vec_env::parse_reward;
 use balatro_core::action_mask::ActionKind;
@@ -32,7 +35,9 @@ fn splitmix(z: &mut u64) -> u64 {
 impl PyGame {
     #[new]
     #[pyo3(signature = (seed=0, deck="red", stake="white", endless=false, reward=None,
-                        max_episode_steps=DEFAULT_MAX_EPISODE_STEPS, env_index=0))]
+                        max_episode_steps=DEFAULT_MAX_EPISODE_STEPS, env_index=0,
+                        start_joker=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         seed: u64,
         deck: &str,
@@ -41,6 +46,7 @@ impl PyGame {
         reward: Option<&Bound<'_, PyDict>>,
         max_episode_steps: u32,
         env_index: u32,
+        start_joker: Option<&str>,
     ) -> PyResult<Self> {
         let config = parse_config(deck, stake, endless).map_err(PyValueError::new_err)?;
         let reward: RewardConfig = parse_reward(reward)?;
@@ -53,8 +59,83 @@ impl PyGame {
         };
         // Env `env_index` of a pool with base seed `seed`: the same first episode as
         // `VecEnv(.., seed)[env_index]` (0 by default).
-        let env = Env::new(env_index, &sh);
+        let mut env = Env::new(env_index, &sh);
+        if let Some(name) = start_joker {
+            // Same episode-0 seed as `Env::new`, plus the joker.
+            env.start_joker = Some(parse_joker(name).map_err(PyValueError::new_err)?);
+            env.hard_reset(&sh);
+        }
         Ok(PyGame { env, sh })
+    }
+
+    /// An independent copy of this game (state, RNG streams, counters). Advancing the copy with
+    /// the same actions reproduces the original exactly, i.e. it PEEKS at the real future; call
+    /// `reseed` on it before using it to evaluate decisions. The teacher agent is not copied.
+    fn clone(&self) -> PyGame {
+        PyGame {
+            env: self.env.fork(),
+            sh: self.sh,
+        }
+    }
+
+    fn __copy__(&self) -> PyGame {
+        self.clone()
+    }
+
+    /// The full state as a JSON string (`state_json` under the name used by the branching API;
+    /// round-trips through `Game.from_state`, RNG streams included).
+    fn export_state(&self) -> String {
+        state_to_json(self.env.game.state(), false)
+    }
+
+    /// A game resumed from an exported state. The run options (deck, stake, endless) come from
+    /// the state; `reward` and `max_episode_steps` are the interface settings of the new game
+    /// (step counter and return start at 0). `reseed` (u64) re-samples the hidden information
+    /// first, `streams` (list of names) restricts which streams, see `reseed`.
+    #[staticmethod]
+    #[pyo3(signature = (state, reseed=None, streams=None, reward=None,
+                        max_episode_steps=DEFAULT_MAX_EPISODE_STEPS, env_index=0))]
+    fn from_state(
+        state: &str,
+        reseed: Option<u64>,
+        streams: Option<Vec<String>>,
+        reward: Option<&Bound<'_, PyDict>>,
+        max_episode_steps: u32,
+        env_index: u32,
+    ) -> PyResult<PyGame> {
+        let streams = parse_streams(streams).map_err(PyValueError::new_err)?;
+        let game = game_from_json(state, reseed, streams.as_deref())
+            .map_err(PyValueError::new_err)?;
+        let sh = Shared {
+            config: game.state().config,
+            configs: ConfigPool::EMPTY,
+            max_steps: max_episode_steps.max(1),
+            base_seed: 0,
+            reward: parse_reward(reward)?,
+        };
+        let mut env = Env::new(env_index, &sh);
+        env.import_game(game, &sh).map_err(PyValueError::new_err)?;
+        Ok(PyGame { env, sh })
+    }
+
+    /// Re-sample the hidden information from `seed` (fairness: the player cannot know the
+    /// order of the draw pile, the identity of face-down cards or any future random outcome).
+    /// What the player can see (observation, masks, legal actions) is unchanged.
+    ///
+    /// * `streams=None` (default): everything. All nine RNG streams (deck, shop, packs, bosses,
+    ///   tags, jokers, cards, consumables, misc) are re-derived from `seed`, the face-down hand
+    ///   cards are re-drawn from the unseen cards and the draw pile is reshuffled: a completely
+    ///   new future.
+    /// * `streams=[names]`: only those streams are re-derived; the rest of the future stays the
+    ///   same. `"deck"` also re-samples the card information (draw pile order, face-down cards).
+    ///   Without `"deck"` the cards stay as they are. Counterfactual twins that share
+    ///   everything but one decision use a partial reseed (or none).
+    #[pyo3(signature = (seed, streams=None))]
+    fn reseed(&mut self, seed: u64, streams: Option<Vec<String>>) -> PyResult<()> {
+        let streams = parse_streams(streams).map_err(PyValueError::new_err)?;
+        self.env.game.reseed_hidden(seed, streams.as_deref());
+        self.env.refresh();
+        Ok(())
     }
 
     /// Full state as JSON.

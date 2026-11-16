@@ -81,13 +81,27 @@ pub struct GameRng {
 impl GameRng {
     /// Create from a numeric seed.
     pub fn new(seed: u64) -> Self {
-        let streams = std::array::from_fn(|i| {
-            let mut bytes = Vec::with_capacity(16);
-            bytes.extend_from_slice(&seed.to_le_bytes());
-            bytes.extend_from_slice(RngKey::ALL[i].name().as_bytes());
-            Pcg64Mcg::seed_from_u64(fnv1a64(&bytes))
-        });
+        let streams = std::array::from_fn(|i| Self::stream_for(seed, RngKey::ALL[i]));
         GameRng { seed, streams }
+    }
+
+    fn stream_for(seed: u64, key: RngKey) -> Pcg64Mcg {
+        let mut bytes = Vec::with_capacity(16);
+        bytes.extend_from_slice(&seed.to_le_bytes());
+        bytes.extend_from_slice(key.name().as_bytes());
+        Pcg64Mcg::seed_from_u64(fnv1a64(&bytes))
+    }
+
+    /// Re-derive the streams in `keys` from `seed` (exactly as [`GameRng::new`] derives them);
+    /// the other streams keep their current state. With every key this equals
+    /// `GameRng::new(seed)` (the run seed is replaced too).
+    pub fn reseed_streams(&mut self, seed: u64, keys: &[RngKey]) {
+        for &k in keys {
+            self.streams[k as usize] = Self::stream_for(seed, k);
+        }
+        if RngKey::ALL.iter().all(|k| keys.contains(k)) {
+            self.seed = seed;
+        }
     }
 
     /// Create from a string seed (FNV-1a of the bytes).
@@ -195,5 +209,23 @@ mod tests {
             let v = r.range(RngKey::Misc, 5, 8);
             assert!((5..8).contains(&v));
         }
+    }
+
+    #[test]
+    fn reseed_streams_matches_new_and_is_selective() {
+        let mut a = GameRng::new(1);
+        for k in RngKey::ALL {
+            a.next_u64(k);
+        }
+        let mut all = a.clone();
+        all.reseed_streams(9, &RngKey::ALL);
+        assert_eq!(all, GameRng::new(9));
+        let mut one = a.clone();
+        one.reseed_streams(9, &[RngKey::Shop]);
+        let mut fresh = GameRng::new(9);
+        assert_eq!(one.next_u64(RngKey::Shop), fresh.next_u64(RngKey::Shop));
+        let mut orig = a.clone();
+        assert_eq!(one.next_u64(RngKey::Deck), orig.next_u64(RngKey::Deck));
+        assert_eq!(one.seed(), 1);
     }
 }

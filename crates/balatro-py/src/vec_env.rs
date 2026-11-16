@@ -14,8 +14,12 @@
 //! Interface: `docs/design/rl_interface.md`. Buffers: [`crate::layout`].
 
 use crate::env::{
-    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, parse_config,
+    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, game_from_json,
+    parse_config, parse_joker, parse_streams,
 };
+use balatro_core::content::jokers::JokerId;
+use balatro_core::rng::RngKey;
+use balatro_core::serialize::state_to_json;
 use crate::layout::{Bufs, PyBufs};
 use balatro_core::state::GameConfig;
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2, PyUntypedArrayMethods};
@@ -217,6 +221,59 @@ impl EnvPool {
                 }
             }
         }
+    }
+
+    /// Full state of env `i` as JSON (round-trips through [`EnvPool::import_state`]).
+    pub fn export_state(&self, i: usize) -> Result<String, String> {
+        let e = self.envs.get(i).ok_or_else(|| self.index_err(i))?;
+        Ok(state_to_json(e.game.state(), false))
+    }
+
+    /// Replace env `i`'s run by the exported state `json` (see `Env::import_game` for the episode
+    /// bookkeeping), optionally re-sampling the hidden information first (`reseed`, `streams`:
+    /// see `Game::reseed_hidden`), and write the env's observation and masks into row `i` of
+    /// `bufs` (reward, done and invalid of that row are zeroed). Other envs are untouched.
+    pub fn import_state(
+        &mut self,
+        i: usize,
+        json: &str,
+        reseed: Option<u64>,
+        streams: Option<&[RngKey]>,
+        bufs: &Bufs<'_>,
+    ) -> Result<(), String> {
+        if i >= self.envs.len() {
+            return Err(self.index_err(i));
+        }
+        let game = game_from_json(json, reseed, streams)?;
+        let sh = self.shared;
+        let e = &mut self.envs[i];
+        e.import_game(game, &sh)?;
+        // SAFETY: single-threaded, no other row reference is alive.
+        let mut row = unsafe { bufs.row(i) };
+        e.write(&mut row);
+        row.reward[0] = 0.0;
+        row.done[0] = 0;
+        row.invalid[0] = 0;
+        Ok(())
+    }
+
+    /// Per-env start joker (`None` = none), applied at the next reset or auto-reset of the env.
+    pub fn set_start_jokers(&mut self, jokers: &[Option<JokerId>]) -> Result<(), String> {
+        if jokers.len() != self.envs.len() {
+            return Err(format!(
+                "expected {} start jokers (one per env), got {}",
+                self.envs.len(),
+                jokers.len()
+            ));
+        }
+        for (e, j) in self.envs.iter_mut().zip(jokers) {
+            e.start_joker = *j;
+        }
+        Ok(())
+    }
+
+    fn index_err(&self, i: usize) -> String {
+        format!("env index {i} out of range (num_envs = {})", self.envs.len())
     }
 
     /// Take (and clear) the summaries of the episodes that finished since the last call, ordered
@@ -462,6 +519,76 @@ impl VecEnv {
         Ok(())
     }
 
+    /// Full state of env `i` as a JSON string.
+    fn export_state(&self, i: usize) -> PyResult<String> {
+        self.pool.export_state(i).map_err(val_err)
+    }
+
+    /// Replace env `i`'s run by an exported state (JSON string) and write its observation and
+    /// masks into row `i` of `buffers`. `reseed` (u64) re-samples the hidden information of the
+    /// imported state first (`streams`: list of stream names, default all). The imported run is a
+    /// fresh episode for the interface (counters restart, flagged `imported` in
+    /// `drain_finished_ex`). Raises on malformed JSON, invariant violations or a finished run.
+    #[pyo3(signature = (buffers, i, state, reseed=None, streams=None))]
+    fn import_state(
+        &mut self,
+        buffers: &Bound<'_, PyDict>,
+        i: usize,
+        state: &str,
+        reseed: Option<u64>,
+        streams: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let streams = parse_streams(streams).map_err(val_err)?;
+        let mut pb = PyBufs::extract(buffers, self.pool.num_envs())?;
+        let bufs = pb.bufs()?;
+        self.pool
+            .import_state(i, state, reseed, streams.as_deref(), &bufs)
+            .map_err(val_err)
+    }
+
+    /// Per-env start joker (list of `num_envs` names or `None`), added to the fresh run at the
+    /// next `reset()` / auto-reset of that env. `None` entries: no start joker.
+    fn set_start_jokers(&mut self, jokers: Vec<Option<String>>) -> PyResult<()> {
+        let ids = jokers
+            .iter()
+            .map(|j| j.as_deref().map(parse_joker).transpose())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(val_err)?;
+        self.pool.set_start_jokers(&ids).map_err(val_err)
+    }
+
+    /// Like `drain_finished` (and sharing its queue) with named fields: a list of dicts with
+    /// `env, ante, code, steps, return, blinds_beaten, invalid, deck, stake, imported,
+    /// start_joker`.
+    fn drain_finished_ex<'py>(&mut self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.pool
+            .drain_finished()
+            .into_iter()
+            .map(|f| {
+                let d = PyDict::new(py);
+                d.set_item("env", f.env)?;
+                d.set_item("ante", f.ante)?;
+                d.set_item("code", f.code)?;
+                d.set_item("steps", f.steps)?;
+                d.set_item("return", f.ret)?;
+                d.set_item("blinds_beaten", f.rounds_won)?;
+                d.set_item("invalid", f.invalid)?;
+                d.set_item("deck", f.deck.name())?;
+                d.set_item("stake", f.stake.name())?;
+                d.set_item("imported", f.imported)?;
+                d.set_item(
+                    "start_joker",
+                    f.start_joker.and_then(|id| {
+                        balatro_core::content::jokers::all_defs()
+                            .find(|d| d.id == id)
+                            .map(|d| d.name)
+                    }),
+                )?;
+                Ok(d)
+            })
+            .collect()
+    }
+
     /// Episodes finished since the last call, as `(env, ante, done_code, steps, return,
     /// blinds_beaten, invalid_actions)` tuples (and cleared).
     #[allow(clippy::type_complexity)]
@@ -487,7 +614,7 @@ impl VecEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::derive_seed;
+    use crate::env::{derive_seed, parse_joker};
     use crate::layout::{GLOBAL_I, Owned};
     use balatro_core::content::{decks::DeckKind, stakes::StakeKind};
 
@@ -532,6 +659,104 @@ mod tests {
         assert_eq!(a.0.sel_candidates, b.0.sel_candidates);
         assert!(a.2.iter().any(|&d| d != 0), "some episode should end");
         assert!(a.0.invalid.iter().all(|&i| i == 0));
+    }
+
+    fn pool(n: usize, seed: u64, threads: usize, max_steps: u32) -> EnvPool {
+        EnvPool::new(
+            n,
+            seed,
+            threads,
+            GameConfig::default(),
+            max_steps,
+            RewardConfig::default(),
+            ConfigPool::EMPTY,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn export_import_round_trip_continues_identically() {
+        let n = 5;
+        let mut src = pool(n, 4, 3, 3_000);
+        let mut o = Owned::new(n);
+        {
+            let b = o.bufs();
+            src.reset(None, &b);
+        }
+        let mut acts = vec![0i64; n * 4];
+        for _ in 0..60 {
+            src.teacher_actions_where(&mut acts, None);
+            let b = o.bufs();
+            src.step(&acts, &b).unwrap();
+        }
+        let state = src.export_state(2).unwrap();
+        // Import into another pool (different thread count and seed).
+        let mut dst = pool(3, 99, 1, 3_000);
+        let mut o2 = Owned::new(3);
+        {
+            let b = o2.bufs();
+            dst.reset(None, &b);
+            dst.import_state(1, &state, None, None, &b).unwrap();
+        }
+        assert_eq!(
+            o.hand_f[2 * (o.hand_f.len() / n)..3 * (o.hand_f.len() / n)],
+            o2.hand_f[o2.hand_f.len() / 3..2 * (o2.hand_f.len() / 3)]
+        );
+        for _ in 0..200 {
+            let mut a = vec![0i64; n * 4];
+            src.teacher_actions_where(&mut a, Some(&[false, false, true, false, false]));
+            let mut b3 = vec![0i64; 3 * 4];
+            b3[4..8].copy_from_slice(&a[8..12]);
+            {
+                let b = o.bufs();
+                src.step(&a, &b).unwrap();
+            }
+            let r_src = o.reward[2];
+            let d_src = o.done[2];
+            {
+                let b = o2.bufs();
+                dst.step(&b3, &b).unwrap();
+            }
+            assert_eq!(r_src, o2.reward[1]);
+            assert_eq!(d_src, o2.done[1]);
+            if d_src != 0 {
+                break;
+            }
+        }
+        // Flagged as imported, counters restart.
+        let fin = dst.drain_finished();
+        assert!(fin.iter().all(|f| f.env != 1 || f.imported));
+        assert!(dst.import_state(7, &state, None, None, &o2.bufs()).is_err());
+        assert!(dst.import_state(0, "{", None, None, &o2.bufs()).is_err());
+    }
+
+    #[test]
+    fn start_joker_applies_at_reset_and_auto_reset() {
+        let n = 2;
+        let mut p = pool(n, 6, 1, 3);
+        p.set_start_jokers(&[None, Some(parse_joker("greedy joker").unwrap())])
+            .unwrap();
+        assert!(p.set_start_jokers(&[None]).is_err());
+        let mut o = Owned::new(n);
+        {
+            let b = o.bufs();
+            p.reset(None, &b);
+        }
+        let per = o.joker_valid.len() / n;
+        assert!(!o.joker_valid[0]);
+        assert!(o.joker_valid[per]);
+        let mut acts = vec![0i64; n * 4];
+        let mut resets = 0;
+        for _ in 0..12 {
+            p.random_actions(&mut acts);
+            let b = o.bufs();
+            p.step(&acts, &b).unwrap();
+            if o.done[1] != 0 {
+                resets += 1;
+                assert!(o.joker_valid[per]);
+            }
+        }
+        assert!(resets >= 3);
     }
 
     #[test]

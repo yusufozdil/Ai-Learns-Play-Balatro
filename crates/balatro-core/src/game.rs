@@ -310,6 +310,65 @@ impl Game {
         Game::from_state(state)
     }
 
+    /// Re-sample the hidden information of this game from `seed` (branching: a clone carries the
+    /// real RNG, so advancing it would peek at the real future).
+    ///
+    /// * `streams = None`: everything. All nine RNG streams are re-derived from `seed`, the
+    ///   face-down hand cards swap identities among themselves (the draw pile's composition is
+    ///   visible, so this is exactly the posterior given the observation) and the draw pile
+    ///   gets a new uniformly random order.
+    /// * `streams = Some(keys)`: only those streams are re-derived. If `Deck` is among them the
+    ///   hidden card information is re-sampled too (face-down identities, draw pile order, and
+    ///   every later reshuffle); without `Deck` the cards (pile order and face-down identities)
+    ///   stay as they are. E.g. `Some(&[Deck])` keeps shop/pack/boss/joker/card luck and only
+    ///   changes what is drawn.
+    ///
+    /// Also re-rolled (with `Shop`): the ante voucher before the first shop of the run. Not
+    /// touched: the joker order under Amber Acorn (it is real in the observation too), and
+    /// everything the player has already seen (boss, skip tags, shop, open pack).
+    ///
+    /// Everything visible to the player is unchanged: observation and legal actions before and
+    /// after are identical (positions, contents of piles, shop, money, ...).
+    pub fn reseed_hidden(&mut self, seed: u64, streams: Option<&[RngKey]>) {
+        let keys: &[RngKey] = streams.unwrap_or(&RngKey::ALL);
+        self.state.rng.reseed_streams(seed, keys);
+        // The ante-1 voucher is rolled at run start and first shown in the first shop: until
+        // then it is hidden (from ante 2 on a new ante starts right before its shop).
+        if keys.contains(&RngKey::Shop)
+            && self.state.stats.shops_entered == 0
+            && self.state.ante_voucher.is_some()
+        {
+            self.state.ante_voucher = shop::pick_voucher(&mut self.state, &[]);
+        }
+        if !keys.contains(&RngKey::Deck) {
+            return;
+        }
+        // Face-down hand cards: the identities are permuted among the face-down positions. The
+        // observation shows the draw pile's composition, which (with the visible cards) already
+        // pins down the multiset of face-down identities, so a permutation is exactly a sample
+        // of the posterior given what the player sees.
+        let idx: Vec<usize> = self
+            .state
+            .deck
+            .hand
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.face_down)
+            .map(|(i, _)| i)
+            .collect();
+        if idx.len() > 1 {
+            let mut cards: Vec<Card> = idx.iter().map(|&i| self.state.deck.hand[i]).collect();
+            self.state.rng.shuffle(RngKey::Deck, &mut cards);
+            for (&i, c) in idx.iter().zip(cards) {
+                self.state.deck.hand[i] = c;
+            }
+        }
+        // Canonical order first: the result must not depend on the order being replaced.
+        let pile = &mut self.state.deck.draw_pile;
+        pile.sort_unstable_by_key(|c| c.uid);
+        self.state.rng.shuffle(RngKey::Deck, pile);
+    }
+
     /// The hand with every face-down card replaced by a uniform sample of the unseen cards, and
     /// the unseen cards that were not sampled (the draw pile as the player can reason about it),
     /// or `None` when no card is face down. Pool = draw pile + the face-down hand cards, sorted by
