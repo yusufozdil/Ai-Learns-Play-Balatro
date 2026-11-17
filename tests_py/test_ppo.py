@@ -361,3 +361,42 @@ def test_repetition_guard_breaks_move_joker_loops():
     a = actor(env, {}, {"kind_mask": kind_mask}, first, active)
     b = actor(env, {}, {"kind_mask": kind_mask}, np.ones(n, dtype=bool), active)
     assert a[0, 0] == 8 and b[0, 0] == 8
+
+
+# --------------------------------------------------------------------------- speed options (G4)
+
+
+def test_bf16_update_runs_and_recompute_restores_unit_ratio(tmp_path):
+    # bf16 autocast alone breaks "ratio == 1 on the first minibatch" (the rollout used float32);
+    # with --recompute-old-logp the old log-probs come from the same bf16 pass, so it holds again.
+    kw = {"epochs": 1, "lr": 1e-9, "group": 16, "update_dtype": "bf16"}
+    plain = Trainer(tiny_cfg(tmp_path / "a", **kw), device="cpu")
+    plain.collect()
+    st = plain.update()
+    assert np.isfinite(st["approx_kl"]) and st["approx_kl"] < 0.05
+    rec = Trainer(tiny_cfg(tmp_path / "b", recompute_old_logp=True, **kw), device="cpu")
+    rec.collect()
+    st = rec.update()
+    assert st["approx_kl"] < 1e-6 and st["clipfrac"] == 0.0
+
+
+def test_profile_reports_sections(tmp_path):
+    tr = Trainer(tiny_cfg(tmp_path, profile=True, epochs=1), device="cpu")
+    tr.collect()
+    st = tr.update()
+    for k in ("rollout/env_step", "rollout/act", "update/gae", "update/forward", "update/backward"):
+        assert st["prof"][k] > 0, k
+    assert "update/enc" in st["prof"] and "update/heads" in st["prof"]
+
+
+def test_encoder_compile_failure_falls_back_to_eager(tmp_path, monkeypatch):
+    tr = Trainer(tiny_cfg(tmp_path), device="cpu")
+
+    def boom(*a, **k):
+        raise RuntimeError("no compiler")
+
+    monkeypatch.setattr(torch, "compile", boom)
+    assert tr.model.encoder.enable_compile() is False
+    assert tr.model.encoder._blocks_fn is None
+    tr.collect()
+    tr.update()  # still trains eagerly

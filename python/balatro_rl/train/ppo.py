@@ -25,9 +25,11 @@ section 8; a truncated policy is almost always looping, so ``V(s_T) ~ V(s_{T-1})
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -89,6 +91,12 @@ class PPOConfig:
     target_kl: float | None = None  # stop the epochs early when approx_kl exceeds this
     norm_adv: bool = True
     bootstrap_truncation: bool = True  # GAE bootstraps through step-limit truncation (not terminal)
+    # --- speed options (all opt-in; the defaults are the original fp32 / eager training)
+    update_dtype: str = "fp32"  # "bf16": autocast the update (and KL reference) passes
+    recompute_old_logp: bool = False  # old log-probs = a no-grad pass in the update dtype
+    compile: bool = False  # torch.compile the encoder's Transformer stack (token-bucketed)
+    compile_bucket: int = 8  # tokens padded to a multiple of this (compile only)
+    profile: bool = False  # per-section timings (cuda-synchronised) in the log: ``prof`` dict
     # --- init from BC / KL to the BC policy
     init_checkpoint: str | None = None
     kl_coef: float = 0.0  # start coefficient of the KL penalty to the init checkpoint's policy
@@ -112,6 +120,7 @@ class PPOConfig:
     def __post_init__(self):
         assert self.rollout_len % self.chunk == 0, "rollout_len must be a multiple of chunk"
         assert self.num_envs % self.group == 0, "num_envs must be a multiple of group"
+        assert self.update_dtype in ("fp32", "bf16"), "update_dtype: fp32 | bf16"
 
 
 # --------------------------------------------------------------------------- pure helpers
@@ -163,6 +172,36 @@ def explained_variance(pred: torch.Tensor, target: torch.Tensor) -> float:
     if var < 1e-12:
         return float("nan")
     return float(1.0 - (target - pred).var() / var)
+
+
+# --------------------------------------------------------------------------- profiling
+
+
+class SectionTimer:
+    """Accumulating wall-clock sections, cuda-synchronised at both ends (``--profile`` only; the
+    synchronisation itself costs a little). Nested sections are all reported (so they overlap)."""
+
+    def __init__(self, dev: torch.device):
+        self.dev = dev
+        self.prefix = ""
+        self.t: dict[str, float] = defaultdict(float)
+
+    @contextlib.contextmanager
+    def __call__(self, name: str):
+        if self.dev.type == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            if self.dev.type == "cuda":
+                torch.cuda.synchronize()
+            self.t[self.prefix + name] += time.perf_counter() - t0
+
+    def take(self) -> dict[str, float]:
+        out = {k: round(v, 4) for k, v in self.t.items()}
+        self.t.clear()
+        return out
 
 
 # --------------------------------------------------------------------------- logging
@@ -226,6 +265,21 @@ class Trainer:
         if ck is not None and "optimizer" in ck:
             self.opt.load_state_dict(ck["optimizer"])
         self.critic_params = {id(p) for p in self.model.critic.parameters()}
+        self.timer = SectionTimer(self.dev) if cfg.profile else None
+        self._p = self.timer if self.timer is not None else (lambda name: contextlib.nullcontext())
+        if self.timer is not None:
+            self.model._prof = self.timer
+        self.compile_seconds = 0.0
+        if cfg.compile:
+            t0 = time.perf_counter()
+            ok = self.model.encoder.enable_compile(cfg.compile_bucket)
+            self.compile_seconds = time.perf_counter() - t0
+            if ok:
+                self.echo(f"torch.compile: encoder blocks compiled ({self.compile_seconds:.0f}s)")
+            else:
+                self.echo(
+                    f"torch.compile FAILED, eager fallback: {self.model.encoder.compile_error}"
+                )
 
         self.env = BalatroVecEnv(
             cfg.num_envs,
@@ -304,20 +358,26 @@ class Trainer:
         teacher_s, teacher_n, model_s = 0.0, 0, 0.0
         invalid = 0
         stage_all = bool(self.route[: len(PHASES)].all())
+        p = self._p
+        if self.timer is not None:
+            self.timer.prefix = "rollout/"
         for t in range(cfg.rollout_len):
             if t % cfg.chunk == 0:
                 self.h0[t // cfg.chunk] = self.hidden
             tm = time.perf_counter()
-            o, m = prepare(self.obs, self.masks, dev)
-            for k in OBS_NAMES:
-                b[k][t] = o[k]
-            for k in MASK_NAMES:
-                b[k][t] = m[k]
-            b["first"][t] = self.first
-            actions, logp, _, value, self.hidden = model.act(
-                o, m, self.hidden, first=self.first, generator=self.gen
-            )
-            a_np = actions.cpu().numpy()
+            with p("prepare_store"):  # H2D of the env buffers + copies into the rollout buffers
+                o, m = prepare(self.obs, self.masks, dev)
+                for k in OBS_NAMES:
+                    b[k][t] = o[k]
+                for k in MASK_NAMES:
+                    b[k][t] = m[k]
+                b["first"][t] = self.first
+            with p("act"):
+                actions, logp, _, value, self.hidden = model.act(
+                    o, m, self.hidden, first=self.first, generator=self.gen
+                )
+            with p("d2h"):
+                a_np = actions.cpu().numpy()
             model_s += time.perf_counter() - tm
             phase = self.obs["global_i"][:, 0]
             ctrl = self.route[phase]
@@ -330,16 +390,19 @@ class Trainer:
                     teacher_n += int(use_teacher.sum())
                     a_np[use_teacher] = ta[use_teacher]
                     actions = torch.from_numpy(a_np).to(dev)
-            b["actions"][t] = actions
-            b["logp"][t] = logp
-            b["value"][t] = value
-            b["ctrl"][t] = torch.from_numpy(ctrl).to(dev)
-            b["phase"][t] = torch.from_numpy(phase.astype(np.int64)).to(dev)
-            _, _, reward, done, inv = self.env.step(a_np)
+            with p("store_misc"):  # small H2D copies of the step results
+                b["actions"][t] = actions
+                b["logp"][t] = logp
+                b["value"][t] = value
+                b["ctrl"][t] = torch.from_numpy(ctrl).to(dev)
+                b["phase"][t] = torch.from_numpy(phase.astype(np.int64)).to(dev)
+            with p("env_step"):
+                _, _, reward, done, inv = self.env.step(a_np)
             invalid += int(inv.sum())
-            b["reward"][t] = torch.from_numpy(reward).to(dev)
-            self.first = torch.from_numpy(done != 0).to(dev)
-            b["trunc"][t] = torch.from_numpy(done == 3).to(dev)
+            with p("store_misc"):
+                b["reward"][t] = torch.from_numpy(reward).to(dev)
+                self.first = torch.from_numpy(done != 0).to(dev)
+                b["trunc"][t] = torch.from_numpy(done == 3).to(dev)
         o, m = prepare(self.obs, self.masks, dev)
         self.last_value, _ = model.value(o, m, self.hidden, first=self.first)
         if dev.type == "cuda":
@@ -354,6 +417,29 @@ class Trainer:
             "finished": fin,
         }
 
+    def _amp(self):
+        """Autocast context of the update / reference passes (``update_dtype``)."""
+        if self.cfg.update_dtype == "bf16":
+            return torch.autocast(self.dev.type, dtype=torch.bfloat16)
+        return contextlib.nullcontext()
+
+    @torch.no_grad()
+    def _recompute_old_logp(self, env_perm: torch.Tensor, combos: list) -> torch.Tensor:
+        """``--recompute-old-logp``: log-probs of the rollout actions under the *current* weights in
+        the update dtype, over exactly the minibatches the first epoch will use (so the first
+        minibatch has ratio 1 up to non-determinism, also with bf16)."""
+        cfg = self.cfg
+        out = torch.zeros_like(self.buf["logp"])
+        self.model.train()
+        for c, g in combos:
+            idx = env_perm[g * cfg.group : (g + 1) * cfg.group]
+            t0, t1 = c * cfg.chunk, (c + 1) * cfg.chunk
+            obs, masks, actions, first = self._slice(t0, t1, idx)
+            with self._amp():
+                r = self.model.evaluate_full(obs, masks, self.h0[c][idx], actions, first)
+            out[t0:t1, idx] = r["logp"].view(cfg.chunk, -1)
+        return out
+
     @torch.no_grad()
     def _ref_logprobs(self) -> torch.Tensor:
         cfg = self.cfg
@@ -364,9 +450,10 @@ class Trainer:
             h = self.ref_hidden[idx]
             for t0 in range(0, t_len, cfg.chunk):
                 obs, masks, actions, first = self._slice(t0, t0 + cfg.chunk, idx)
-                r = self.ref.evaluate_full(obs, masks, h, actions, first)
+                with self._amp():
+                    r = self.ref.evaluate_full(obs, masks, h, actions, first)
                 out[t0 : t0 + cfg.chunk, idx] = r["logp"].view(cfg.chunk, -1)
-                h = r["hidden"]
+                h = r["hidden"].float()  # bf16 autocast: keep the carried state float32
             self.ref_hidden[idx] = h
         return out
 
@@ -388,23 +475,28 @@ class Trainer:
         t_start = time.perf_counter()
         model = self.model
         model.train()
-        reward = b["reward"] * cfg.reward_scale
-        adv, ret = compute_gae(
-            reward,
-            b["value"],
-            b["first"],
-            self.last_value,
-            self.first,
-            cfg.gamma,
-            cfg.lam,
-            b["trunc"] if cfg.bootstrap_truncation else None,
-        )
-        ctrl = b["ctrl"]
-        if cfg.norm_adv and ctrl.any():
-            a = adv[ctrl]
-            adv = (adv - a.mean()) / (a.std() + 1e-8)
+        p = self._p
+        if self.timer is not None:
+            self.timer.prefix = "update/"
+        with p("gae"):
+            reward = b["reward"] * cfg.reward_scale
+            adv, ret = compute_gae(
+                reward,
+                b["value"],
+                b["first"],
+                self.last_value,
+                self.first,
+                cfg.gamma,
+                cfg.lam,
+                b["trunc"] if cfg.bootstrap_truncation else None,
+            )
+            ctrl = b["ctrl"]
+            if cfg.norm_adv and ctrl.any():
+                a = adv[ctrl]
+                adv = (adv - a.mean()) / (a.std() + 1e-8)
         beta = self._kl_coef()
-        ref_logp = self._ref_logprobs() if self.ref is not None and beta > 0 else None
+        with p("kl_reference_pass"):
+            ref_logp = self._ref_logprobs() if self.ref is not None and beta > 0 else None
         warmup = self.update_idx < cfg.critic_warmup
         lr = self._lr()
         for g in self.opt.param_groups:
@@ -429,54 +521,77 @@ class Trainer:
         ent_cnt = torch.zeros(len(HEAD_NAMES), device=dev)
         n_mb = 0
         stop = False
-        for epoch in range(cfg.epochs):  # noqa: B007
+        old_buf = b["logp"]
+        pending = None  # (env_perm, order) of epoch 0, drawn early for --recompute-old-logp
+        if cfg.recompute_old_logp:
             env_perm = torch.randperm(cfg.num_envs, device=dev)
             combos = [(c, g) for c in range(n_chunks) for g in range(n_groups)]
             order = torch.randperm(len(combos)).tolist()
+            pending = (env_perm, order)
+            with p("recompute_old_logp"):
+                old_buf = self._recompute_old_logp(env_perm, combos)
+        for epoch in range(cfg.epochs):  # noqa: B007
+            if pending is not None:
+                (env_perm, order), pending = pending, None
+            else:
+                env_perm = torch.randperm(cfg.num_envs, device=dev)
+                order = None
+            combos = [(c, g) for c in range(n_chunks) for g in range(n_groups)]
+            if order is None:
+                order = torch.randperm(len(combos)).tolist()
             ep_kl = torch.zeros((), device=dev)
             for ci in order:
                 c, g = combos[ci]
                 idx = env_perm[g * cfg.group : (g + 1) * cfg.group]
                 t0, t1 = c * cfg.chunk, (c + 1) * cfg.chunk
-                obs, masks, actions, first = self._slice(t0, t1, idx)
-                r = model.evaluate_full(obs, masks, self.h0[c][idx], actions, first)
+                with p("slice"):
+                    obs, masks, actions, first = self._slice(t0, t1, idx)
+                with p("forward"), self._amp():
+                    r = model.evaluate_full(obs, masks, self.h0[c][idx], actions, first)
                 new_logp, value = r["logp"], r["value"]
                 old_logp, mb_adv, mb_ret, mb_val = (
-                    _rows(x, t0, t1, idx) for x in (b["logp"], adv, ret, b["value"])
+                    _rows(x, t0, t1, idx) for x in (old_buf, adv, ret, b["value"])
                 )
-                w = (_rows(ctrl, t0, t1, idx) & r["ok"]).float()
-                wsum = w.sum().clamp(min=1.0)
-                on = w > 0  # rows the policy loss sees (garbage-proof: where, not multiply)
-                new_logp = torch.where(on, new_logp, old_logp)
-                log_ratio = new_logp - old_logp
-                ratio = log_ratio.clamp(-20.0, 20.0).exp()
-                pg = torch.max(-mb_adv * ratio, -mb_adv * ratio.clamp(1 - cfg.clip, 1 + cfg.clip))
-                pg_loss = (pg * w).sum() / wsum
-                if cfg.clip_vloss:
-                    v_clip = mb_val + (value - mb_val).clamp(-cfg.clip, cfg.clip)
-                    v_loss = 0.5 * torch.max((value - mb_ret) ** 2, (v_clip - mb_ret) ** 2).mean()
-                else:
-                    v_loss = 0.5 * ((value - mb_ret) ** 2).mean()
-                ent = (torch.where(on, r["entropy"], 0.0)).sum() / wsum
-                loss = cfg.vf_coef * v_loss
-                kl = torch.zeros((), device=dev)
-                if not warmup:
-                    loss = loss + pg_loss - cfg.ent_coef * ent
-                    if ref_logp is not None and beta > 0:
-                        d = torch.where(on, _rows(ref_logp, t0, t1, idx) - new_logp, 0.0)
-                        kl = ((d.exp() - 1 - d) * w).sum() / wsum
-                        loss = loss + beta * kl
+                with p("loss"):
+                    w = (_rows(ctrl, t0, t1, idx) & r["ok"]).float()
+                    wsum = w.sum().clamp(min=1.0)
+                    on = w > 0  # rows the policy loss sees (garbage-proof: where, not multiply)
+                    new_logp = torch.where(on, new_logp, old_logp)
+                    log_ratio = new_logp - old_logp
+                    ratio = log_ratio.clamp(-20.0, 20.0).exp()
+                    pg = torch.max(
+                        -mb_adv * ratio, -mb_adv * ratio.clamp(1 - cfg.clip, 1 + cfg.clip)
+                    )
+                    pg_loss = (pg * w).sum() / wsum
+                    if cfg.clip_vloss:
+                        v_clip = mb_val + (value - mb_val).clamp(-cfg.clip, cfg.clip)
+                        v_loss = (
+                            0.5 * torch.max((value - mb_ret) ** 2, (v_clip - mb_ret) ** 2).mean()
+                        )
+                    else:
+                        v_loss = 0.5 * ((value - mb_ret) ** 2).mean()
+                    ent = (torch.where(on, r["entropy"], 0.0)).sum() / wsum
+                    loss = cfg.vf_coef * v_loss
+                    kl = torch.zeros((), device=dev)
+                    if not warmup:
+                        loss = loss + pg_loss - cfg.ent_coef * ent
+                        if ref_logp is not None and beta > 0:
+                            d = torch.where(on, _rows(ref_logp, t0, t1, idx) - new_logp, 0.0)
+                            kl = ((d.exp() - 1 - d) * w).sum() / wsum
+                            loss = loss + beta * kl
                 self.opt.zero_grad(set_to_none=True)
-                loss.backward()
-                if warmup:  # critic-only: the backbone / heads receive no update
-                    for p in model.parameters():
-                        if id(p) not in self.critic_params:
-                            p.grad = None
-                gnorm = torch.nn.utils.clip_grad_norm_(
-                    [p for p in model.parameters() if p.grad is not None], cfg.max_grad_norm
-                )
-                self.opt.step()
-                with torch.no_grad():
+                with p("backward"):
+                    loss.backward()
+                with p("optimizer"):
+                    if warmup:  # critic-only: the backbone / heads receive no update
+                        for prm in model.parameters():
+                            if id(prm) not in self.critic_params:
+                                prm.grad = None
+                    gnorm = torch.nn.utils.clip_grad_norm_(
+                        [q for q in model.parameters() if q.grad is not None], cfg.max_grad_norm
+                    )
+                    self.opt.step()
+                with p("stats"), torch.no_grad():
                     approx_kl = (((ratio - 1) - log_ratio) * w).sum() / wsum
                     clipfrac = (((ratio - 1).abs() > cfg.clip).float() * w).sum() / wsum
                     acc["pg"] += pg_loss.detach()
@@ -515,6 +630,10 @@ class Trainer:
             for pi, part in enumerate(PARTS):
                 stats[f"ent/{hn}/{part}"] = float(ent_part[h, pi] / ent_cnt_c[h])
         stats["update_seconds"] = time.perf_counter() - t_start
+        if self.timer is not None:
+            stats["prof"] = self.timer.take()  # rollout/* (from collect) and update/* sections
+        if self.dev.type == "cuda":
+            stats["peak_vram_gb"] = torch.cuda.max_memory_allocated() / 2**30
         return stats
 
     # ------------------------------------------------------------------ rollout statistics

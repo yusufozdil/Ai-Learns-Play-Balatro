@@ -35,8 +35,10 @@ def _is_optional(tp) -> tuple[bool, type]:
     return False, tp
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+def build_parser(description: str | None = __doc__) -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description=description, formatter_class=argparse.RawTextHelpFormatter
+    )
     defaults = PPOConfig()
     for f in dataclasses.fields(PPOConfig):
         if f.name in ("model", "out_dir", "reward"):
@@ -75,8 +77,10 @@ def main() -> None:
     ap.add_argument("--memory", choices=["gru", "none"], default="gru")
     ap.add_argument("--d-model", type=int, default=128)
     ap.add_argument("--layers", type=int, default=4)
-    args = ap.parse_args()
+    return ap
 
+
+def make_config(args: argparse.Namespace) -> PPOConfig:
     kw = {
         f.name: getattr(args, f.name)
         for f in dataclasses.fields(PPOConfig)
@@ -124,8 +128,12 @@ def main() -> None:
         kw["reward"]["margin_cap"] = args.margin_cap
     if args.zero_play:
         kw["reward"]["zero_play"] = args.zero_play
-    cfg = PPOConfig(**kw)
-    Trainer(cfg, resume=args.resume).train()
+    return PPOConfig(**kw)
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    Trainer(make_config(args), resume=args.resume).train()
 
 
 if __name__ == "__main__":
