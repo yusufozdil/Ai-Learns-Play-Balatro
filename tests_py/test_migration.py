@@ -75,14 +75,18 @@ def test_migrated_v1_checkpoint_reproduces_v1_outputs(tag):
         want = ref[f"{tag}/{k}"]
         if v.dtype.kind == "f":
             worst = max(worst, float(np.abs(v - want).max()))
-            np.testing.assert_allclose(v, want, rtol=0, atol=1e-6, err_msg=k)
+            # 1e-3, not 1e-6: the fixture predates the sim parity fix (xmult as SMODS'
+            # additive `mult + mult*(x-1)`), which moves some score-preview features of this
+            # rollout by one chip (env 2 holds Obelisk) -> logp shifts of ~2e-4. Actions are
+            # still compared exactly below.
+            np.testing.assert_allclose(v, want, rtol=0, atol=1e-3, err_msg=k)
         else:
             np.testing.assert_array_equal(v, want, err_msg=k)
     assert set(np.unique(got["phase"])) >= {0, 1, 2, 3}, "fixture must cover every phase"
     print(f"{tag}: worst abs diff {worst:.2e}")
     # Bit-identical on the machine that recorded the fixture (the encoder splits the global
     # projection into the v1 columns and the new ones, see ``encoder.V1_GLOBAL_F``).
-    assert worst <= 1e-6
+    assert worst <= 1e-3
 
 
 def test_migrated_checkpoint_resaves_as_v2_and_optimizer_state_is_remapped(tmp_path):
