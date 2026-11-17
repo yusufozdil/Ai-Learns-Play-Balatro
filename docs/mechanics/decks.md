@@ -62,11 +62,10 @@ slots, 52 cards. A deck is a set of deltas on that base.
     affected; applying it to all three is the reading of "base Blind size" (the factor multiplies
     the ante's base chips, as the game's ante scaling does). `UNVERIFIED` for Showdown bosses; they
     are treated the same.
-  - The balancing step (average of chips and mult, then multiplied) is `Scorer` step 7 and was
-    already implemented and tested (`tests/scoring.rs::plasma_deck_balances`). D2: it happens
-    before the final multiplication and rounds half down; the existing step keeps the
-    notes.md §4.1 rounding (single `floor` at the end). The wiki's "rounds half-down" for the average
-    when chips and mult differ by exactly 1 is not modelled (`UNVERIFIED`, scores differ by < 1).
+  - The balancing step is `Scorer` step 7 (`tests/scoring.rs::plasma_deck_balances`,
+    `plasma_deck_floors_the_balanced_value`). Verified against the real game's Lua (dump
+    `back.lua:157-161`): both values become `math.floor((chips + mult) / 2)` (the wiki's "rounds
+    half-down"; the old engine kept the unfloored average, off by up to 0.5 each).
     Its place relative to joker effects follows scoring.md step 7 (after Observatory, i.e. after
     all joker/edition effects).
   - `GameState::refresh_target` multiplies by `DeckDef::blind_size_mult`; the heuristic agent's

@@ -268,14 +268,17 @@ fn ancient_scored(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 
 // --- Ramen: https://balatrowiki.org/w/Ramen -------------------------------------------------
 // value = current xmult (starts 2.0). -0.01 per discarded card (forced discards count, unscored
-// played cards do not). When a discard would bring it to x1.0 or below it is eaten instead, so
-// 99 cards leave 1.01 and the 100th destroys it. Sell value never changes. The decrement is
-// rounded to 2 decimals to stay free of floating-point drift.
+// played cards do not). When a discard would bring it to x1.0 or below it is eaten instead.
+// Sell value never changes.
+//
+// Bit-exact with the real game, NO rounding: card.lua:3109-3128 (`context.discard`, per card)
+// tests `x_mult - extra <= 1` and otherwise SMODS.scale_card subtracts `extra` in plain double
+// arithmetic (`initial + -1 * scalar`, smods/src/utils.lua:2840 `additive_scaling`). Repeated
+// `2.0 - 0.01` therefore drifts (99 cards leave 1.0099999999999991, not 1.01) and the
+// destroy test uses that drifted value; the 100th card still destroys it.
 const RAMEN_START: f64 = 2.0;
 const RAMEN_LOSS: f64 = 0.01;
 const RAMEN_FLOOR: f64 = 1.0;
-/// Values are kept at 2 decimals (hundredths).
-const RAMEN_PRECISION: f64 = 100.0;
 
 fn ramen_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     if j.value > RAMEN_FLOOR {
@@ -285,12 +288,11 @@ fn ramen_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 fn ramen_discard(j: &mut JokerInstance, ctx: &mut EventCtx<'_>, d: &DiscardInfo<'_>) {
     for _ in d.cards {
-        let next = ((j.value - RAMEN_LOSS) * RAMEN_PRECISION).round() / RAMEN_PRECISION;
-        if next <= RAMEN_FLOOR {
+        if j.value - RAMEN_LOSS <= RAMEN_FLOOR {
             ctx.destroy_self();
             return;
         }
-        j.value = next;
+        j.value -= RAMEN_LOSS;
     }
 }
 

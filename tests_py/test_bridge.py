@@ -438,3 +438,93 @@ def test_prediction_variants_cover_the_misprint_support():
     mask = next(p[3] for p in legal if p[0] == A.PLAY and bin(p[3]).count("1") >= 2)
     pr = parity.predict_play(st, mask)
     assert not pr["deterministic"] and pr["max"] > pr["min"]
+
+
+# --------------------------------------------------------------------------- real-game float parity
+
+
+def _play_state(seed: int = 3) -> dict:
+    """An engine state in the Play phase with a full hand (a template to overwrite)."""
+    g = _engine.Game(seed)
+    for _ in range(600):
+        st = json.loads(g.export_state())
+        if st["phase"] == "Play" and len(st["deck"]["hand"]) == 8:
+            return st
+        g.step_parts(*g.teacher_parts())
+    raise AssertionError("no Play state reached")
+
+
+def _card(rank: str, suit: str) -> tuple[str, str]:
+    return rank, suit
+
+
+def _joker(uid: int, jid: str, value: float = 0.0, edition: str = "Base", debuffed=False) -> dict:
+    return {
+        "uid": uid, "id": jid, "edition": edition,
+        "stickers": {"eternal": False, "perishable": False, "perish_rounds_left": 0,
+                     "rental": False},
+        "debuffed": debuffed, "sell_value": 2, "value": value, "counter": 0, "aux": 0,
+    }  # fmt: skip
+
+
+def _ramen(discarded: int) -> float:
+    """Ramen after ``discarded`` cards, accumulated like the game (plain double subtraction)."""
+    v = 2.0
+    for _ in range(discarded):
+        v -= 0.01
+    return v
+
+
+def _fresh(st: dict, hand: list[tuple[str, str]], jokers: list[dict]) -> dict:
+    st = json.loads(json.dumps(st))
+    # overwrite the first cards of the template hand (uids stay: the deck invariants hold)
+    for c, (rank, suit) in zip(st["deck"]["hand"], hand, strict=True):
+        c.update(rank=rank, suit=suit, enhancement="None", edition="Base", seal="None",
+                 perma_bonus=0, debuffed=False, face_down=False)  # fmt: skip
+    st["jokers"] = jokers
+    st["next_joker_uid"] = 100
+    st["boss_disabled"] = False
+    st["blind"] = "Small"  # no boss in effect
+    st["round_score"] = 0.0
+    st["target"] = 1e12
+    st["hands_left"], st["discards_left"] = 4, 4
+    st["hand_levels"] = [1] * 12
+    st["hand_plays_run"] = [0] * 12
+    st["hand_plays_round"] = [0] * 12
+    return st
+
+
+def test_real_game_ramen_ante3_scores_771():
+    """Bridge game 15 ante 3: real 771 (the engine said 772). Pair of fives, Raised Fist on a held
+    9 (+18), Ramen 1.93: the game computes mult as ``m + m * (x - 1)`` (SMODS), 20 + 20 * 0.93 =
+    38.599999999999994, so 20 chips score 771.99.. -> 771."""
+    st = _fresh(
+        _play_state(),
+        [_card("King", "Clubs"), _card("Jack", "Diamonds"), _card("Six", "Spades"),
+         _card("Five", "Hearts"), _card("Five", "Clubs"), _card("Nine", "Spades"),
+         _card("Queen", "Hearts"), _card("King", "Hearts")],
+        [_joker(1, "RaisedFist"), _joker(2, "Ramen", _ramen(7)), _joker(3, "WalkieTalkie"),
+         _joker(4, "Burglar")],
+    )  # fmt: skip
+    pr = parity.predict_play(st, 0b11111)
+    assert pr["deterministic"] and pr["hand_type"] == "Pair"
+    assert pr["pred"] == 771.0
+
+
+def test_real_game_ramen_ante8_scores_22841():
+    """Bridge game 15 ante 8: real 22841 (the engine said 22842). Pair L11, two tens, Abstract
+    +15, Supernova debuffed (The Crimson Heart), Crafty Joker Polychrome, Banner (4 discards left
+    = +120 chips), Ramen 1.88: 300 x ((12 + 15) x 1.5 x 1.88) = 22841.99.. -> 22841."""
+    st = _fresh(
+        _play_state(),
+        [_card("Ten", "Clubs"), _card("Ten", "Diamonds"), _card("Nine", "Hearts"),
+         _card("Eight", "Clubs"), _card("Five", "Hearts"), _card("Two", "Spades"),
+         _card("Two", "Hearts"), _card("Three", "Hearts")],
+        [_joker(1, "AbstractJoker"), _joker(2, "Supernova", debuffed=True),
+         _joker(3, "CraftyJoker", edition="Polychrome"), _joker(4, "Banner"),
+         _joker(5, "Ramen", _ramen(12))],
+    )  # fmt: skip
+    st["hand_levels"][1] = 11  # Pair
+    pr = parity.predict_play(st, 0b11111)
+    assert pr["deterministic"] and pr["hand_type"] == "Pair"
+    assert pr["pred"] == 22841.0

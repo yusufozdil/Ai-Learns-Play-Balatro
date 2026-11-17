@@ -256,6 +256,48 @@ fn the_hook_discards_two_held_cards_before_scoring() {
     assert!(info.hand.expect("hand").score > 0.0);
 }
 
+/// Bridge game 15 ante 1 (real 2494, engine's 4 samples all gave 2732). Order of events in the
+/// real game (functions/state_events.lua `play_cards_from_highlighted`, blind.lua `press_play`
+/// The Hook, `discard_cards_from_highlighted(nil, true)`): played cards leave the hand, The Hook
+/// discards 2 random held cards (Ramen -0.01 each, no discard used), then `evaluate_play` runs and
+/// Raised Fist reads the lowest of the cards STILL held. Held K, Q, 9: the survivor is a face
+/// card (Raised Fist +20, 3 jacks 60 chips x (3 + 20) x 1.98 = 2732) or the 9 (+18 -> 2494). Both
+/// real numbers must be reachable, and nothing else.
+#[test]
+fn the_hook_then_raised_fist_reads_only_the_surviving_held_cards() {
+    use std::collections::BTreeSet;
+    let mut seen = BTreeSet::new();
+    for seed in 0..64u64 {
+        let mut g = at_boss(11, B::TheHook);
+        add(&mut g, JokerId::RaisedFist);
+        add(&mut g, JokerId::Ramen);
+        let cards = [
+            (Rank::King, Suit::Spades),
+            (Rank::Queen, Suit::Hearts),
+            (Rank::Jack, Suit::Spades),
+            (Rank::Jack, Suit::Hearts),
+            (Rank::Jack, Suit::Diamonds),
+            (Rank::Nine, Suit::Clubs),
+            (Rank::Seven, Suit::Diamonds),
+            (Rank::Four, Suit::Clubs),
+        ];
+        let st = g.state_mut();
+        for (c, &(r, su)) in st.deck.hand.iter_mut().zip(&cards) {
+            c.rank = r;
+            c.suit = su;
+            c.enhancement = Default::default();
+            c.edition = Default::default();
+            c.seal = Default::default();
+            c.perma_bonus = 0;
+        }
+        st.rng.reseed_streams(seed, &[RngKey::Bosses]);
+        let rep = g.preview_play(0b1101_1100).expect("preview");
+        assert_eq!(rep.hand_type, HandType::ThreeOfAKind);
+        seen.insert(rep.score as u64);
+    }
+    assert_eq!(seen, BTreeSet::from([2494, 2732]), "{seen:?}");
+}
+
 #[test]
 fn the_hook_does_not_count_as_a_first_discard() {
     // Burnt Joker levels the first discard's hand; The Hook's discards are not discards.

@@ -576,6 +576,20 @@ fn observatory_multiplies_per_matching_planet() {
 }
 
 #[test]
+fn plasma_deck_floors_the_balanced_value() {
+    // dump/back.lua:157-161: both become floor((chips + mult) / 2). 16 chips x 1 mult ->
+    // floor(8.5) = 8 each -> 64 (an unfloored 8.5 x 8.5 would give 72).
+    let played = vec![c(1, Ace, Spades)];
+    let eval = ev(HandType::HighCard, 0b1, &[]);
+    let run = RunView {
+        plasma_deck: true,
+        ..plain()
+    };
+    let o = score(&played, &[], eval, &run);
+    assert_eq!((o.res.chips, o.res.mult, o.res.score), (8.0, 8.0, 64.0));
+}
+
+#[test]
 fn plasma_deck_balances() {
     // chips 24, mult 2 -> both (24 + 2) / 2 = 13 -> 169.
     let (played, eval) = pair7();
@@ -690,4 +704,84 @@ fn same_seed_same_result() {
     assert_eq!(a.res, b.res);
     assert_eq!(a.effects, b.effects);
     assert_eq!(a.trace, b.trace);
+}
+
+// ----- real-game float parity (SMODS `m + m * (x - 1)`, bridge games 15) -----
+
+use balatro_core::content::jokers::JokerId as J;
+
+/// Ramen after `n` discarded cards, accumulated like the game: plain double subtraction.
+fn ramen_after(n: u32) -> f64 {
+    let mut v = 2.0_f64;
+    for _ in 0..n {
+        v -= 0.01;
+    }
+    v
+}
+
+/// xmult is applied as `mult += mult * (x - 1)` (smods game_object.lua mult `calc_effect`), not
+/// `mult *= x`: 20 x 1.93 as 20 + 20 * 0.93 is 38.599999999999994, and 20 chips x that is
+/// 771.99.. (floor 771) where the naive product is exactly 772.
+#[test]
+fn xmult_uses_the_smods_additive_form() {
+    let m = 20.0_f64;
+    assert_eq!(m * 1.93 * 20.0, 772.0); // what the engine used to compute
+    assert_eq!(m + m * (1.93 - 1.0), 38.599999999999994);
+    assert_eq!(round_score(20.0, m + m * (1.93 - 1.0)), 771.0);
+}
+
+/// Bridge game 15 ante 3, real score 771 (engine said 772): Pair of fives (K J 6 5 5 played,
+/// only the fives score), Pair L1 = 10 x 2, chips 10 + 5 + 5 = 20. Raised Fist on a held 9 adds
+/// 2 * 9 = 18 mult (20), Ramen after 7 discards (1.93), Walkie Talkie and Burglar do nothing.
+#[test]
+fn real_game_ramen_case_ante3_is_771() {
+    let played = vec![
+        c(1, King, Clubs),
+        c(2, Jack, Diamonds),
+        c(3, Six, Spades),
+        c(4, Five, Hearts),
+        c(5, Five, Clubs),
+    ];
+    let held = vec![c(6, Nine, Spades), c(7, Queen, Hearts), c(8, King, Hearts)];
+    let eval = ev(HandType::Pair, 0b11000, &[]);
+    let mut js = vec![
+        JokerInstance::new(100, J::RaisedFist),
+        JokerInstance::new(101, J::Ramen).with_value(ramen_after(7)),
+        JokerInstance::new(102, J::WalkieTalkie),
+        JokerInstance::new(103, J::Burglar),
+    ];
+    let o = run_full(&played, &held, eval, &mut js, &plain(), 7);
+    assert_eq!(o.res.chips, 20.0);
+    assert_eq!(o.res.mult, 38.599999999999994);
+    assert_eq!(o.res.score, 771.0);
+}
+
+/// Bridge game 15 ante 8 (The Crimson Heart debuffed Supernova), real score 22841 (engine
+/// 22842): Pair L11 = 160 x 12, two scoring tens (+20 chips). Abstract Joker +15 mult (5 jokers),
+/// Supernova debuffed, Crafty Joker with Polychrome x1.5, Banner +30 x 4 discards left = +120
+/// chips, Ramen after 12 discards (1.88). chips 300, mult (27 * 1.5) x 1.88 = 76.14 -> 22841.
+#[test]
+fn real_game_ramen_case_ante8_is_22841() {
+    let played = vec![
+        c(1, Ten, Clubs),
+        c(2, Ten, Diamonds),
+        c(3, Nine, Hearts),
+        c(4, Eight, Clubs),
+        c(5, Five, Hearts),
+    ];
+    let eval = ev(HandType::Pair, 0b00011, &[]);
+    let mut js = vec![
+        JokerInstance::new(100, J::AbstractJoker),
+        JokerInstance::new(101, J::Supernova).with_debuff(true),
+        JokerInstance::new(102, J::CraftyJoker).with_edition(Edition::Polychrome),
+        JokerInstance::new(103, J::Banner),
+        JokerInstance::new(104, J::Ramen).with_value(ramen_after(12)),
+    ];
+    let mut run = plain();
+    run.hand_levels[HandType::Pair.index()] = 11;
+    run.hand_plays_run[HandType::Pair.index()] = 12;
+    run.discards_left = 4;
+    let o = run_full(&played, &[], eval, &mut js, &run, 7);
+    assert_eq!(o.res.chips, 300.0);
+    assert_eq!(o.res.score, 22841.0);
 }

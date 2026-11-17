@@ -571,8 +571,15 @@ impl<'a> ScoreCtx<'a> {
     }
 
     /// `xmult`.
+    ///
+    /// Bit-exact with the real game: SMODS does not multiply, it adds `mult * (x - 1)`
+    /// (`smods/src/game_object.lua` Scoring_Parameter 'mult' `calc_effect`, line ~3825:
+    /// `self:modify(mult * (amount - 1))`, with `modify` = `current + amount`). In doubles
+    /// `m + m * (x - 1)` differs from `m * x` by an ulp for non-dyadic `x` (Ramen 1.93:
+    /// 20 + 20 * 0.93 = 38.599999999999994 -> 20 * that = 771.99.. -> 771, not 772). `x == 1`
+    /// is skipped there (a no-op here too).
     pub fn x_mult(&mut self, x: f64) {
-        self.mult *= x;
+        self.mult += self.mult * (x - 1.0);
         self.rec(TraceOp::XMult(x));
     }
 
@@ -996,9 +1003,13 @@ impl ScoreCtx<'_> {
             }
         }
         if run.plasma_deck {
-            let avg = (self.chips + self.mult) / 2.0;
+            // back.lua `Plasma Deck` final_scoring_step: both become `math.floor((chips + mult) / 2)`
+            // (dump/back.lua:157-161). `mod_mult(F)` then stores `mult + (F - mult)`
+            // (SMODS `modify` with `skip`, game_object.lua mult `modify`), which can differ from F
+            // by an ulp when the old mult is not an integer; chips are integral so exact.
+            let avg = ((self.chips + self.mult) / 2.0).floor();
             self.chips = avg;
-            self.mult = avg;
+            self.mult += avg - self.mult;
             self.source = TraceSource::Plasma;
             self.rec(TraceOp::Balance);
         }

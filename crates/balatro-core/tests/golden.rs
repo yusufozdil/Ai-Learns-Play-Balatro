@@ -19,7 +19,9 @@ use balatro_core::state::GameConfig;
 
 const GAMES: u64 = 200;
 const STEP_CAP: u64 = 4000;
-const GOLDEN: u64 = 0xe361_aeee_6ff0_102c;
+// Regenerated after the real-game float parity fixes: xmult is `m + m * (x - 1)` (SMODS), Ramen
+// is raw double arithmetic (no rounding), Plasma floors. Same 18278 steps, other final states.
+const GOLDEN: u64 = 0xa565_19c4_0ca5_54d3;
 
 /// Favours market, packs, consumables and joker moves (same weights as the fuzz test).
 struct WeightedAgent {

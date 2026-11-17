@@ -693,17 +693,38 @@ fn ramen_starts_x2_and_loses_001_per_discarded_card() {
 #[test]
 fn ramen_is_eaten_when_the_100th_card_would_bring_it_to_x1() {
     let mut js = jokers(&[J::Ramen]);
-    // 99 cards: 2.00 - 0.99 = 1.01 (exactly, no float drift), still alive.
+    // 99 cards: the real game subtracts 0.01 in plain doubles (card.lua:3109-3128, SMODS
+    // additive_scaling), so the value drifts to 1.0099999999999991 (no rounding), still alive.
     let fx = discard(&mut js, &cards(99));
     assert!(fx.is_empty());
-    assert_eq!(js[0].value, 1.01);
+    assert_eq!(js[0].value, 1.0099999999999991);
     // The 100th card would give 1.00 -> destroyed (value untouched).
     let fx = discard(&mut js, &cards(1));
     assert_eq!(fx, vec![destroy_of(100)]);
-    assert_eq!(js[0].value, 1.01);
+    assert_eq!(js[0].value, 1.0099999999999991);
     // 100 cards in one discard destroy it just the same.
     let mut js = jokers(&[J::Ramen]);
     assert_eq!(discard(&mut js, &cards(100)), vec![destroy_of(100)]);
+}
+
+/// Real game, `x_mult` after n discarded cards: plain double subtraction `2.0 - 0.01 - ...`,
+/// no rounding. The values below were computed with IEEE doubles in the same order.
+#[test]
+fn ramen_value_follows_raw_double_subtraction() {
+    let mut js = jokers(&[J::Ramen]);
+    let mut expect = 2.0_f64;
+    for _ in 0..99 {
+        discard(&mut js, &cards(1));
+        expect -= 0.01;
+        assert_eq!(js[0].value.to_bits(), expect.to_bits());
+    }
+    // Real values seen in the bridge logs (BalatroBot prints 14 significant digits): 7 and 12
+    // discarded cards.
+    let mut js = jokers(&[J::Ramen]);
+    discard(&mut js, &cards(7));
+    assert_eq!(js[0].value, 1.93);
+    discard(&mut js, &cards(5));
+    assert_eq!(js[0].value, 1.88);
 }
 
 #[test]
