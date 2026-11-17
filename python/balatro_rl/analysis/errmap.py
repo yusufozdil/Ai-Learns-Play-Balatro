@@ -94,8 +94,19 @@ class Decision:
 class RolloutPool:
     """Batched futures: slots of a ``VecEnv`` fed with jobs ``(state, hidden, action, seed)``."""
 
-    def __init__(self, runner: PolicyRunner, head, cfg: Config, threads: int = 0):
-        self.runner, self.head, self.cfg = runner, head, cfg
+    def __init__(
+        self,
+        runner: PolicyRunner,
+        head,
+        cfg: Config,
+        threads: int = 0,
+        head_runner: PolicyRunner | None = None,
+    ):
+        """``head_runner``: a second, frozen model whose critic input feeds ``head`` (the fixed
+        ruler of ``--head-model``); its recurrent state is the second block of every job's
+        hidden vector (``[policy mem, head-model mem]``). ``None``: the head reads the policy's
+        own features (the original behaviour)."""
+        self.runner, self.head, self.cfg, self.head_runner = runner, head, cfg, head_runner
         self.env = BalatroVecEnv(
             cfg.slots, seed=1, num_threads=threads, max_episode_steps=3000
         )
@@ -119,6 +130,8 @@ class RolloutPool:
         nsteps = np.zeros(S, np.int64)
         mem = jobs[0][1].shape[0] if n else 0
         hidden = torch.zeros(S, mem, device=dev)
+        hr = self.head_runner
+        mp = runner.model.mem_dim
         nxt = 0
         steps0 = 0
         while True:
@@ -141,7 +154,15 @@ class RolloutPool:
             if not live.any():
                 break
             obs, masks = env.obs, env.masks
-            act, h2, feats, _ = runner.run(obs, masks, hidden, cfg.deterministic)
+            if hr is None:
+                act, h2, feats, _ = runner.run(obs, masks, hidden, cfg.deterministic)
+            else:
+                prep = prepare(obs, masks, dev)
+                act, h2, _, _ = runner.run(
+                    obs, masks, hidden[:, :mp], cfg.deterministic, prepared=prep
+                )
+                _, hh2, feats, _ = hr.run(obs, masks, hidden[:, mp:], True, prepared=prep)
+                h2 = torch.cat([h2, hh2], dim=1)
             fr_t = torch.from_numpy(fresh).to(dev)
             hidden = torch.where(fr_t[:, None], hidden, h2)  # a fresh slot keeps the post-state
             act_np = act.cpu().numpy()
@@ -210,15 +231,22 @@ def run_trunk(
     acts: dict[int, list] | None,
     cfg: Config,
     max_episode_steps: int = 3000,
+    env_kwargs: dict | None = None,
+    head_runner: PolicyRunner | None = None,
 ) -> tuple[dict[int, list], dict[int, dict]]:
     """Play ``games`` (env indices of base ``base_seed``) from the start. ``acts[g]`` = recorded
     actions (replayed exactly); ``None`` = the deterministic policy plays. Returns
-    ``(decisions per game, trunk info per game: curve, outcome, steps)``."""
+    ``(decisions per game, trunk info per game: curve, outcome, steps)``. ``env_kwargs``: extra
+    ``BalatroVecEnv`` arguments (``decks`` / ``stakes`` ...); ``head_runner``: see
+    ``RolloutPool``."""
     dev = runner.dev
     n_env = max(games) + 1
-    env = BalatroVecEnv(n_env, seed=base_seed, max_episode_steps=max_episode_steps)
+    env = BalatroVecEnv(
+        n_env, seed=base_seed, max_episode_steps=max_episode_steps, **(env_kwargs or {})
+    )
     obs, masks = env.reset()
-    mem = runner.model.mem_dim
+    mp = runner.model.mem_dim
+    mem = mp + (head_runner.model.mem_dim if head_runner is not None else 0)
     hidden = torch.zeros(n_env, mem, device=dev)
     active = np.zeros(n_env, bool)
     active[games] = True
@@ -233,7 +261,12 @@ def run_trunk(
         idx_t = torch.from_numpy(idx).to(dev)
         h_in = hidden[idx_t]
         prepared = prepare(o, m, dev)
-        act, h2, feats, value = runner.run(o, m, h_in, True, prepared=prepared)
+        if head_runner is None:
+            act, h2, feats, value = runner.run(o, m, h_in, True, prepared=prepared)
+        else:
+            act, h2, _, value = runner.run(o, m, h_in[:, :mp], True, prepared=prepared)
+            _, hh2, feats, _ = head_runner.run(o, m, h_in[:, mp:], True, prepared=prepared)
+            h2 = torch.cat([h2, hh2], dim=1)
         hidden[idx_t] = h2
         pw = head(feats).cpu().numpy()
         val = value.float().cpu().numpy()
@@ -259,7 +292,7 @@ def run_trunk(
             ridx = torch.tensor(rows_of, device=dev)
             sub = _index_prepared(prepared, ridx)
             flat = torch.tensor([a for c in cand_lists for a in c], device=dev, dtype=torch.long)
-            lp, _ok = runner.logp_of(sub, h_in[ridx], flat)
+            lp, _ok = runner.logp_of(sub, h_in[ridx][:, :mp], flat)
             lp = lp.float().cpu().numpy()
             pos = 0
             h2_np = h2.float().cpu().numpy()
@@ -426,6 +459,8 @@ def finalize_game(
                         "se": float(se2[b]),
                         "pwin_before": d.pwin,
                         "screen_delta": rec["actions"][b + 1]["d1"],
+                        "played_action": rec["actions"][0]["action"],
+                        "better_action": rec["actions"][b + 1]["action"],
                     }
                 )
         out_decisions.append(rec)
@@ -445,12 +480,19 @@ def finalize_game(
 
 
 def record_games(
-    runner: PolicyRunner, base_seed: int, n_games: int, max_episode_steps: int = 3000
+    runner: PolicyRunner,
+    base_seed: int,
+    n_games: int,
+    max_episode_steps: int = 3000,
+    env_kwargs: dict | None = None,
 ) -> tuple[list[list[tuple]], list[int]]:
     """Play the first episode of ``n_games`` envs with the deterministic policy; returns the
-    recorded actions per game and the done codes (2 = win, 1 = loss, 3 = truncated)."""
+    recorded actions per game and the done codes (2 = win, 1 = loss, 3 = truncated).
+    ``env_kwargs``: extra ``BalatroVecEnv`` arguments (``decks`` / ``stakes`` ...)."""
     dev = runner.dev
-    env = BalatroVecEnv(n_games, seed=base_seed, max_episode_steps=max_episode_steps)
+    env = BalatroVecEnv(
+        n_games, seed=base_seed, max_episode_steps=max_episode_steps, **(env_kwargs or {})
+    )
     obs, masks = env.reset()
     hidden = runner.init_hidden(n_games)
     active = np.ones(n_games, bool)

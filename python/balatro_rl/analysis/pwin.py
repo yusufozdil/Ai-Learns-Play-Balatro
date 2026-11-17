@@ -86,15 +86,19 @@ def collect_shard(
     actor_seed: int = 0,
     max_episode_steps: int = 3000,
     game_offset: int = 0,
+    env_kwargs: dict | None = None,
 ) -> dict:
     """Play the first episode of ``games`` envs (base ``seed``) with the policy and write one npz
     shard: ``feats`` (float16), ``value`` (critic), ``phase``, ``ante``, ``game`` (unique id),
     ``win`` (final outcome), ``det``. Every BlindSelect/Shop decision is kept, other phases with
-    probability ``keep_other``."""
+    probability ``keep_other``. ``env_kwargs``: extra ``BalatroVecEnv`` arguments (a ``decks`` /
+    ``stakes`` mix for a head of a stake-trained policy)."""
     t0 = time.perf_counter()
     rng = np.random.default_rng(actor_seed + 12345)
     runner = PolicyRunner(model, seed=actor_seed)
-    env = BalatroVecEnv(games, seed=seed, max_episode_steps=max_episode_steps)
+    env = BalatroVecEnv(
+        games, seed=seed, max_episode_steps=max_episode_steps, **(env_kwargs or {})
+    )
     obs, masks = env.reset()
     hidden = runner.init_hidden(games)
     active = np.ones(games, bool)

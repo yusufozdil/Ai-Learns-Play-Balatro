@@ -54,12 +54,29 @@ def main() -> None:
     ap.add_argument("--pack", action="store_true", help="also analyse Pack decisions")
     ap.add_argument("--slots", type=int, default=2048)
     ap.add_argument("--sample-rollouts", action="store_true")
+    ap.add_argument("--decks", default=None, help="live play only: comma list (default red)")
+    ap.add_argument("--stakes", default=None, help="live play only: comma list (default white)")
+    ap.add_argument(
+        "--head-model", type=Path, default=None,
+        help="checkpoint whose critic input feeds --head (default: --checkpoint)",
+    )  # fmt: skip
     a = ap.parse_args()
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _ = load_checkpoint(a.checkpoint, dev)
     head = load_head(a.head, dev)
     runner = PolicyRunner(model, seed=1)
+    head_runner = None
+    if a.head_model is not None:
+        hm, _ = load_checkpoint(a.head_model, dev)
+        head_runner = PolicyRunner(hm, seed=2)
+    kw = {}
+    if a.decks:
+        kw["decks"] = [x.strip() for x in a.decks.split(",") if x.strip()]
+    if a.stakes:
+        kw["stakes"] = [x.strip() for x in a.stakes.split(",") if x.strip()]
+    assert not (kw and a.pkl), "--decks / --stakes need live play (no --pkl)"
+    kw = kw or None
     base, _ = ev.EVAL_SETS[a.eval_set]
     phases = (PHASE_BLIND, PHASE_SHOP) + ((PHASE_PACK,) if a.pack else ())
     cfg = errmap.Config(
@@ -75,7 +92,7 @@ def main() -> None:
         codes = {r[0]: r[2] for r in d["res"]}
     else:
         n = a.n_games or ev.EVAL_SETS[a.eval_set][1]
-        acts_l, code_l = errmap.record_games(runner, base, n)
+        acts_l, code_l = errmap.record_games(runner, base, n, env_kwargs=kw)
         acts_all = dict(enumerate(acts_l))
         codes = dict(enumerate(code_l))
         print(f"recorded {n} games: win {sum(c == 2 for c in code_l) / n:.1%} "
@@ -91,13 +108,15 @@ def main() -> None:
     print(f"analysing {len(ids)} games: {ids[:10]}{'...' if len(ids) > 10 else ''}")
 
     a.out.mkdir(parents=True, exist_ok=True)
-    pool = errmap.RolloutPool(runner, head, cfg)
+    pool = errmap.RolloutPool(runner, head, cfg, head_runner=head_runner)
     totals = {"env_steps": 0, "decisions": 0}
     t0 = time.perf_counter()
     for c0 in range(0, len(ids), a.chunk):
         chunk = ids[c0 : c0 + a.chunk]
         tc = time.perf_counter()
-        decisions, info = errmap.run_trunk(runner, head, chunk, base, acts_all, cfg)
+        decisions, info = errmap.run_trunk(
+            runner, head, chunk, base, acts_all, cfg, env_kwargs=kw, head_runner=head_runner
+        )
         t_trunk = time.perf_counter() - tc
         stats = errmap.screen_and_confirm(pool, decisions, cfg)
         for g in chunk:

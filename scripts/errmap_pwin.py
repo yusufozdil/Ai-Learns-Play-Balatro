@@ -39,6 +39,16 @@ def parse_range(s: str) -> list[int]:
     return [int(x) for x in s.split(",")]
 
 
+def env_kwargs(a) -> dict | None:
+    """``--decks`` / ``--stakes`` (comma lists): the (deck, stake) mix of a stake-trained policy."""
+    kw = {}
+    if a.decks:
+        kw["decks"] = [x.strip() for x in a.decks.split(",") if x.strip()]
+    if a.stakes:
+        kw["stakes"] = [x.strip() for x in a.stakes.split(",") if x.strip()]
+    return kw or None
+
+
 def cmd_collect(a) -> None:
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _ = load_checkpoint(a.checkpoint, dev)
@@ -57,6 +67,7 @@ def cmd_collect(a) -> None:
             keep_other=a.keep_other,
             actor_seed=s,
             game_offset=s * 1_000_000,
+            env_kwargs=env_kwargs(a),
         )
         print(f"shard {s} ({'det' if s % 2 == 0 else 'sample'}): {info}", flush=True)
 
@@ -110,6 +121,8 @@ def main() -> None:
     c.add_argument("--games", type=int, default=5000)
     c.add_argument("--keep-other", type=float, default=0.1)
     c.add_argument("--force", action="store_true")
+    c.add_argument("--decks", default=None, help="e.g. red,blue,yellow,green,black (default red)")
+    c.add_argument("--stakes", default=None, help="e.g. white,red,...,gold (default white)")
     t = sub.add_parser("train")
     t.add_argument("--checkpoint", type=Path, default=Path("/home/yuse/Desktop/balatroRL/runs/e2e_long_fix/latest.pt"))
     t.add_argument("--data", type=Path, required=True)
