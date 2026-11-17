@@ -17,6 +17,7 @@ previous step finished the episode: ``done != 0``) and zeroes the memory *before
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 from dataclasses import dataclass
 
@@ -50,6 +51,10 @@ class ModelConfig:
 
 
 class TeamModel(nn.Module):
+    # Optional profiling hook (set by the PPO trainer with ``--profile``): ``_prof(name)`` returns a
+    # context manager timing a section. ``None`` = no profiling (the default, zero overhead).
+    _prof = None
+
     def __init__(self, config: ModelConfig | None = None):
         super().__init__()
         self.config = config or ModelConfig()
@@ -135,14 +140,23 @@ class TeamModel(nn.Module):
                 out[k] = out[k].index_copy(0, idx, v)
         return out
 
+    def _sec(self, name: str):
+        return self._prof(name) if self._prof is not None else contextlib.nullcontext()
+
     def _run(self, obs, masks, hidden, first, actions, deterministic, generator):
         obs, masks = self._inputs(obs, masks)
-        summary, hand, ptr = self.encoder(obs)
-        h, hidden_out = self._memory(summary, hidden, first)
-        ctx = self.ctx(torch.cat([summary, h], dim=-1))
-        value = self.critic(torch.cat([summary, h], dim=-1)).squeeze(-1)
+        with self._sec("enc"):
+            summary, hand, ptr = self.encoder(obs)
+        with self._sec("mem"):
+            h, hidden_out = self._memory(summary, hidden, first)
+            ctx = self.ctx(torch.cat([summary, h], dim=-1))
+        # The critic always runs in float32, also under bf16 autocast (a no-op otherwise): value
+        # targets are small differences of returns, bf16 rounding would swamp them.
+        with torch.autocast(summary.device.type, enabled=False):
+            value = self.critic(torch.cat([summary, h], dim=-1).float()).squeeze(-1)
         phase = obs["global_i"][:, 0]
-        res = self._heads(ctx, ptr, hand, masks, phase, actions, deterministic, generator)
+        with self._sec("heads"):
+            res = self._heads(ctx, ptr, hand, masks, phase, actions, deterministic, generator)
         res["value"] = value
         res["hidden"] = hidden_out
         res["phase"] = phase

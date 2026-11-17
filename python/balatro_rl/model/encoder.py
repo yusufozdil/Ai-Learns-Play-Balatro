@@ -132,6 +132,41 @@ class Encoder(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, std=0.1)
+        # Optional ``torch.compile`` of the Transformer stack (``enable_compile``); off by default.
+        self._blocks_fn = None
+        self._bucket = 0
+
+    def _run_blocks(self, x: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
+        for block in self.blocks:
+            x = block(x, attn_mask)
+        return x
+
+    def enable_compile(self, bucket: int = 8, mode: str | None = None, dynamic: bool | None = True):
+        """Compile the Transformer stack with ``torch.compile``. The token count varies per batch
+        (largest valid group sizes); it is padded up to a multiple of ``bucket`` with masked tokens
+        (padding keys are masked, so valid tokens are unaffected up to float rounding) to bound the
+        number of distinct shapes. Returns ``True`` when a forward + backward warm-up compiled;
+        on any failure the eager path is kept and ``False`` is returned."""
+        try:
+            import torch._dynamo as dynamo
+
+            dynamo.config.cache_size_limit = max(dynamo.config.cache_size_limit, 64)
+            fn = torch.compile(self._run_blocks, mode=mode, dynamic=dynamic)
+            dev = self.table.weight.device
+            n = 64
+            length = max(bucket, 1) * 4
+            x = torch.randn(n, length, self.d, device=dev, requires_grad=True)
+            mask = torch.ones(n, 1, 1, length, dtype=torch.bool, device=dev)
+            fn(x, mask).sum().backward()  # compiles forward and backward
+            with torch.no_grad():
+                fn(x, mask)
+            self.zero_grad(set_to_none=True)
+        except Exception as e:  # noqa: BLE001 - any compiler / driver failure: stay eager
+            self._blocks_fn, self._bucket = None, 0
+            self.compile_error = repr(e)
+            return False
+        self._blocks_fn, self._bucket = fn, bucket
+        return True
 
     def _cat(self, group: str, x: torch.Tensor, split: int | None = None) -> torch.Tensor:
         """Sum of the categorical embeddings of the columns of ``x (..., ncols)``; with ``split``
@@ -208,9 +243,19 @@ class Encoder(nn.Module):
             ],
             dim=1,
         )
-        attn_mask = valid[:, None, None, :]
-        for block in self.blocks:
-            x = block(x, attn_mask)
+        if self._blocks_fn is None:
+            attn_mask = valid[:, None, None, :]
+            for block in self.blocks:
+                x = block(x, attn_mask)
+        else:
+            length = x.shape[1]
+            pad = -length % self._bucket if self._bucket > 1 else 0
+            if pad:
+                x = F.pad(x, (0, 0, 0, pad))
+                valid = F.pad(valid, (0, pad))
+            x = self._blocks_fn(x, valid[:, None, None, :])
+            if pad:
+                x = x[:, :length]
         x = self.out_ln(x)
         summary = x[:, 0]
         a = 1
