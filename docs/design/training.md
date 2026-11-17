@@ -388,3 +388,29 @@ the env is the fixed Red/White one, bit for bit. The lists land in `config.json`
 Margin alone is neutral at 24M (validation curves overlap the baseline). Adding the zero-score-play cost gives ~+3.7 points
 in both modes (~2 standard errors, one seed; the loss analysis bounded the Eye/Mouth fix at ~+3.5 points at 100M).
 Adopted for later runs: `--margin 1.0 --zero-play -0.3` (margin kept: harmless, may matter on higher stakes).
+
+## 15. Stake ladder v2 (package B2, branch `exp/stake-v2`)
+
+Four independent flags on top of the stake ladder (`scripts/chain_stakes.sh`); with all of them at their
+defaults training is bit-identical to before (checked: 3 updates of a tiny multi-stake config on CPU, losses and
+a parameter hash equal to the untouched main checkout). Motivation: st1 plateaued at 18-22 % Green validation
+after 1M steps; Black 4 %, Gold 0.1 % (`notes.md` 0.0a; `fabledan_notlar.md` G2, G3, G9).
+
+| flag | default | meaning |
+|---|---|---|
+| (always on, logging only) | | per update, over the policy rows: `adv_mean/<stake>`, `adv_std/<stake>`, `adv_rows/<stake>` of the raw GAE advantages, the same per deck as `adv_*_deck/<deck>`, and natural-episode `ep_n/<stake>`, `ep_win/<stake>`, `ep_ante/<stake>` |
+| `--adv-norm per_config` | `global` | normalise advantages within each stake instead of over the rollout (`--adv-norm-min-rows 256`: smaller groups use the global statistics) |
+| `--stake-curriculum auto` | `off` | between updates, set the sampling weight of each stake of `--stakes` to `floor + exp(-((win - target)/width)^2)` (normalised; spread evenly over the decks) with `win` the EMA (`--stake-curriculum-ema 0.8`) of the stake's natural training win rate (a stake with fewer than `--stake-curriculum-min-eps 20` episodes keeps its old EMA; no data yet counts as on target). Defaults: target 0.3, width 0.3, floor 0.15 (with the st1 win rates White .66, Red .55, Green .25, Black/Blue .04 the initial stake shares are White 11 %, Red 19 %, Green 33 %, Black 18 %, Blue 18 %: hard stakes keep at least their uniform share; the first guess 0.4 / 0.25 / 0.1 would have given Black and Blue 9 % each). Logged as `stake_weights`, `stake_win_ema`. Uses `VecEnv.set_config_weights` (weights per `config_pool()` pair; applies to episodes that start afterwards; `None` = the old uniform `hash % n` rule) |
+| `--scenario-prob p` (<= 0.2) | 0 | an auto-reset starts, with probability p, from `balatro_core::scenario::random_scenario(seed, config)`: a Blind select at ante 1-8 (blind small/big/boss 30/30/40 %), money, joker count, hand levels, vouchers and deck edits growing with the ante, jokers of every rarity (legendary 4 % from ante 2) with editions and the market's own sticker roll (Eternal from Black, Perishable from Orange, Rental from Gold), 0-2 consumables. A natural reset (the previous episode ended with `done`), a pure function of (seed, env, episode). The (deck, stake) are the ones the normal sampling picked |
+| `--boss-hall p --boss-hall-size N` | 0 / 4096 | every rollout step the trainer asks the env for natural episodes sitting at the Blind select of an ante >= `--boss-hall-min-ante 5` boss (`hall_collect`, JSON of the state); at most `--boss-hall-per-update 512` random new ones per update enter a FIFO pool of size N, which is pushed to Rust (`set_reset_pool`, parsed once). An auto-reset then starts, with probability p, from a random pool state of the stake the normal (deck, stake) sampling picked (so `--stake-curriculum` keeps governing the stake mix; no state of that stake: natural reset), re-seeded with a fresh seed (all nine RNG streams: same visible state, new hidden future); `hall_pool/<stake>` logs the pool composition |
+
+Scenario and hall episodes are separated in the statistics: `episodes`, `ep_*` and `ep_*/<stake>` are over natural
+episodes only (a scenario or hall episode starts mid-run, so its ante, steps and return are not comparable);
+`scn_*` and `hall_*` hold the same quantities for them (`scn_win`, `scn_ante`, ...). `drain_finished_ex` carries
+`scenario` / `hall` flags. Validation is always a natural start. `scenario` and `hall` rows are normal PPO rows
+(the reset is a normal `done`, so GAE and the GRU state need no special case).
+
+New engine surface (`rl_interface.md` stays valid; additive): `VecEnv(..., scenario_prob=0.0)`,
+`set_scenario_prob`, `set_config_weights`, `config_pool`, `set_reset_pool(states, prob)`, `reset_pool_len`,
+`hall_collect(min_ante)`, `origins()`, and `scenario` / `hall` in `drain_finished_ex`. Tests:
+`tests_py/test_stake_v2.py`, `crates/balatro-core/tests/scenario.rs`.

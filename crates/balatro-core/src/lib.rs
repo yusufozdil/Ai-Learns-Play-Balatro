@@ -23,6 +23,7 @@ pub mod joker;
 pub mod observe;
 pub mod packs;
 pub mod rng;
+pub mod scenario;
 pub mod scoring;
 pub mod serialize;
 pub mod shop;

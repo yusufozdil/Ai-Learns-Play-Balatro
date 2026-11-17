@@ -70,6 +70,7 @@ class BalatroVecEnv:
         endless_max_ante: int = 12,
         decks: list[str] | None = None,
         stakes: list[str] | None = None,
+        scenario_prob: float = 0.0,
     ) -> None:
         if endless_max_ante < 8:
             raise ValueError("endless_max_ante must be >= 8")
@@ -86,6 +87,7 @@ class BalatroVecEnv:
             reward,
             None if decks is None else list(decks),
             None if stakes is None else list(stakes),
+            float(scenario_prob),
         )
         self.num_envs = num_envs
         self._buffers = allocate_buffers(num_envs)
@@ -143,7 +145,9 @@ class BalatroVecEnv:
         """Like ``drain_finished`` (same queue: draining one empties both) but with named
         fields: ``env, ante, code, steps, return, blinds_beaten, invalid`` plus ``deck`` and
         ``stake`` (names), ``imported`` (the episode began from ``import_state``; its ``steps``
-        and ``return`` count from the import) and ``start_joker`` (display name or ``None``)."""
+        and ``return`` count from the import), ``scenario`` / ``hall`` (the episode began from a
+        randomized scenario / a boss-hall pool state, see ``set_scenario_prob`` /
+        ``set_reset_pool``) and ``start_joker`` (display name or ``None``)."""
         return self._env.drain_finished_ex()
 
     def export_state(self, i: int) -> str:
@@ -186,3 +190,40 @@ class BalatroVecEnv:
         if jokers is None or isinstance(jokers, str):
             jokers = [jokers] * self.num_envs
         self._env.set_start_jokers(list(jokers))
+
+    # ------------------------------------------------------------------ stake ladder v2 (B2)
+
+    def config_pool(self) -> list[tuple[str, str]]:
+        """The ``(deck, stake)`` name pairs episodes are drawn from (empty: fixed configuration),
+        in ``set_config_weights`` order."""
+        return self._env.config_pool()
+
+    def set_config_weights(self, weights: list[float] | None) -> None:
+        """Sampling weights of the ``config_pool()`` pairs (``None`` = uniform, the default and
+        bit-identical to the old rule). Applies to the episodes that start afterwards."""
+        self._env.set_config_weights(None if weights is None else [float(w) for w in weights])
+
+    def set_scenario_prob(self, p: float) -> None:
+        """Probability that an auto-reset starts from a randomized, plausible mid-run state
+        (``balatro_core::scenario``) instead of a fresh run; a natural reset (the previous
+        episode ended with ``done``), a pure function of ``(seed, env, episode)``. Episodes are
+        flagged ``scenario`` in ``drain_finished_ex``. 0 (default) = never."""
+        self._env.set_scenario_prob(float(p))
+
+    def set_reset_pool(self, states: list[str], prob: float) -> None:
+        """Boss-hall reset pool: exported states (JSON, parsed once) and the probability that an
+        auto-reset starts from a random one, re-seeded with a fresh seed (all RNG streams: same
+        visible state, new hidden future). Flagged ``hall`` in ``drain_finished_ex``."""
+        self._env.set_reset_pool(list(states), float(prob))
+
+    def reset_pool_len(self) -> int:
+        return self._env.reset_pool_len()
+
+    def hall_collect(self, min_ante: int = 5) -> list[tuple[int, int, str, str, str]]:
+        """Boss-hall candidates right now: ``(env, ante, boss, stake, state_json)`` of the natural
+        episodes sitting at the Blind select of an ante >= ``min_ante`` boss."""
+        return self._env.hall_collect(min_ante)
+
+    def origins(self) -> np.ndarray:
+        """Per env, how the current episode started: 0 natural, 1 scenario, 2 hall."""
+        return np.frombuffer(self._env.origins(), dtype=np.uint8).copy()
