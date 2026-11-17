@@ -1,0 +1,78 @@
+--- a/balatrobot.lua
++++ b/balatrobot.lua
+@@ -40,6 +40,9 @@
+   "src/lua/endpoints/sell.lua",
+   -- Use consumable endpoint
+   "src/lua/endpoints/use.lua",
++  -- council-of-jokers bridge patch: boss reroll
++  "src/lua/endpoints/reroll_boss.lua",
++  "src/lua/endpoints/continue_endless.lua",
+   -- If debug mode is enabled, debugger.lua will load test endpoints
+ }
+ 
+@@ -49,6 +52,17 @@
+   BB_DEBUG.setup()
+ end
+ 
++-- council-of-jokers bridge patch: raw state extension (never fatal)
++do
++  local ok, mod = pcall(function()
++    return assert(SMODS.load_file("src/lua/utils/bridge_ext.lua"))()
++  end)
++  if ok then
++    BB_BRIDGE_EXT = mod
++  else
++    sendErrorMessage('bridge_ext load failed: ' .. tostring(mod), 'BB.BRIDGE')
++  end
++end
+ -- Load core modules
+ assert(SMODS.load_file("src/lua/core/server.lua"))() -- define BB_SERVER
+ assert(SMODS.load_file("src/lua/core/dispatcher.lua"))() -- define BB_DISPATCHER
+--- a/src/lua/utils/gamestate.lua
++++ b/src/lua/utils/gamestate.lua
+@@ -357,7 +357,13 @@
+     end
+   end
+ 
++  local bridge_raw = nil
++  if BB_BRIDGE_EXT then
++    local ok, r = pcall(BB_BRIDGE_EXT.card_raw, card)
++    if ok then bridge_raw = r end
++  end
+   return {
++    raw = bridge_raw,
+     id = card.sort_id or 0,
+     key = key,
+     set = set,
+@@ -811,6 +817,11 @@
+     state_data.pack = extract_area(G.pack_cards)
+   end
+ 
++  if BB_BRIDGE_EXT then
++    local ok, err = pcall(BB_BRIDGE_EXT.augment, state_data)
++    if not ok then state_data.bridge_error = tostring(err) end
++  end
++
+   return state_data
+ end
+ 
+--- a/src/lua/endpoints/sell.lua
++++ b/src/lua/endpoints/sell.lua
+@@ -32,7 +32,7 @@
+     },
+   },
+ 
+-  requires_state = { G.STATES.SELECTING_HAND, G.STATES.SHOP },
++  requires_state = { G.STATES.SELECTING_HAND, G.STATES.SHOP, G.STATES.SMODS_BOOSTER_OPENED },
+ 
+   ---@param args Request.Endpoint.Sell.Params
+   ---@param send_response fun(response: Response.Endpoint)
+@@ -144,7 +144,7 @@
+         local state_stable = G.STATE_COMPLETE == true
+ 
+         -- 5. Still in valid state
+-        local valid_state = (G.STATE == G.STATES.SHOP or G.STATE == G.STATES.SELECTING_HAND)
++        local valid_state = (G.STATE == G.STATES.SHOP or G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.SMODS_BOOSTER_OPENED)
+ 
+         -- All conditions must be met
+         if count_decreased and money_increased and card_gone and state_stable and valid_state then
