@@ -219,10 +219,15 @@ def run_games(
     threads: int = 0,
     deck: str = "red",
     stake: str = "white",
+    endless: bool = False,
+    endless_max_ante: int = 12,
 ) -> EvalResult:
     """Play the first episode of each of ``games`` envs and summarise (see the module docs).
     ``deck`` / ``stake``: the run configuration of every game (default Red / White, the
-    configuration all existing baselines and validation numbers refer to)."""
+    configuration all existing baselines and validation numbers refer to). ``endless``: the
+    run continues after the ante-8 win until it is lost or the boss of ``endless_max_ante`` is
+    beaten; ``win_rate`` keeps meaning "passed ante 8" (done code 2) and ``ante_hist`` /
+    ``antes`` give how far each game went (``endless_max_ante + 1`` = reached the cap)."""
     t0 = time.perf_counter()
     env = BalatroVecEnv(
         games,
@@ -231,6 +236,8 @@ def run_games(
         max_episode_steps=max_episode_steps,
         deck=deck,
         stake=stake,
+        endless=endless,
+        endless_max_ante=endless_max_ante,
     )
     obs, masks = env.reset()
     first = np.ones(games, dtype=bool)

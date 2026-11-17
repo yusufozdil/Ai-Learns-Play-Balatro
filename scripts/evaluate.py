@@ -75,6 +75,10 @@ def main() -> None:
     ap.add_argument("--max-episode-steps", type=int, default=ev.MAX_EPISODE_STEPS)
     ap.add_argument("--deck", default="red", help="deck name of every game (default red)")
     ap.add_argument("--stake", default="white", help="stake name of every game (default white)")
+    ap.add_argument(
+        "--endless", action="store_true", help="continue after the ante-8 win (see run_games)"
+    )
+    ap.add_argument("--endless-max-ante", type=int, default=12)
     args = ap.parse_args()
     set_seed, set_games = ev.EVAL_SETS[args.eval_set]
     if args.games is None:
@@ -92,6 +96,8 @@ def main() -> None:
     default_cfg = (args.deck, args.stake) == ("red", "white")
     cfg_suffix = "" if default_cfg else f"_{args.deck}_{args.stake}"
     mem_suffix = "" if args.memory == "normal" else f"_mem{args.memory}"
+    if args.endless:
+        cfg_suffix += f"_endless{args.endless_max_ante}"
     name = (args.name or args.checkpoint.parent.name + cfg_suffix) + set_suffix + mem_suffix
     kw = {
         "max_episode_steps": args.max_episode_steps,
@@ -99,6 +105,8 @@ def main() -> None:
         "stake": args.stake,
         "seed": seed,
     }
+    if args.endless:
+        kw.update(endless=True, endless_max_ante=args.endless_max_ante)
     suffix = (f"_{args.route}" if args.route else "") + cfg_suffix + set_suffix
 
     base: dict[str, ev.EvalResult] = {}
