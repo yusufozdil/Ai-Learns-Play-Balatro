@@ -13,11 +13,12 @@ use balatro_core::actions::Action;
 use balatro_core::agents::{Agent, HeuristicAgent};
 use balatro_core::blinds::BlindKind;
 use balatro_core::content::jokers::{JokerId, all_defs};
-use balatro_core::joker::JokerInstance;
-use balatro_core::rng::RngKey;
 use balatro_core::enums::Phase;
 use balatro_core::game::{Game, StepInfo};
+use balatro_core::joker::JokerInstance;
+use balatro_core::rng::RngKey;
 use balatro_core::state::{DeckKind, GameConfig, GameState, Outcome, StakeKind};
+use std::sync::Arc;
 
 /// Not done.
 pub const DONE_NO: u8 = 0;
@@ -110,6 +111,10 @@ pub const MAX_CONFIGS: usize = DeckKind::COUNT * StakeKind::COUNT;
 pub struct ConfigPool {
     len: usize,
     items: [(DeckKind, StakeKind); MAX_CONFIGS],
+    /// Cumulative sampling weights (`set_weights`); `weighted == false`: uniform (`hash % len`,
+    /// the original, bit-identical rule).
+    weighted: bool,
+    cum: [f64; MAX_CONFIGS],
 }
 
 impl ConfigPool {
@@ -117,6 +122,8 @@ impl ConfigPool {
     pub const EMPTY: ConfigPool = ConfigPool {
         len: 0,
         items: [(DeckKind::Red, StakeKind::White); MAX_CONFIGS],
+        weighted: false,
+        cum: [0.0; MAX_CONFIGS],
     };
 
     /// Cartesian product of `decks` and `stakes` (duplicates dropped, order kept).
@@ -138,6 +145,48 @@ impl ConfigPool {
         self.len
     }
 
+    /// The pairs in sampling order.
+    pub fn items(&self) -> &[(DeckKind, StakeKind)] {
+        &self.items[..self.len]
+    }
+
+    /// Sampling weights, one per pair in `items()` order (>= 0, finite, positive sum). They apply
+    /// to the episodes that start after the call (an episode's config is still a pure function of
+    /// `(base_seed, env, episode)` and the weights at that time). `None` restores the uniform rule.
+    pub fn set_weights(&mut self, w: Option<&[f64]>) -> Result<(), String> {
+        let Some(w) = w else {
+            self.weighted = false;
+            return Ok(());
+        };
+        if w.len() != self.len {
+            return Err(format!("expected {} weights, got {}", self.len, w.len()));
+        }
+        if w.iter().any(|x| !x.is_finite() || *x < 0.0) || w.iter().sum::<f64>() <= 0.0 {
+            return Err("weights must be finite, >= 0, with a positive sum".into());
+        }
+        let mut acc = 0.0;
+        for (c, x) in self.cum.iter_mut().zip(w) {
+            acc += x;
+            *c = acc;
+        }
+        self.weighted = true;
+        Ok(())
+    }
+
+    /// The pair for the hash `h` (uniform, or by the cumulative weights).
+    fn pick(&self, h: u64) -> (DeckKind, StakeKind) {
+        if !self.weighted {
+            return self.items[(h % self.len() as u64) as usize];
+        }
+        let total = self.cum[self.len - 1];
+        let t = (h >> 11) as f64 * (1.0 / (1u64 << 53) as f64) * total;
+        let i = self.cum[..self.len]
+            .iter()
+            .position(|&c| t < c)
+            .unwrap_or(self.len - 1);
+        self.items[i]
+    }
+
     /// No pairs (the fixed config is used).
     pub fn is_empty(&self) -> bool {
         self.len == 0
@@ -145,7 +194,7 @@ impl ConfigPool {
 }
 
 /// Settings shared by all envs of a pool.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Shared {
     /// Run options (the fixed config; `endless` also applies to sampled configs).
     pub config: GameConfig,
@@ -157,6 +206,35 @@ pub struct Shared {
     pub base_seed: u64,
     /// Reward terms.
     pub reward: RewardConfig,
+    /// Non-natural episode starts (scenarios, boss-hall states); off by default.
+    pub reset: ResetCfg,
+}
+
+/// Where an episode started (`Env::origin`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A fresh run from a seed (also after `import_state`: that is flagged `imported`).
+    Natural,
+    /// A randomized plausible mid-run state (`balatro_core::scenario`).
+    Scenario,
+    /// A boss-hall pool state with freshly re-sampled hidden information.
+    Hall,
+}
+
+/// Non-natural reset sources. All off (`0.0`) = the original auto-reset, bit for bit.
+#[derive(Debug, Clone, Default)]
+pub struct ResetCfg {
+    /// Probability that an auto-reset starts from a scenario (a pure function of
+    /// `(base_seed, env, episode)`).
+    pub scenario_prob: f64,
+    /// Probability that an auto-reset starts from a pool state (only with a non-empty pool).
+    pub hall_prob: f64,
+    /// Parsed pool states (validated once in `EnvPool::set_reset_pool`).
+    pub hall: Arc<Vec<GameState>>,
+    /// Indices into `hall` per stake (`StakeKind::index`): an auto-reset only draws a pool state
+    /// of the stake the normal (deck, stake) sampling picked, so `set_config_weights` keeps
+    /// governing the stake mix; with no state of that stake the reset is a natural one.
+    pub hall_by_stake: Arc<Vec<Vec<u32>>>,
 }
 
 impl Shared {
@@ -166,7 +244,7 @@ impl Shared {
             return self.config;
         }
         let h = splitmix64(derive_seed(self.base_seed, env, episode) ^ CONFIG_SALT);
-        let (deck, stake) = self.configs.items[(h % self.configs.len() as u64) as usize];
+        let (deck, stake) = self.configs.pick(h);
         GameConfig {
             deck,
             stake,
@@ -177,6 +255,10 @@ impl Shared {
 
 /// Salt that separates the config choice from the game seeds.
 const CONFIG_SALT: u64 = 0xC0F1_6000_0000_0001;
+/// Salt of the reset-source choice (scenario / hall) and of the hall pool index.
+const RESET_SALT: u64 = 0x5E5E_7000_0000_0001;
+/// Salt of the fresh seed a hall state is re-sampled with.
+const HALL_SALT: u64 = 0x4A11_0000_0000_0001;
 
 fn splitmix64(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -233,6 +315,10 @@ pub struct Finished {
     /// The episode started from an imported state (`Env::import_game`), not from a seed: it
     /// began mid-run and its steps / return count from the import only.
     pub imported: bool,
+    /// The episode started from a randomized scenario (`ResetCfg::scenario_prob`).
+    pub scenario: bool,
+    /// The episode started from a boss-hall pool state (`ResetCfg::hall_prob`).
+    pub hall: bool,
     /// The start joker the episode began with (`Env::start_joker`; `None` for imported episodes).
     pub start_joker: Option<JokerId>,
 }
@@ -282,6 +368,8 @@ pub struct Env {
     ep_invalid: u32,
     /// The current episode started from an imported state.
     imported: bool,
+    /// How the current episode started.
+    origin: Origin,
     /// Joker added at every (hard or auto) reset; `None` = none (bit-identical default).
     pub start_joker: Option<JokerId>,
     /// The start joker the CURRENT episode actually began with (`start_joker` may have been
@@ -323,6 +411,7 @@ impl Env {
             ep_return: 0.0,
             ep_invalid: 0,
             imported: false,
+            origin: Origin::Natural,
             start_joker: None,
             ep_start_joker: None,
             act_rng: splitmix64(derive_seed(sh.base_seed, u64::from(idx), u64::MAX)),
@@ -346,6 +435,7 @@ impl Env {
         self.ep_return = 0.0;
         self.ep_invalid = 0;
         self.imported = false;
+        self.origin = Origin::Natural;
         self.act_rng = splitmix64(derive_seed(sh.base_seed, idx, u64::MAX));
         self.teacher = None;
         self.finished.clear();
@@ -365,6 +455,7 @@ impl Env {
             ep_return: self.ep_return,
             ep_invalid: self.ep_invalid,
             imported: self.imported,
+            origin: self.origin,
             start_joker: self.start_joker,
             ep_start_joker: self.ep_start_joker,
             act_rng: self.act_rng,
@@ -413,24 +504,72 @@ impl Env {
         self.ep_return = 0.0;
         self.ep_invalid = 0;
         self.imported = true;
+        self.origin = Origin::Natural;
         self.teacher = None;
         Ok(())
     }
 
-    /// Start the next episode (auto-reset) with a derived seed.
+    /// Start the next episode (auto-reset) with a derived seed; with the reset sources of
+    /// `sh.reset` enabled, possibly from a scenario or a boss-hall state (a natural reset: the
+    /// previous episode already ended with `done`).
     fn next_episode(&mut self, sh: &Shared) {
         self.episode += 1;
         self.steps = 0;
         self.ep_return = 0.0;
         self.ep_invalid = 0;
         self.imported = false;
+        self.origin = Origin::Natural;
         self.teacher = None;
-        self.game.reset_with_seed(
-            derive_seed(sh.base_seed, u64::from(self.idx), self.episode),
-            sh.config_for(u64::from(self.idx), self.episode),
-        );
+        let idx = u64::from(self.idx);
+        let seed = derive_seed(sh.base_seed, idx, self.episode);
+        let config = sh.config_for(idx, self.episode);
+        let rc = &sh.reset;
+        if rc.scenario_prob > 0.0 || (rc.hall_prob > 0.0 && !rc.hall.is_empty()) {
+            let h = splitmix64(seed ^ RESET_SALT);
+            let u = (h >> 11) as f64 * (1.0 / (1u64 << 53) as f64);
+            if u < rc.scenario_prob {
+                self.game = balatro_core::scenario::random_scenario(seed, config);
+                self.origin = Origin::Scenario;
+                self.ep_start_joker = None;
+                self.refresh();
+                return;
+            }
+            let same_stake = rc
+                .hall_by_stake
+                .get(config.stake.index())
+                .filter(|v| !v.is_empty());
+            if rc.hall_prob > 0.0 && u >= rc.scenario_prob && u < rc.scenario_prob + rc.hall_prob {
+                if let Some(ids) = same_stake {
+                    let pick = ids[(splitmix64(h) % ids.len() as u64) as usize] as usize;
+                    let mut g = Game::from_state(rc.hall[pick].clone());
+                    g.reseed_hidden(splitmix64(seed ^ HALL_SALT), None);
+                    self.game = g;
+                    self.origin = Origin::Hall;
+                    self.ep_start_joker = None;
+                    self.refresh();
+                    return;
+                }
+            }
+        }
+        self.game.reset_with_seed(seed, config);
         self.apply_start_joker();
         self.refresh();
+    }
+
+    /// A natural episode sitting at the Blind select of an ante-`min_ante`-or-later boss: a state
+    /// worth keeping in a boss hall.
+    pub fn hall_candidate(&self, min_ante: i32) -> bool {
+        let s = self.game.state();
+        self.origin == Origin::Natural
+            && !self.imported
+            && s.phase == Phase::BlindSelect
+            && s.blind == BlindKind::Boss
+            && s.ante >= min_ante
+    }
+
+    /// Where the current episode started.
+    pub fn origin(&self) -> Origin {
+        self.origin
     }
 
     fn reward_of(sh: &Shared, info: &StepInfo, game: &Game, before: f32, won_before: bool) -> f32 {
@@ -534,6 +673,8 @@ impl Env {
                 deck: s.config.deck,
                 stake: s.config.stake,
                 imported: self.imported,
+                scenario: self.origin == Origin::Scenario,
+                hall: self.origin == Origin::Hall,
                 start_joker: self.ep_start_joker,
             });
             if auto_reset {
@@ -682,7 +823,9 @@ pub fn parse_joker(name: &str) -> Result<JokerId, String> {
             }
         }
     }
-    Err(format!("unknown joker {name:?} (display name, e.g. \"Greedy Joker\")"))
+    Err(format!(
+        "unknown joker {name:?} (display name, e.g. \"Greedy Joker\")"
+    ))
 }
 
 /// Parse the deck/stake names accepted by the Python constructors.
@@ -714,6 +857,7 @@ mod tests {
             max_steps: 100_000,
             base_seed: 5,
             reward: RewardConfig::default(),
+            reset: ResetCfg::default(),
         }
     }
 
@@ -747,7 +891,7 @@ mod tests {
     #[test]
     fn reorder_term_charges_only_valid_move_joker() {
         let base = shared();
-        let mut sh = base;
+        let mut sh = base.clone();
         sh.reward.reorder = -0.5;
         let (mut a, mut b) = (Env::new(0, &base), Env::new(0, &sh));
         let mut moves = 0;

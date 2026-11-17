@@ -28,8 +28,9 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import math
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +50,14 @@ KIND_NAMES = [
     "PickPackItem", "SkipPack", "RerollBoss",
 ]  # fmt: skip
 PARTS = ("kind", "arg0", "arg1", "cards")
+# Index order of the ``deck`` / ``stake`` columns of ``global_i`` (9 / 8 in the rollout buffers) =
+# DeckKind::ALL / StakeKind::ALL of the engine (tests_py/test_stake_v2.py checks the mapping).
+DECK_NAMES = (
+    "red", "blue", "yellow", "green", "black", "magic", "nebula", "ghost", "abandoned",
+    "checkered", "zodiac", "painted", "anaglyph", "plasma", "erratic",
+)  # fmt: skip
+STAKE_NAMES = ("white", "red", "green", "black", "blue", "purple", "orange", "gold")
+DECK_COL, STAKE_COL = 8, 9
 _SPEC = {n: (np.dtype(d), tuple(s)) for n, d, s in LAYOUT["buffers"]}
 
 
@@ -90,6 +99,20 @@ class PPOConfig:
     adam_eps: float = 1e-5
     target_kl: float | None = None  # stop the epochs early when approx_kl exceeds this
     norm_adv: bool = True
+    # --- stake ladder v2 (B2); every flag defaults to off = the previous training, bit for bit
+    adv_norm: str = "global"  # "global" (whole rollout) | "per_config" (within each stake)
+    adv_norm_min_rows: int = 256  # per_config: groups with fewer policy rows use the global stats
+    stake_curriculum: str = "off"  # "auto": re-weight the stakes of --stakes between updates
+    stake_curriculum_target: float = 0.3  # win rate at the peak of the weight bump
+    stake_curriculum_width: float = 0.3  # width of the bump
+    stake_curriculum_floor: float = 0.15  # weight floor (no stake is forgotten)
+    stake_curriculum_ema: float = 0.8  # EMA factor of the per-stake training win rate
+    stake_curriculum_min_eps: int = 20  # episodes of a stake per update needed to update its EMA
+    scenario_prob: float = 0.0  # P(reset starts from a randomized plausible state), <= 0.2
+    boss_hall: float = 0.0  # P(reset starts from a boss-hall pool state), pool: see below
+    boss_hall_size: int = 4096  # FIFO pool size (fresh states)
+    boss_hall_min_ante: int = 5  # only bosses of this ante or later enter the pool
+    boss_hall_per_update: int = 512  # at most this many new states per update (random subset)
     bootstrap_truncation: bool = True  # GAE bootstraps through step-limit truncation (not terminal)
     # --- speed options (all opt-in; the defaults are the original fp32 / eager training)
     update_dtype: str = "fp32"  # "bf16": autocast the update (and KL reference) passes
@@ -121,6 +144,11 @@ class PPOConfig:
         assert self.rollout_len % self.chunk == 0, "rollout_len must be a multiple of chunk"
         assert self.num_envs % self.group == 0, "num_envs must be a multiple of group"
         assert self.update_dtype in ("fp32", "bf16"), "update_dtype: fp32 | bf16"
+        assert self.adv_norm in ("global", "per_config"), "adv_norm: global | per_config"
+        assert self.stake_curriculum in ("off", "auto"), "stake_curriculum: off | auto"
+        assert 0.0 <= self.scenario_prob <= 0.2, "scenario_prob must be in [0, 0.2]"
+        assert 0.0 <= self.boss_hall <= 1.0, "boss_hall must be in [0, 1]"
+        assert self.scenario_prob + self.boss_hall <= 1.0, "scenario_prob + boss_hall must be <= 1"
 
 
 # --------------------------------------------------------------------------- pure helpers
@@ -160,6 +188,39 @@ def compute_gae(
         last = delta + gamma * lam * nonterm * last
         adv[t] = last
     return adv, adv + values
+
+
+def group_stats(
+    x: torch.Tensor, mask: torch.Tensor, group: torch.Tensor, n_groups: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Count, mean and (unbiased) std of ``x`` over the ``mask`` rows of each group
+    (``group`` holds ints in ``[0, n_groups)``, same shape as ``x``). Empty groups: 0 / 0 / 0."""
+    g = group[mask].long()
+    v = x[mask].double()
+    cnt = torch.bincount(g, minlength=n_groups).double()
+    mean = torch.bincount(g, weights=v, minlength=n_groups) / cnt.clamp(min=1.0)
+    dev = v - mean[g]
+    var = torch.bincount(g, weights=dev * dev, minlength=n_groups) / (cnt - 1.0).clamp(min=1.0)
+    return cnt, mean, var.sqrt()
+
+
+def normalize_adv_per_group(
+    adv: torch.Tensor,
+    ctrl: torch.Tensor,
+    group: torch.Tensor,
+    n_groups: int,
+    min_rows: int,
+) -> torch.Tensor:
+    """Advantage normalisation within each group of policy rows (``ctrl``): every row gets
+    ``(adv - mean) / (std + 1e-8)`` of its group; groups with fewer than ``min_rows`` policy rows
+    use the statistics of all policy rows (so a rare stake never has its few advantages blown up)."""
+    cnt, mean, std = group_stats(adv, ctrl, group, n_groups)
+    a = adv[ctrl]
+    g_mean, g_std = a.mean(), a.std()
+    use = cnt >= min_rows
+    mean = torch.where(use, mean, g_mean.double()).to(adv.dtype)
+    std = torch.where(use, std, g_std.double()).to(adv.dtype)
+    return (adv - mean[group.long()]) / (std[group.long()] + 1e-8)
 
 
 def _rows(x: torch.Tensor, t0: int, t1: int, idx: torch.Tensor) -> torch.Tensor:
@@ -292,6 +353,17 @@ class Trainer:
             **self.env_configs(cfg),
         )
         self.obs, self.masks = self.env.reset()
+        # Stake ladder v2 (all off by default: the env is then never touched below).
+        if cfg.scenario_prob > 0:
+            self.env.set_scenario_prob(cfg.scenario_prob)
+        self.hall_on = cfg.boss_hall > 0
+        self.hall_pool: deque = deque(maxlen=max(1, cfg.boss_hall_size))
+        self._hall_new: dict = {}
+        self._hall_rng = np.random.default_rng(cfg.seed + 7919 * (self.resumes + 1))
+        self.stake_ema: dict[str, float] = {}
+        self.stake_weights: dict[str, float] = {}
+        if cfg.stake_curriculum == "auto":
+            assert len(self.env.config_pool()) > 1, "--stake-curriculum auto needs >= 2 configs"
         n = cfg.num_envs
         self.first = torch.ones(n, dtype=torch.bool, device=self.dev)
         self.hidden = self.model.init_hidden(n)
@@ -396,6 +468,9 @@ class Trainer:
                 b["value"][t] = value
                 b["ctrl"][t] = torch.from_numpy(ctrl).to(dev)
                 b["phase"][t] = torch.from_numpy(phase.astype(np.int64)).to(dev)
+            if self.hall_on:
+                for i, ante, _boss, stake, js in self.env.hall_collect(cfg.boss_hall_min_ante):
+                    self._hall_new[(i, ante)] = (stake, js)  # keep the last export per (env, ante)
             with p("env_step"):
                 _, _, reward, done, inv = self.env.step(a_np)
             invalid += int(inv.sum())
@@ -407,7 +482,7 @@ class Trainer:
         self.last_value, _ = model.value(o, m, self.hidden, first=self.first)
         if dev.type == "cuda":
             torch.cuda.synchronize()
-        fin = self.env.drain_finished()
+        fin = self.env.drain_finished_ex()
         return {
             "rollout_seconds": time.perf_counter() - t_start,
             "model_seconds": model_s,
@@ -491,9 +566,16 @@ class Trainer:
                 b["trunc"] if cfg.bootstrap_truncation else None,
             )
             ctrl = b["ctrl"]
+            stake_rows = b["global_i"][..., STAKE_COL]
+            adv_log = self._adv_logging(adv, ctrl, stake_rows)  # logging only (raw GAE advantages)
             if cfg.norm_adv and ctrl.any():
-                a = adv[ctrl]
-                adv = (adv - a.mean()) / (a.std() + 1e-8)
+                if cfg.adv_norm == "per_config":
+                    adv = normalize_adv_per_group(
+                        adv, ctrl, stake_rows, len(STAKE_NAMES), cfg.adv_norm_min_rows
+                    )
+                else:
+                    a = adv[ctrl]
+                    adv = (adv - a.mean()) / (a.std() + 1e-8)
         beta = self._kl_coef()
         with p("kl_reference_pass"):
             ref_logp = self._ref_logprobs() if self.ref is not None and beta > 0 else None
@@ -629,12 +711,33 @@ class Trainer:
             stats[f"rows/{hn}"] = float(ent_cnt[h]) / n_mb
             for pi, part in enumerate(PARTS):
                 stats[f"ent/{hn}/{part}"] = float(ent_part[h, pi] / ent_cnt_c[h])
+        stats.update(adv_log)
         stats["update_seconds"] = time.perf_counter() - t_start
         if self.timer is not None:
             stats["prof"] = self.timer.take()  # rollout/* (from collect) and update/* sections
         if self.dev.type == "cuda":
             stats["peak_vram_gb"] = torch.cuda.max_memory_allocated() / 2**30
         return stats
+
+    def _adv_logging(self, adv: torch.Tensor, ctrl: torch.Tensor, stake_rows: torch.Tensor) -> dict:
+        """Per stake (and per deck) mean / std / policy-row count of the raw GAE advantages
+        (``adv_mean/<stake>``, ``adv_std/<stake>``, ``adv_rows/<stake>``, ``adv_*_deck/<deck>``).
+        Reads tensors only: no effect on training."""
+        out: dict = {}
+        if not ctrl.any():
+            return out
+        b = self.buf
+        for names, rows, tag in (
+            (STAKE_NAMES, stake_rows, ""),
+            (DECK_NAMES, b["global_i"][..., DECK_COL], "_deck"),
+        ):
+            cnt, mean, std = (x.cpu().tolist() for x in group_stats(adv, ctrl, rows, len(names)))
+            for i, name in enumerate(names):
+                if cnt[i] > 0:
+                    out[f"adv_std{tag}/{name}"] = std[i]
+                    out[f"adv_mean{tag}/{name}"] = mean[i]
+                    out[f"adv_rows{tag}/{name}"] = int(cnt[i])
+        return out
 
     # ------------------------------------------------------------------ rollout statistics
 
@@ -654,6 +757,21 @@ class Trainer:
         return out
 
     @staticmethod
+    def _tuples(fin: list[dict]) -> list:
+        return [
+            (
+                r["env"],
+                r["ante"],
+                r["code"],
+                r["steps"],
+                r["return"],
+                r["blinds_beaten"],
+                r["invalid"],
+            )
+            for r in fin
+        ]
+
+    @staticmethod
     def episode_stats(fin: list) -> dict:
         if not fin:
             return {"episodes": 0}
@@ -668,6 +786,76 @@ class Trainer:
             "ep_blinds": float(np.mean([r[5] for r in fin])),
             "ep_invalid": float(np.mean([r[6] for r in fin])),
         }
+
+    @classmethod
+    def finished_stats(cls, fin: list[dict]) -> dict:
+        """Episode statistics of the finished records (``drain_finished_ex``): ``ep_*`` over the
+        natural episodes only (the previous definition when no scenario / pool reset is on), per
+        stake ``ep_win/<stake>`` ``ep_ante/<stake>`` ``ep_n/<stake>`` (natural), and separate
+        ``scn_*`` / ``hall_*`` statistics of the episodes that began from a scenario / a
+        boss-hall state (those start mid-run: steps, returns and antes are not comparable)."""
+        nat = [r for r in fin if not r["scenario"] and not r["hall"]]
+        out = cls.episode_stats(cls._tuples(nat))
+        for stake in sorted({r["stake"] for r in nat}):
+            rs = [r for r in nat if r["stake"] == stake]
+            out[f"ep_n/{stake}"] = len(rs)
+            out[f"ep_win/{stake}"] = float(np.mean([r["code"] == 2 for r in rs]))
+            out[f"ep_ante/{stake}"] = float(np.mean([r["ante"] for r in rs]))
+        for tag, key in (("scn", "scenario"), ("hall", "hall")):
+            rs = [r for r in fin if r[key]]
+            if rs:
+                st = cls.episode_stats(cls._tuples(rs))
+                out.update(
+                    {f"{tag}_{k[3:] if k.startswith('ep_') else k}": v for k, v in st.items()}
+                )
+        return out
+
+    # ------------------------------------------------------------------ stake ladder v2
+
+    def update_stake_weights(self, fin: list[dict]) -> dict:
+        """``--stake-curriculum auto``: EMA of the per-stake training win rate (natural episodes),
+        weight ``floor + exp(-((win - target) / width)^2)`` per stake of ``--stakes`` (a stake
+        without data yet counts as on target), spread evenly over the decks of the pool, pushed
+        with ``set_config_weights`` (applies to the episodes that start afterwards)."""
+        cfg = self.cfg
+        nat = [r for r in fin if not r["scenario"] and not r["hall"]]
+        pool = self.env.config_pool()
+        stakes = list(dict.fromkeys(s for _, s in pool))
+        for st in stakes:
+            rs = [r["code"] == 2 for r in nat if r["stake"] == st]
+            if len(rs) >= cfg.stake_curriculum_min_eps:
+                w = float(np.mean(rs))
+                prev = self.stake_ema.get(st)
+                a = cfg.stake_curriculum_ema
+                self.stake_ema[st] = w if prev is None else a * prev + (1 - a) * w
+        raw = {}
+        for st in stakes:
+            win = self.stake_ema.get(st, cfg.stake_curriculum_target)
+            z = (win - cfg.stake_curriculum_target) / cfg.stake_curriculum_width
+            raw[st] = cfg.stake_curriculum_floor + math.exp(-z * z)
+        total = sum(raw.values())
+        self.stake_weights = {st: raw[st] / total for st in stakes}
+        per_stake = {st: sum(1 for _, s in pool if s == st) for st in stakes}
+        self.env.set_config_weights([self.stake_weights[s] / per_stake[s] for _, s in pool])
+        return self.stake_weights
+
+    def update_hall(self) -> dict:
+        """Boss hall: add this rollout's boss-select states (random subset) to the FIFO pool and
+        push the pool to the env."""
+        cfg = self.cfg
+        new, self._hall_new = list(self._hall_new.values()), {}
+        if len(new) > cfg.boss_hall_per_update:
+            keep = self._hall_rng.choice(len(new), cfg.boss_hall_per_update, replace=False)
+            new = [new[i] for i in sorted(keep)]
+        self.hall_pool.extend(new)
+        if self.hall_pool:
+            self.env.set_reset_pool([js for _, js in self.hall_pool], cfg.boss_hall)
+        out = {"hall_pool": len(self.hall_pool), "hall_added": len(new)}
+        for st in STAKE_NAMES:  # composition: a reset only draws a state of its own stake
+            n = sum(1 for k, _ in self.hall_pool if k == st)
+            if n:
+                out[f"hall_pool/{st}"] = n
+        return out
 
     # ------------------------------------------------------------------ checkpoints / eval
 
@@ -756,6 +944,12 @@ class Trainer:
             st = self.update()
             self.update_idx += 1
             fin = col.pop("finished")
+            v2: dict = {}
+            if cfg.stake_curriculum == "auto":
+                v2["stake_weights"] = self.update_stake_weights(fin)
+                v2["stake_win_ema"] = dict(self.stake_ema)
+            if self.hall_on:
+                v2.update(self.update_hall())
             roll_s, upd_s = col["rollout_seconds"], st["update_seconds"]
             rec = {
                 "type": "update",
@@ -769,7 +963,8 @@ class Trainer:
                 "mean_reward_step": float(self.buf["reward"].mean()),
                 **col,
                 **st,
-                **self.episode_stats(fin),
+                **self.finished_stats(fin),
+                **v2,
                 "actions": self.action_stats(),
             }
             line = (

@@ -715,6 +715,7 @@ mod tests {
             max_steps: 100_000,
             base_seed: 11,
             reward: RewardConfig::default(),
+            reset: crate::env::ResetCfg::default(),
         };
         let (mut saw_shop, mut saw_pack) = (false, false);
         for idx in 0..6 {

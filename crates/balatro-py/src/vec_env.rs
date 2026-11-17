@@ -14,14 +14,14 @@
 //! Interface: `docs/design/rl_interface.md`. Buffers: [`crate::layout`].
 
 use crate::env::{
-    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, Finished, RewardConfig, Shared, game_from_json,
-    parse_config, parse_joker, parse_streams,
+    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, Finished, ResetCfg, RewardConfig, Shared,
+    game_from_json, parse_config, parse_joker, parse_streams,
 };
+use crate::layout::{Bufs, PyBufs};
 use balatro_core::content::jokers::JokerId;
 use balatro_core::rng::RngKey;
 use balatro_core::serialize::state_to_json;
-use crate::layout::{Bufs, PyBufs};
-use balatro_core::state::GameConfig;
+use balatro_core::state::{GameConfig, StakeKind};
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -53,6 +53,7 @@ impl EnvPool {
             max_steps: max_steps.max(1),
             base_seed: seed,
             reward,
+            reset: ResetCfg::default(),
         };
         let envs = (0..num_envs).map(|i| Env::new(i as u32, &shared)).collect();
         let mut p = EnvPool {
@@ -108,7 +109,7 @@ impl EnvPool {
         if let Some(s) = seed {
             self.shared.base_seed = s;
         }
-        let sh = self.shared;
+        let sh = self.shared.clone();
         let chunk = self.chunk();
         let work = |ci: usize, envs: &mut [Env]| {
             for (j, e) in envs.iter_mut().enumerate() {
@@ -135,7 +136,7 @@ impl EnvPool {
     /// Step env `i` with `actions[4 * i..4 * i + 4]`; writes observation, masks, reward, done and
     /// invalid into `bufs`.
     pub fn step(&mut self, actions: &[i64], bufs: &Bufs<'_>) -> Result<(), String> {
-        let sh = self.shared;
+        let sh = self.shared.clone();
         let chunk = self.chunk();
         let work = |ci: usize, envs: &mut [Env], acts: &[i64]| -> Result<(), String> {
             for (j, e) in envs.iter_mut().enumerate() {
@@ -192,7 +193,7 @@ impl EnvPool {
     /// agents are not consulted: a curriculum asks the teacher about a fraction of the envs only
     /// (a full call costs 4-8k actions/s).
     pub fn teacher_actions_where(&mut self, out: &mut [i64], select: Option<&[bool]>) {
-        let sh = self.shared;
+        let sh = self.shared.clone();
         let work = |e: &mut Env, o: &mut [i64], on: bool| {
             if on {
                 o.copy_from_slice(&e.teacher_parts(&sh));
@@ -245,7 +246,7 @@ impl EnvPool {
             return Err(self.index_err(i));
         }
         let game = game_from_json(json, reseed, streams)?;
-        let sh = self.shared;
+        let sh = self.shared.clone();
         let e = &mut self.envs[i];
         e.import_game(game, &sh)?;
         // SAFETY: single-threaded, no other row reference is alive.
@@ -272,8 +273,109 @@ impl EnvPool {
         Ok(())
     }
 
+    /// Sampling weights of the `(deck, stake)` pairs (`config_pool()` order); `None` = uniform.
+    /// Applies to the episodes that start afterwards.
+    pub fn set_config_weights(&mut self, w: Option<&[f64]>) -> Result<(), String> {
+        if self.shared.configs.is_empty() {
+            return Err("no (deck, stake) pool: build the env with `decks=` / `stakes=`".into());
+        }
+        self.shared.configs.set_weights(w)
+    }
+
+    /// The `(deck, stake)` pairs episodes are drawn from (empty: the fixed configuration).
+    pub fn config_pool(&self) -> Vec<(&'static str, &'static str)> {
+        self.shared
+            .configs
+            .items()
+            .iter()
+            .map(|(d, s)| (d.name(), s.name()))
+            .collect()
+    }
+
+    /// Probability that an auto-reset starts from a randomized scenario (`0` = never, the
+    /// original behaviour bit for bit).
+    pub fn set_scenario_prob(&mut self, p: f64) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&p) {
+            return Err(format!("scenario probability {p} not in [0, 1]"));
+        }
+        self.shared.reset.scenario_prob = p;
+        Ok(())
+    }
+
+    /// Set the reset pool (exported states, parsed and validated once here) and the probability
+    /// that an auto-reset starts from a random pool state with freshly re-sampled hidden
+    /// information (all RNG streams). An empty pool or `prob == 0` disables it.
+    pub fn set_reset_pool(&mut self, states: &[String], prob: f64) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&prob) {
+            return Err(format!("pool probability {prob} not in [0, 1]"));
+        }
+        let mut pool = Vec::with_capacity(states.len());
+        for (k, json) in states.iter().enumerate() {
+            let game =
+                game_from_json(json, None, None).map_err(|e| format!("pool state {k}: {e}"))?;
+            if game.is_terminal() {
+                return Err(format!("pool state {k} is a finished run"));
+            }
+            if game.state().config.endless != self.shared.config.endless {
+                return Err(format!(
+                    "pool state {k}: endless flag differs from the env's"
+                ));
+            }
+            pool.push(game.into_state());
+        }
+        let mut by_stake = vec![Vec::new(); StakeKind::COUNT];
+        for (k, st) in pool.iter().enumerate() {
+            by_stake[st.config.stake.index()].push(k as u32);
+        }
+        self.shared.reset.hall = std::sync::Arc::new(pool);
+        self.shared.reset.hall_by_stake = std::sync::Arc::new(by_stake);
+        self.shared.reset.hall_prob = prob;
+        Ok(())
+    }
+
+    /// Number of states in the reset pool.
+    pub fn reset_pool_len(&self) -> usize {
+        self.shared.reset.hall.len()
+    }
+
+    /// Export every env that is a boss-hall candidate right now (natural episode at the Blind
+    /// select of an ante >= `min_ante` boss): `(env, ante, boss, json)`.
+    pub fn hall_collect(&self, min_ante: i32) -> Vec<(usize, i32, String, &'static str, String)> {
+        self.envs
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.hall_candidate(min_ante))
+            .map(|(i, e)| {
+                let s = e.game.state();
+                (
+                    i,
+                    s.ante,
+                    s.boss.map_or_else(String::new, |b| format!("{b:?}")),
+                    s.config.stake.name(),
+                    state_to_json(s, false),
+                )
+            })
+            .collect()
+    }
+
+    /// How each env's current episode started: 0 natural, 1 scenario, 2 hall.
+    pub fn origins(&self) -> Vec<u8> {
+        use crate::env::Origin;
+        self.envs
+            .iter()
+            .map(|e| match e.origin() {
+                Origin::Natural => 0,
+                Origin::Scenario => 1,
+                Origin::Hall => 2,
+            })
+            .collect()
+    }
+
     fn index_err(&self, i: usize) -> String {
-        format!("env index {i} out of range (num_envs = {})", self.envs.len())
+        format!(
+            "env index {i} out of range (num_envs = {})",
+            self.envs.len()
+        )
     }
 
     /// Take (and clear) the summaries of the episodes that finished since the last call, ordered
@@ -378,7 +480,7 @@ impl VecEnv {
     #[new]
     #[pyo3(signature = (num_envs, seed=0, num_threads=0, max_episode_steps=DEFAULT_MAX_EPISODE_STEPS,
                         deck="red", stake="white", endless=false, reward=None, decks=None,
-                        stakes=None))]
+                        stakes=None, scenario_prob=0.0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         num_envs: usize,
@@ -391,6 +493,7 @@ impl VecEnv {
         reward: Option<&Bound<'_, PyDict>>,
         decks: Option<Vec<String>>,
         stakes: Option<Vec<String>>,
+        scenario_prob: f64,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(val_err("num_envs must be >= 1".into()));
@@ -411,6 +514,10 @@ impl VecEnv {
             configs,
         )
         .map_err(PyRuntimeError::new_err)?;
+        let mut pool = pool;
+        if scenario_prob != 0.0 {
+            pool.set_scenario_prob(scenario_prob).map_err(val_err)?;
+        }
         Ok(VecEnv { pool })
     }
 
@@ -546,6 +653,53 @@ impl VecEnv {
             .map_err(val_err)
     }
 
+    /// Sampling weights of the `(deck, stake)` pool (one per pair, `config_pool()` order; `None` =
+    /// uniform). Applies to the episodes that start after the call.
+    #[pyo3(signature = (weights=None))]
+    fn set_config_weights(&mut self, weights: Option<Vec<f64>>) -> PyResult<()> {
+        self.pool
+            .set_config_weights(weights.as_deref())
+            .map_err(val_err)
+    }
+
+    /// The `(deck, stake)` name pairs episodes are drawn from, in `set_config_weights` order.
+    fn config_pool(&self) -> Vec<(&'static str, &'static str)> {
+        self.pool.config_pool()
+    }
+
+    /// Probability that an auto-reset starts from a randomized, plausible mid-run scenario
+    /// (`balatro_core::scenario`; a pure function of seed, env and episode; episodes flagged
+    /// `scenario` in `drain_finished_ex`). 0 = never (default).
+    fn set_scenario_prob(&mut self, p: f64) -> PyResult<()> {
+        self.pool.set_scenario_prob(p).map_err(val_err)
+    }
+
+    /// Reset pool: exported states (JSON strings, parsed once here) and the probability that an
+    /// auto-reset starts from a random pool state of the sampled stake (natural reset if the pool
+    /// has none), reseeded with a fresh seed (every RNG stream: same visible state, new hidden
+    /// future). Episodes are flagged `hall` in
+    /// `drain_finished_ex`. Empty list or `prob == 0` disables it.
+    fn set_reset_pool(&mut self, states: Vec<String>, prob: f64) -> PyResult<()> {
+        self.pool.set_reset_pool(&states, prob).map_err(val_err)
+    }
+
+    /// Number of states in the reset pool.
+    fn reset_pool_len(&self) -> usize {
+        self.pool.reset_pool_len()
+    }
+
+    /// Boss-hall candidates now: natural episodes at the Blind select of an ante >= `min_ante`
+    /// boss, as `(env, ante, boss, stake, state_json)`.
+    #[pyo3(signature = (min_ante=5))]
+    fn hall_collect(&self, min_ante: i32) -> Vec<(usize, i32, String, &'static str, String)> {
+        self.pool.hall_collect(min_ante)
+    }
+
+    /// Per env: how the current episode started (0 natural, 1 scenario, 2 boss-hall state).
+    fn origins(&self) -> Vec<u8> {
+        self.pool.origins()
+    }
+
     /// Per-env start joker (list of `num_envs` names or `None`), added to the fresh run at the
     /// next `reset()` / auto-reset of that env. `None` entries: no start joker.
     fn set_start_jokers(&mut self, jokers: Vec<Option<String>>) -> PyResult<()> {
@@ -559,7 +713,7 @@ impl VecEnv {
 
     /// Like `drain_finished` (and sharing its queue) with named fields: a list of dicts with
     /// `env, ante, code, steps, return, blinds_beaten, invalid, deck, stake, imported,
-    /// start_joker`.
+    /// scenario, hall, start_joker`.
     fn drain_finished_ex<'py>(&mut self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
         self.pool
             .drain_finished()
@@ -576,6 +730,8 @@ impl VecEnv {
                 d.set_item("deck", f.deck.name())?;
                 d.set_item("stake", f.stake.name())?;
                 d.set_item("imported", f.imported)?;
+                d.set_item("scenario", f.scenario)?;
+                d.set_item("hall", f.hall)?;
                 d.set_item(
                     "start_joker",
                     f.start_joker.and_then(|id| {

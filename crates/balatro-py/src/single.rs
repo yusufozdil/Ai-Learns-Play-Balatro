@@ -3,8 +3,8 @@
 //! stays inspectable). Not performance-critical; use `VecEnv` for training.
 
 use crate::env::{
-    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, RewardConfig, Shared, game_from_json,
-    parse_config, parse_joker, parse_streams,
+    ConfigPool, DEFAULT_MAX_EPISODE_STEPS, Env, RewardConfig, Shared, game_from_json, parse_config,
+    parse_joker, parse_streams,
 };
 use crate::layout::{MASK_NAMES, OBS_NAMES, Owned, sel_row};
 use crate::vec_env::parse_reward;
@@ -56,6 +56,7 @@ impl PyGame {
             max_steps: max_episode_steps.max(1),
             base_seed: seed,
             reward,
+            reset: crate::env::ResetCfg::default(),
         };
         // Env `env_index` of a pool with base seed `seed`: the same first episode as
         // `VecEnv(.., seed)[env_index]` (0 by default).
@@ -74,7 +75,7 @@ impl PyGame {
     fn clone(&self) -> PyGame {
         PyGame {
             env: self.env.fork(),
-            sh: self.sh,
+            sh: self.sh.clone(),
         }
     }
 
@@ -104,14 +105,15 @@ impl PyGame {
         env_index: u32,
     ) -> PyResult<PyGame> {
         let streams = parse_streams(streams).map_err(PyValueError::new_err)?;
-        let game = game_from_json(state, reseed, streams.as_deref())
-            .map_err(PyValueError::new_err)?;
+        let game =
+            game_from_json(state, reseed, streams.as_deref()).map_err(PyValueError::new_err)?;
         let sh = Shared {
             config: game.state().config,
             configs: ConfigPool::EMPTY,
             max_steps: max_episode_steps.max(1),
             base_seed: 0,
             reward: parse_reward(reward)?,
+            reset: crate::env::ResetCfg::default(),
         };
         let mut env = Env::new(env_index, &sh);
         env.import_game(game, &sh).map_err(PyValueError::new_err)?;
