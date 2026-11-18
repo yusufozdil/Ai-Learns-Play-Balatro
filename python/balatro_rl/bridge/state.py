@@ -373,6 +373,10 @@ def translate(
     boss_id = s["boss"]
     if boss_id == "TheOx":
         bs["hand"] = _hand_name_to_id(cr.get("most_played_poker_hand"))
+    if boss_id == "TheMouth" and phase == "Play":
+        # the first hand type of the round locks the others (they score 0); the real game
+        # keeps it in `G.GAME.blind.only_hand`
+        bs["hand"] = _hand_name_to_id(bl.get("only_hand"))
     bs["removed"] = int(bl.get("hands_sub") or 0) + int(bl.get("discards_sub") or 0)
     bs["draws"] = 1 + int(cr.get("hands_played", 0) or 0) + int(cr.get("discards_used", 0) or 0)
     bs["triggered"] = bool(bl.get("triggered"))

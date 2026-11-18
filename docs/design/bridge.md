@@ -47,14 +47,14 @@ Files:
 | `runner.py` | `Runner`, `ModelPolicy`, `RandomPolicy`, JSONL log, known-bug blocks |
 | `bridge/lua/` | the Lua patch (section 2) |
 
-## 2. The Lua patch (`bridge/`, version 3)
+## 2. The Lua patch (`bridge/`, version 4)
 
 Stock BalatroBot 1.5.2 gives joker counters only as effect *text* and exposes none of the
 round-target cards (Idol / Ancient / Castle / Mail-In), held tags, the boss state, the open pack's
 kind, the full deck or the discard pile, and has no Director's Cut / Retcon endpoint. The patch is
 minimal and separately versioned:
 
-* `bridge/lua/bridge_ext.lua` (new file, `VERSION = 3`): `card_raw(card)` (the raw `card.ability`
+* `bridge/lua/bridge_ext.lua` (new file, `VERSION = 4`; v4 adds `bridge.cash_out_ready` and `bridge.paused`): `card_raw(card)` (the raw `card.ability`
   table, seal, edition, base rank/suit, debuff, facing, centre key, costs) and `game_raw()`
   (selected `G.GAME` fields: `current_round` incl. `idol_card` / `ancient_card` / `castle_card` /
   `mail_card` / `free_rerolls` / `reroll_cost_increase`, `round_resets`, held `tags`, the `blind` object, `orbital_choices`,
@@ -66,7 +66,7 @@ minimal and separately versioned:
   boss pane is rebuilt.
 * `bridge/lua/endpoints/continue_endless.lua` (new endpoint `continue_endless`, only in
   `ROUND_EVAL` after a win): waits for the win screen and presses its "Endless" button
-  (`G.FUNCS.exit_overlay_menu`); `cash_out` follows. BalatroBot has no such call.
+  (`G.FUNCS.exit_overlay_menu`); `cash_out` follows once `bridge.cash_out_ready` is true. BalatroBot has no such call.
 * `bridge/lua/balatrobot-1.5.2.patch`: a small diff of three stock files (`balatrobot.lua`: load the
   extension and register the endpoints; `src/lua/utils/gamestate.lua`: add `raw` to every card and
   call `augment`; `src/lua/endpoints/sell.lua`: allow `sell` while a booster pack is open, the stock
@@ -222,12 +222,12 @@ BalatroBot's own `modifier.enhancement` field is *localised text* (#194) and is 
 | `MENU` | `start {deck, stake, seed}` (the runner first calls `menu` if a run is open) |
 | `BLIND_SELECT` | translate -> BlindSelect |
 | `SELECTING_HAND` | translate -> Play |
-| `ROUND_EVAL` | `cash_out` (not an engine phase) |
 | `SHOP` | translate -> Shop |
 | `SMODS_BOOSTER_OPENED` | translate -> PackOpen |
 | `HAND_PLAYED`, `DRAW_TO_HAND`, `NEW_ROUND`, `*_PACK`, `PLAY_TAROT` or `bridge.controller_locked` | transition: poll every 0.4 s up to 90 s |
 | `GAME_OVER` | loss; the next game starts with `menu` |
-| `won == true` (ante-8 boss beaten) | win; without `--endless` the run is abandoned. With `--endless` the runner presses `continue_endless`, `cash_out`s and keeps playing with `endless=True` engine states until the run is lost or the boss of `--endless-max-ante` (default 12) is beaten (`ante_num > cap`); the log has `won_ante` and `endless_ante` (highest ante reached), the outcome stays `win` |
+| `won == true` (ante-8 boss beaten) | win, recorded the moment the gamestate shows it (`won_ante = 8`, `ante_num` already reads 9 on the win screen), whatever happens afterwards. Without `--endless` the run is abandoned. With `--endless` the runner presses `continue_endless`, waits for `bridge.cash_out_ready`, `cash_out`s and keeps playing with `endless=True` engine states until the run is lost or the boss of `--endless-max-ante` (default 12) is beaten (`ante_num > cap`). The log has `won_ante`, `endless_ante` (highest `ante_num` seen) and `endless_end` (`loss` / `cap` for a regular end; `crash` / `hang` / `error` / `max_decisions` when the continuation broke down). The outcome is `win` in all cases |
+| `ROUND_EVAL` | `cash_out`, but only once `bridge.cash_out_ready` (all end-of-round rows built, cash-out button exists); polled up to 90 s (`Runner.wait_cash_out_ready`) |
 
 ## 7. Hidden information
 
@@ -269,8 +269,8 @@ removes tag jokers too in both. Real prices equal the engine's (2034 checked sho
 | `sell` only in SELECTING_HAND / SHOP, `use` only in SELECTING_HAND / SHOP | the engine allows both while a pack is open; 3260 rejected `SellJoker` in one game | `sell` patched (section 2); `use` of a held consumable in a pack is masked (`known_bug_blocks`) |
 | `buy` refuses a joker / consumable when the slots are full | engine allows Negative / BuyAndUse | rejection path (logged with context) |
 | `use` of a consumable "cannot be used at this time" while the game is still animating | rejected action | retried up to 3x after 1.5 s |
-| `continue_endless` + `cash_out` after the ante-8 win crashes the game | endless mode only | experimental, see section 11 |
-| any unanswered call | `BridgeTimeout` | the game is recorded as `hang`; the runner waits for the game to answer `health` before the next game |
+| stock `play` returns early once `G.GAME.won` is set (every round of an endless run); an immediate `cash_out` crashes the game (`G.round_eval` nil) | endless mode only | `bridge.cash_out_ready` is polled before every `cash_out` (section 11, Endless mode) |
+| any unanswered call | `BridgeTimeout` | the game is recorded as `hang` (or, after the ante-8 win, as a `win` with `endless_end: hang`); `bridge_play.py` restarts the game (section 12) |
 | `Lua` empty tables are JSON `[]` even when they are maps | e.g. `used_vouchers: []` | `state._dict` / `_list` accept both |
 
 ## 10. What cannot be mapped, and known gaps
@@ -282,7 +282,7 @@ removes tag jokers too in both. Real prices equal the engine's (2034 checked sho
 * **`boss_state.draws`** is approximated; `triggered` comes from the blind object; boss effects that
   keep per-round counters beyond those (The Wheel's draws, The Hook's discards) are not
   reconstructed mid-round, they only matter for the *prediction* of later hands.
-* **Endless mode**: off by default (the run stops at the ante-8 win, which is what the win rate measures); `--endless` continues through the patch's `continue_endless` endpoint (section 6).
+* **Endless mode**: off by default (the run stops at the ante-8 win, which is what the win rate measures); `--endless` continues through the patch's `continue_endless` endpoint (sections 6 and 11).
 * **Challenge / seeded runs**: only deck and stake of `start`.
 * **Stakes above White** translate (stickers, `perish_tally`, rental) but have not been run against the real game.
 * **Joker `Throwback`/`Fortune Teller`/... retroactive stats** use the run counters; `Rocket`/`Satellite`
@@ -366,23 +366,69 @@ table (Joker .. Burglar, `runs/bridge/sweep1.jsonl`) gave 94 plays, all `exact` 
 (Misprint, Space Joker); Ramen, Raised Fist and Constellation were also exact in the smoke run. The
 sweep is slow (about 2 jokers per minute) and was stopped there for time; the rest is open.
 
-### Endless mode (`--endless`, EXPERIMENTAL, default off)
+### Endless mode (`--endless`, default off)
 
 After the ante-8 win the game shows the win screen (paused game, "Endless" button =
 `G.FUNCS.exit_overlay_menu`), BalatroBot has no call for it, so the patch adds `continue_endless`.
-Status: works in short scripted scenarios (`set ante 8`, `set chips`, play one card, with and without
-end-of-round joker rows) and in one organic game (seed `BRG026`: won, continued 3 rounds, lost at the
-next boss, `endless_ante` logged). In organic game `BRG027` (win at the ante-8 boss) the
-following `cash_out` **crashes the game** (`functions/common_events.lua:1148: attempt to index field
-'round_eval' (a nil value)`, reproduced twice, Lua crash screen; the API then times out). A second
-variant of the endpoint that waited for the cash-out button and an idle event queue made
-`continue_endless` itself time out (the game was alive, in `ROUND_EVAL`, and a plain `cash_out` ten
-minutes later worked). Best hypothesis: the win overlay pauses the game; after it is dismissed the
-end-of-round rows (`add_round_eval_row` events) are still being added for many seconds (many held
-cards / jokers) and `G.FUNCS.cash_out` removes `G.round_eval` under them. The runner therefore sleeps
-`endless_wait` (25 s) after `continue_endless`; this last variant is **untested**. Default runs never
-use any of it.
 
+**Root cause of the old crashes** (`functions/common_events.lua:1148: attempt to index field
+'round_eval' (a nil value)`, seed `BRG027` 4 of 4 times with `runs/st2_v2_s1/latest.pt`, logs
+`runs/bridge/endless2..5`): line 1148 of the lovely-patched dump is
+`G.round_eval:add_child(full_row, ...)`, an event of `add_round_eval_row`. The cash-out rows are
+queued by `evaluate_round` and built by events over several seconds; `G.FUNCS.cash_out` sets
+`G.round_eval = nil` (`button_callbacks.lua`, in an event), so a `cash_out` sent while rows are
+still queued kills the game. Stock `play` makes sure the rows are done before it returns (it waits
+for `dollar_blind1` **and** the `cash_out_button`), **except** when `G.GAME.won` is true: that
+branch (`play.lua`, "Game is won") returns as soon as `G.round_eval` exists. `G.GAME.won` stays
+true for the rest of the run, so this happens after the win and in **every later round of an
+endless run**, not only at the win. Earlier "fixes" (sleeping 25 s after `continue_endless`)
+only covered the first `cash_out`: the repro of `BRG027` with the 25 s sleep got through the
+first cash-out and crashed at the cash-out of the ante-9 small blind
+(`runs/bridge/endless_fix_repro1.jsonl`). The win screen itself pauses the game, so the rows of
+the winning round are only built after the overlay is closed.
+
+**Fix** (patch version 4): `bridge_ext.lua` adds `bridge.cash_out_ready` to every gamestate
+(`G.round_eval` exists, state complete, game not paused, `dollar_blind1` row present and the
+`cash_out_button` UIBox exists, the same condition stock `play` uses for normal rounds).
+`Runner.wait_cash_out_ready` polls the gamestate (0.5 s, up to 90 s, then `BridgeTimeout`) before
+every `cash_out`; normal rounds are ready immediately. `continue_endless` itself is unchanged
+(it presses the button and returns). `endless_wait` (default 2 s) is only slack after it.
+
+**Recording.** The win is recorded the moment the gamestate shows `won` (`note_win`;
+`won_ante = 8`, the ante counter already reads 9 on the win screen) and `finalize_result` runs at
+the end of every game: a won run is always `outcome = "win"`, whatever happened during the
+continuation. `endless_end` says how it ended: `loss` (GAME_OVER), `cap` (the boss of
+`--endless-max-ante` beaten, `ante_num` 13 for the default 12), or `crash` / `hang` / `error` /
+`max_decisions` when the continuation broke down (the `note` has the error and `endless_ante` is
+the highest ante counter seen, 9 when it broke at the first cash-out). Games lost before the win
+keep `hang` / `error` and are excluded from the win rate (reported separately).
+`scripts/bridge_report.py` counts the won runs, prints the endless ante histogram and the
+`endless_end` breakdown.
+
+**Verification** (2026-11-18):
+
+* `BRG027` (`runs/bridge/endless_fix_brg027.jsonl`, `runs/st2_v2_s1/latest.pt`, the policy of the
+  old crash logs; the game is deterministic, it reproduced the same win at decision 163 every
+  time): win at the ante-8 boss, continued through ante 9, lost in ante 10 (`endless_ante = 10`,
+  `endless_end = loss`, 204 decisions, 81 plays, all exact). Before the fix the same seed crashed
+  4 of 4 times, and with the 25 s sleep only (`endless_fix_repro1.jsonl`) it crashed at the third
+  endless cash-out.
+* `runs/final200/latest.pt`, Red / White, `--endless`, seeds `ETS000..` (`endless_fix_ets.jsonl`):
+  `ETS001` win -> ante 9 loss, `ETS003`, `ETS004`, `ETS005` win -> ante 11 loss
+  (233-256 decisions, 457-607 s per long game); 5 of 5 organic wins continued, with `BRG027` 5 won
+  runs and 0 endless crashes. No cash-out crash in any endless round.
+* Restart path: Balatro.exe was killed 60 s into `ETS000`; the game ended as `error`
+  (`connection failed`, excluded from the win rate), `bridge_play.py` logged
+  `restart {ok: true, attempts: 1, seconds: 7.3}` and played `ETS001` on the restarted game.
+* Resume path: the run was killed while `ETS004` was running and restarted with the same
+  command line and `--resume`: `ETS000..003` skipped, `ETS004` replayed.
+* Not exercised against the real game: `endless_end = cap` (needs an ante-12 boss win) and a crash
+  *during* the continuation (covered by the mock-client tests `tests_py/test_bridge_outcome.py`).
+* Side finding of `ETS002` (not an endless problem): The Mouth had locked `Pair`, the policy
+  played Two Pair and scored 0. The translation ignored `bridge.blind.only_hand`, so the
+  engine neither predicted the 0 nor showed the lock to the policy. Fixed in `state.translate`
+  (`boss_state.hand` from `only_hand`, Play phase); fixture
+  `tests_py/fixtures/bridge_mismatch/mouth_locked_hand.json.gz`.
 
 
 ## 12. How to run
@@ -400,3 +446,34 @@ uv run --no-sync python scripts/bridge_report.py runs/bridge/run.jsonl
 `scripts/bridge_joker_sweep.py` plays one hand per joker (`add` endpoint) for per-joker parity;
 `--fixture-dir DIR` saves a few gzipped gamestates per phase (the recorded fixtures of
 `tests_py/fixtures/bridge/` come from there).
+
+### Unattended long run (100 games, endless on)
+
+```
+bridge/restart_game.sh
+nohup uv run --no-sync python scripts/bridge_play.py --checkpoint runs/final200/latest.pt \
+    --games 100 --deck RED --stake WHITE --seed-prefix RLR --endless --resume \
+    --restart-every 20 --log runs/bridge/final200_real100.jsonl \
+    > runs/bridge/final200_real100.out 2>&1 &
+```
+
+* **Auto-recovery.** After a game that ended in `hang` / `error`, or a won run whose endless
+  continuation crashed / hung, `bridge_play.py` runs `bridge/restart_game.sh` (3 attempts, `--restart-attempts`;
+  a `restart` event with `ok`, `attempts`, `seconds` goes to the JSONL) and plays the **next** seed.
+  The game is also restarted when `health` fails before a game, and every `--restart-every N`
+  games (0 = off). If the game cannot be brought back the script exits with code 3; after
+  `--max-failures` (5) consecutive games lost to hang / error it exits with code 4.
+  `--no-restart` disables all of it.
+* **No re-rolls.** A seed is played once per run: a game that was lost (`loss`) or broke before the
+  win (`hang` / `error`) is never replayed, so the win rate cannot be biased by retries. Such
+  broken games are excluded from the win rate and listed separately by `bridge_report.py`
+  (`excluded from the win rate`); a win whose endless part broke stays a win (`endless_end`).
+* **Resume.** The log is appended to. `--resume` skips every seed that already has a `game_end`
+  record, so after a kill (power loss, Ctrl-C, crash of the script) run the **identical command
+  again**; the game in progress at the kill (it has `game_start` but no `game_end`) is played again
+  from scratch, which is harmless: it never reached a result. Start a different log / seed prefix
+  for a new experiment, never reuse the seeds of an existing log without `--resume`.
+* Time: a game that wins and continues takes 8-10 min (measured 457-607 s), an early loss 1-2 min;
+  100 games take roughly 12-16 h. Watch with `tail -f runs/bridge/final200_real100.out` and
+  `bridge_report.py` (it can be run on the live log).
+

@@ -46,6 +46,43 @@ def factors(play: dict) -> set[str]:
     return f
 
 
+def endless_stats(ends: list[dict]) -> dict | None:
+    """Endless-mode summary of the ``game_end`` records (None if no run continued).
+
+    A won run counts as continued when it has ``endless_ante`` (older logs: no ``endless_end``,
+    which then reads ``unknown``). ``endless_end`` is ``loss`` / ``cap`` for a regular end and
+    ``crash`` / ``hang`` / ``error`` / ``max_decisions`` when the continuation broke down (the
+    run is still a win).
+    """
+    endl = [r for r in ends if r.get("endless_ante") is not None and r["outcome"] == "win"]
+    if not endl:
+        return None
+    ea = sorted(r["endless_ante"] for r in endl)
+    return {
+        "runs": len(endl),
+        "mean_ante": sum(ea) / len(ea),
+        "antes": ea,
+        "ante_hist": dict(sorted(Counter(ea).items())),
+        "ends": dict(Counter(r.get("endless_end") or "unknown" for r in endl)),
+        # the ante counter reads win_ante + 1 as soon as the boss is beaten, so +2 means that the
+        # first endless ante was cleared too
+        "beyond_win": sum(r["endless_ante"] >= (r.get("won_ante") or 8) + 2 for r in endl),
+    }
+
+
+def print_endless(ends: list[dict]) -> None:
+    st = endless_stats(ends)
+    if st is None:
+        return
+    print(
+        f"endless: {st['runs']} won runs, final ante mean {st['mean_ante']:.2f}, "
+        f"{st['beyond_win']} cleared at least one endless ante; highest-ante histogram "
+        f"{st['ante_hist']}"
+    )
+    broke = sum(n for k, n in st["ends"].items() if k not in ("loss", "cap", "unknown"))
+    print(f"endless ends: {st['ends']}  (broken down by crash/hang/...: {broke})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("logs", nargs="+")
@@ -55,23 +92,31 @@ def main() -> None:
 
     ends = [r for r in recs if r["ev"] == "game_end"]
     print(f"== games: {len(ends)}")
-    outcomes = Counter(r["outcome"] for r in ends)
-    print("outcomes:", dict(outcomes))
+    print("outcomes:", dict(Counter(r["outcome"] for r in ends)))
     done = [r for r in ends if r["outcome"] in ("win", "loss")]
+    lost = [r for r in ends if r["outcome"] not in ("win", "loss")]
     if done:
         wins = sum(r["outcome"] == "win" for r in done)
-        antes = [r["ante"] for r in done]
+        antes = [
+            r.get("won_ante") or r["ante"] if r["outcome"] == "win" else r["ante"] for r in done
+        ]
         print(
             f"completed games: {len(done)}  win rate: {100 * wins / len(done):.1f}%  "
             f"mean ante: {sum(antes) / len(antes):.2f}  antes: {sorted(antes)}"
         )
-    endl = [r for r in ends if r.get("endless_ante") is not None]
-    if endl:
-        ea = [r["endless_ante"] for r in endl]
-        mean = sum(ea) / len(ea)
-        print(f"endless: {len(endl)} won runs continued, final ante mean {mean:.2f}, {sorted(ea)}")
+    if lost:
+        print(
+            f"excluded from the win rate (hang/error/max_decisions BEFORE a win): {len(lost)} "
+            f"games, seeds {[r['seed'] for r in lost]}"
+        )
+    print_endless(ends)
+    restarts = [r for r in recs if r["ev"] == "restart"]
+    if restarts:
+        ok = sum(bool(r.get("ok")) for r in restarts)
+        print(f"game restarts: {len(restarts)} ({ok} ok, {len(restarts) - ok} failed)")
     for r in ends:
         e = f"endless_ante={r['endless_ante']} " if r.get("endless_ante") is not None else ""
+        e += f"endless_end={r['endless_end']} " if r.get("endless_end") else ""
         print(
             f"  game {r['game']:>3} seed {r['seed']:<8} {r['outcome']:<5} ante {r['ante']} "
             f"decisions {r['decisions']:>4} plays {r['plays']:>3} exact {r['exact']:>3} "

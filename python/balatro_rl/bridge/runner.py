@@ -36,6 +36,7 @@ from .state import TRANSIENT_STATES, TranslateError, Translation, build_game, tr
 MAX_REJECTS_PER_STATE = 12
 MAX_REJECTS_PER_GAME = 300
 MAX_DECISIONS = 4000
+WIN_ANTE = 8  # the ante whose boss ends a normal run (G.GAME.win_ante)
 
 
 # --------------------------------------------------------------------------- policies
@@ -128,6 +129,9 @@ class GameResult:
     note: str = ""
     won_ante: int | None = None  # ante at which the run was won (ante-8 boss beaten)
     endless_ante: int | None = None  # highest ante reached in endless mode (--endless only)
+    # how the endless continuation of a won run ended (--endless only): loss | cap | crash | hang
+    # | max_decisions | error; `crash` = the game died / the API broke, `hang` = no answer
+    endless_end: str | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -145,8 +149,10 @@ class Runner:
         fixture_limit: int = 3,
         endless: bool = False,
         endless_max_ante: int = 12,
-        endless_wait: float = 25.0,
+        endless_wait: float = 2.0,
+        cash_out_timeout: float = 90.0,
     ):
+        self.cash_out_timeout = cash_out_timeout
         self.endless = endless
         self.endless_max_ante = endless_max_ante
         self.endless_wait = endless_wait
@@ -192,11 +198,18 @@ class Runner:
 
     # -- state handling ----------------------------------------------------------------
 
-    def settle(self, gs: dict) -> dict:
-        """Wait out transitions; cash out ``ROUND_EVAL``. Returns a translatable or final state."""
+    def settle(self, gs: dict, res: GameResult | None = None) -> dict:
+        """Wait out transitions; cash out ``ROUND_EVAL``. Returns a translatable or final state.
+
+        ``res`` (optional) gets ``won_ante`` / ``endless_ante`` the moment a win is seen, so that
+        whatever happens during the endless continuation cannot lose the win.
+        """
         t0 = time.time()
         while True:
             st = gs["state"]
+            if res is not None:
+                res.ante = max(res.ante, int(gs.get("ante_num", 0)))
+                note_win(res, gs)
             if st in ("GAME_OVER", "MENU") or (gs.get("won") and not self.endless):
                 return gs
             if st == "ROUND_EVAL":
@@ -204,10 +217,11 @@ class Runner:
                     # win screen: press "Endless" (bridge patch endpoint), then cash out
                     gs = self.c.call("continue_endless", timeout=120)
                     self._continued = True
-                    # EXPERIMENTAL: the eval rows are still being added; an early `cash_out`
-                    # crashes the game (docs/design/bridge.md section 6), a later one works
                     time.sleep(self.endless_wait)
                     gs = self.c.gamestate()
+                    continue
+                gs = self.wait_cash_out_ready(gs)
+                if gs["state"] != "ROUND_EVAL":
                     continue
                 gs = self.c.call("cash_out")
                 continue
@@ -218,6 +232,24 @@ class Runner:
                 gs = self.c.gamestate()
                 continue
             return gs
+
+    def wait_cash_out_ready(self, gs: dict) -> dict:
+        """Poll until the end-of-round rows are built (``bridge.cash_out_ready``).
+
+        Stock ``play`` returns early once ``G.GAME.won`` is set, i.e. for EVERY round of an
+        endless run (and after the win screen); a ``cash_out`` sent while rows are still being
+        added crashes the game (docs/design/bridge.md, Endless mode). Normal rounds are ready
+        when ``play`` returns. A patch older than version 4 has no flag: no waiting.
+        """
+        t0 = time.time()
+        while True:
+            b = gs.get("bridge") or {}
+            if gs["state"] != "ROUND_EVAL" or b.get("cash_out_ready", True):
+                return gs
+            if time.time() - t0 > self.cash_out_timeout:
+                raise BridgeTimeout("round-eval rows never finished (cash_out not ready)")
+            time.sleep(0.5)
+            gs = self.c.gamestate()
 
     def go_to_menu(self) -> dict:
         gs = self.c.gamestate()
@@ -242,13 +274,16 @@ class Runner:
         except BridgeTimeout as e:
             res.outcome = "hang"
             res.note = str(e)
+            res.extra["fail"] = "hang"
         except BridgeError as e:
             res.outcome = "error"
             res.note = str(e)
+            res.extra["fail"] = "crash"
         except Exception as e:  # noqa: BLE001 - never lose the log of a long run
             res.outcome = "error"
             res.note = f"{type(e).__name__}: {e}"
             self.log("warn", game=game_idx, msg="exception", trace=traceback.format_exc())
+        finalize_result(res, self.endless)
         res.seconds = time.time() - t0
         self.log("game_end", **res.__dict__)
         if self.verbose:
@@ -266,17 +301,17 @@ class Runner:
         pack_origin = "Shop"
         prev_action: list[int] | None = None
         while res.decisions < MAX_DECISIONS:
-            gs = self.settle(gs)
+            gs = self.settle(gs, res)
             res.ante = max(res.ante, int(gs.get("ante_num", 0)))
             res.round = int(gs.get("round_num", 0))
             if gs["state"] == "GAME_OVER":
                 res.extra["final_won_flag"] = repr(gs.get("won"))
-            if gs.get("won") and res.won_ante is None and gs["state"] != "GAME_OVER":
-                res.won_ante = int(gs.get("ante_num", 0))
+            note_win(res, gs)
             if gs["state"] == "GAME_OVER":
                 res.outcome = "win" if res.won_ante is not None else "loss"
                 if self.endless and res.won_ante is not None:
                     res.endless_ante = res.ante
+                    res.endless_end = "loss"
                 return
             if gs.get("won") and not self.endless:
                 res.outcome = "win"
@@ -284,6 +319,7 @@ class Runner:
             if self.endless and gs.get("won") and res.ante > self.endless_max_ante:
                 res.outcome = "win"
                 res.endless_ante = res.ante
+                res.endless_end = "cap"
                 return
             if gs["state"] == "MENU":
                 res.outcome = "error"
@@ -546,6 +582,38 @@ def _cards(gs: dict, area: str) -> list[dict]:
 
 def Call_str(method: str, params: dict) -> str:  # noqa: N802
     return f"{method}({params})" if params else method
+
+
+def note_win(res: GameResult, gs: dict) -> None:
+    """Remember the win (ante-8 boss beaten) as soon as the gamestate shows ``won``."""
+    if gs.get("won") and res.won_ante is None and gs.get("state") not in ("GAME_OVER", "MENU"):
+        # `ante_num` already reads 9 on the win screen (the ante counter advances when the boss is
+        # beaten), so the win ante is the game's win_ante, not the number read here
+        res.won_ante = WIN_ANTE
+        res.ante = max(res.ante, int(gs.get("ante_num", 0)))
+
+
+def finalize_result(res: GameResult, endless: bool = True) -> None:
+    """A game whose ante-8 boss was beaten is a ``win`` whatever happened afterwards.
+
+    Called at the end of every game. If the endless continuation then crashed, hung, hit a
+    reject loop, ... the outcome is turned back into ``win`` and ``endless_end`` / ``note`` keep
+    the evidence; ``endless_ante`` is the highest ante reached so far (the win ante if the run
+    never continued). Games that were never won keep their ``hang`` / ``error`` outcome.
+    """
+    if res.won_ante is None:
+        return
+    if res.outcome != "win":
+        end = str(res.extra.get("fail") or res.outcome)
+        res.note = f"after the win ({end}): {res.note}".strip()
+        res.outcome = "win"
+        if endless:
+            res.endless_end = end
+    if endless:
+        if res.endless_ante is None:
+            res.endless_ante = max(res.ante, res.won_ante)
+        if res.endless_end is None:
+            res.endless_end = "cap"
 
 
 def seed_for(prefix: str, index: int) -> str:

@@ -4,7 +4,7 @@
 ---  * `bridge` (selected G.GAME fields: current_round targets, round_resets, tags, blind, ...),
 ---  * `discard` (the discard pile) and `playing_cards` (every playing card of the run).
 ---Everything is wrapped in pcall by the caller; an error never breaks the stock gamestate.
-local M = { VERSION = 3 }
+local M = { VERSION = 4 }
 
 local MAX_DEPTH = 3
 
@@ -168,6 +168,29 @@ local function used_voucher_keys()
   return out
 end
 
+---ROUND_EVAL is only safe to `cash_out` once the end-of-round rows are all built: the cash-out
+---button exists (it is created by the last row's event). `G.FUNCS.cash_out` removes
+---`G.round_eval`; rows still queued then crash the game (`add_round_eval_row`: `G.round_eval` is
+---nil). Stock `play` guarantees this only for normal rounds: once `G.GAME.won` is set (endless
+---mode) it returns as soon as `G.round_eval` exists (docs/design/bridge.md, Endless mode).
+local function cash_out_ready()
+  if G.STATE ~= G.STATES.ROUND_EVAL or not G.round_eval or not G.STATE_COMPLETE then
+    return false
+  end
+  if G.SETTINGS and G.SETTINGS.paused then
+    return false
+  end
+  if not G.round_eval:get_UIE_by_ID("dollar_blind1") then
+    return false
+  end
+  for _, b in ipairs(G.I.UIBOX) do
+    if b:get_UIE_by_ID("cash_out_button") then
+      return true
+    end
+  end
+  return false
+end
+
 ---Selected G.GAME fields.
 function M.game_raw()
   local g = G.GAME
@@ -217,6 +240,8 @@ function M.game_raw()
     booster = booster,
     state_complete = G.STATE_COMPLETE and true or false,
     controller_locked = G.CONTROLLER and G.CONTROLLER.locked and true or false,
+    cash_out_ready = cash_out_ready(),
+    paused = G.SETTINGS and G.SETTINGS.paused and true or false,
     hand_limit = G.hand and G.hand.config and G.hand.config.card_limit,
   }
 end
