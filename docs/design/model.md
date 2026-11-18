@@ -44,7 +44,7 @@ not installed, so `make test` works without it.
   (last hand, boss hand, tag hand, To Do List hand). Each categorical column of a token is looked up
   and summed with `Linear(continuous features)`, then the token-type embedding (5 types) and a
   learned slot-position embedding (hand 32, joker 20, consumable 8, offer 21) are added. The global
-  token uses a 2-layer MLP for its 214 features (203 in v1) plus the embeddings of its 10 categorical
+  token uses a 2-layer MLP for its 220 features (203 in v1, 214 in v2) plus the embeddings of its 10 categorical
   columns (8 in v1; `deck` and `stake` are the new ones, own tables appended after all older ones).
 * **Slicing.** Every group is cut to the batch's highest valid row (`hand_valid`, `joker_valid`,
   ...) before the Transformer; joker/consumable/offer outputs are zero-padded back to the fixed
@@ -120,9 +120,16 @@ appended `global_f` scalars (stake flags, deck economy, base hands/discards; `rl
 same way. The migrated model is the v1 function (the global projection / embedding sum of the old
 columns is computed separately from the new ones and added, so float32 results are bit-identical;
 `encoder.V1_GLOBAL_F`, `V1_GLOBAL_I`); once the new inputs are trained they matter. Re-saving writes
-version 2. `tests_py/test_migration.py` replays a recorded v1 rollout of `runs/bc/model.pt` and
+the current version. `tests_py/test_migration.py` replays a recorded v1 rollout of `runs/bc/model.pt` and
 `runs/e2e_long_fix/latest.pt` (`tests_py/fixtures/v1_reference.npz`). `bc.load_gpu` also accepts v1
 datasets (new columns filled with the Red/White start-of-run values).
+
+Interface v3 appended 6 `global_f` scalars (next round's hands / discards, run counters) and 4
+`joker_f` contribution columns (`rl_interface.md` 3.2 / 3.4). A v2 checkpoint migrates the same way
+(zero weights for the new columns of `global_proj[0]` and `joker_proj`; the encoder evaluates the v3
+columns as their own matmuls, `encoder.V2_GLOBAL_F`, `V2_JOKER_F`); a v1 checkpoint goes v1 -> v2 ->
+v3. `tests_py/test_migration_v3.py` replays a recorded v2 rollout of `runs/st3/latest.pt` and
+`runs/st3_endless/latest.pt` (`tests_py/fixtures/v2_reference.npz`): bit-identical.
 
 ## 3. Canonical card order
 

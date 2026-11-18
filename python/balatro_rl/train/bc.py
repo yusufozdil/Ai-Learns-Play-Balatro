@@ -25,7 +25,7 @@ import numpy as np
 import torch
 
 from balatro_rl import LAYOUT, BalatroVecEnv
-from balatro_rl.model.migrate import upgrade_v1_global_f, upgrade_v1_global_i, v1_names
+from balatro_rl.model.migrate import LEGACY_DATA
 
 OBS_NAMES = LAYOUT["obs_names"]
 MASK_NAMES = LAYOUT["mask_names"]
@@ -44,7 +44,7 @@ def _store_dtype(name: str) -> np.dtype:
 
 
 FIELDS = list(OBS_NAMES) + list(MASK_NAMES)
-_LEGACY_UPGRADE = {"global_f": upgrade_v1_global_f, "global_i": upgrade_v1_global_i}
+_LEGACY_UPGRADE = {name: fn for name, (_, fn) in LEGACY_DATA.items()}
 
 
 # --------------------------------------------------------------------------- data collection
@@ -138,11 +138,11 @@ def load_gpu(data_dir: Path, device, max_envs: int | None = None) -> dict[str, t
             arr = arr[:, :max_envs]
         if arr.dtype == np.uint32:
             arr = arr.view(np.int32)
-        # A dataset collected under interface v1 has narrower global columns: append the v2 ones
-        # (Red/White values, ``model.migrate.upgrade_v1_*``) while copying.
+        # A dataset collected under an older interface has narrower columns: append the newer
+        # ones while copying (``model.migrate.LEGACY_DATA``).
         legacy = name in _LEGACY_UPGRADE and arr.shape[-1] != _SPEC[name][1][-1]
         if legacy:
-            assert arr.shape[-1] == len(v1_names(name)), f"{name}: unknown column count"
+            assert arr.shape[-1] in LEGACY_DATA[name][0], f"{name}: unknown column count"
         shape = (*arr.shape[:-1], _SPEC[name][1][-1]) if legacy else arr.shape
         t = torch.empty(shape, dtype=torch.from_numpy(np.zeros(0, arr.dtype)).dtype, device=device)
         step = max(1, 64_000_000 // max(1, arr[0].nbytes))

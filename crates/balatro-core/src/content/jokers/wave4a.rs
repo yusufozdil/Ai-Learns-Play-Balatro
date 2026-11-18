@@ -184,7 +184,7 @@ fn pareidolia_modifiers(_: &JokerInstance, m: &mut Modifiers) {
 
 // --- Burglar: https://balatrowiki.org/w/Burglar ---------------------------------------------
 // When a blind is selected: +3 hands this round and all discards are lost (set to 0).
-const BURGLAR_HANDS: i32 = 3;
+pub(crate) const BURGLAR_HANDS: i32 = 3;
 
 fn burglar_blind_select(_: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
     ctx.push_effect(SideEffect::AddHands(BURGLAR_HANDS));

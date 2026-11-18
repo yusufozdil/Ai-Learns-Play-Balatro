@@ -22,7 +22,7 @@ use pyo3::types::PyDict;
 use std::marker::PhantomData;
 
 /// Version of the whole interface (buffers, semantics, reward).
-pub const INTERFACE_VERSION: u32 = 2;
+pub const INTERFACE_VERSION: u32 = 3;
 
 /// Number of action kinds.
 pub const KINDS: usize = 17;
@@ -120,11 +120,23 @@ pub const GLOBAL_TAIL: [&str; 11] = [
     "money_per_discard",
 ];
 
+/// Scalar columns appended after [`GLOBAL_TAIL`] (interface version 3): the next round's
+/// effective hands / discards and the run counters some jokers read.
+pub const GLOBAL_TAIL_V3: [&str; 6] = [
+    "next_hands",
+    "next_discards",
+    "tarots_used",
+    "blinds_skipped",
+    "unique_planets_used",
+    "hands_played_run",
+];
+
 /// Booster specs (kind x size).
 pub const PACK_SPECS: usize = 15;
 
 /// Columns of `global_f`.
-pub const GLOBAL_F: usize = GLOBAL_SCALARS.len() + global_vector_len() + GLOBAL_TAIL.len();
+pub const GLOBAL_F: usize =
+    GLOBAL_SCALARS.len() + global_vector_len() + GLOBAL_TAIL.len() + GLOBAL_TAIL_V3.len();
 
 const fn global_vector_len() -> usize {
     let mut n = 0;
@@ -147,6 +159,7 @@ pub fn global_f_names() -> Vec<String> {
         }
     }
     v.extend(GLOBAL_TAIL.iter().map(|s| (*s).to_string()));
+    v.extend(GLOBAL_TAIL_V3.iter().map(|s| (*s).to_string()));
     v
 }
 
@@ -212,8 +225,8 @@ pub const HAND_I: [(&str, usize); 5] = [
     ("edition", EDITION_VOCAB),
     ("seal", SEAL_VOCAB),
 ];
-/// `joker_f` columns.
-pub const JOKER_F: [&str; 13] = [
+/// `joker_f` columns (the last four, the contribution block, were appended in version 3).
+pub const JOKER_F: [&str; 17] = [
     "pos",
     "sell_value",
     "eternal",
@@ -227,6 +240,10 @@ pub const JOKER_F: [&str; 13] = [
     "counter_lin",
     "counter_log",
     "aux_byte",
+    "contrib_chips",
+    "contrib_mult",
+    "contrib_xmult",
+    "contrib_money",
 ];
 /// `joker_i` columns with vocabulary sizes.
 pub const JOKER_I: [(&str, usize); 5] = [
@@ -549,8 +566,11 @@ mod tests {
     #[test]
     fn global_layout_is_consistent() {
         assert_eq!(global_f_names().len(), GLOBAL_F);
-        assert_eq!(GLOBAL_F, 214);
-        assert_eq!(global_f_names()[GLOBAL_F - GLOBAL_TAIL.len()], "stake_idx");
+        assert_eq!(GLOBAL_F, 220);
+        assert_eq!(global_f_names()[214 - GLOBAL_TAIL.len()], "stake_idx");
+        assert_eq!(global_f_names()[214], "next_hands");
+        assert_eq!(JOKER_F.len(), 17);
+        assert_eq!(JOKER_F[13], "contrib_chips");
         assert_eq!(GLOBAL_I.len(), 10);
         assert_eq!(OFFER_CAP, 21);
         assert_eq!(stride::arg0_mask, KINDS * MAX_ARG);

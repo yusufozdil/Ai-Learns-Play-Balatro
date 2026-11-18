@@ -11,6 +11,7 @@ pub mod boss;
 pub mod card;
 pub mod consumable;
 pub mod content;
+pub mod contribution;
 pub mod data;
 pub mod deck;
 pub mod economy;

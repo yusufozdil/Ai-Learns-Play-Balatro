@@ -28,7 +28,7 @@ from balatro_rl.env import INTERFACE_VERSION
 from balatro_rl.model.encoder import Encoder
 from balatro_rl.model.heads import Head
 from balatro_rl.model.inputs import is_prepared, prepare
-from balatro_rl.model.migrate import migrate_v1_to_v2
+from balatro_rl.model.migrate import SUPPORTED_VERSIONS, migrate
 
 HEAD_NAMES = ("blind", "play", "shop", "pack")
 # Phase index (BlindSelect 0, Play 1, Shop 2, PackOpen 3, GameOver 4, Won 5) -> head. The two
@@ -209,13 +209,14 @@ def save_checkpoint(path, model: TeamModel, **extra) -> None:
 
 
 def load_checkpoint(path, device="cpu") -> tuple[TeamModel, dict]:
-    """Load a checkpoint. A version-1 checkpoint is migrated exactly (``model.migrate``: the new
-    inputs start with zero weights); anything else than the current version is refused. The
-    returned dict is the (migrated) checkpoint, ``ck["interface_version"]`` is the current one and
-    ``ck["migrated_from"]`` is set when a migration happened."""
+    """Load a checkpoint. An older checkpoint (version 1 or 2) is migrated exactly
+    (``model.migrate``: the new inputs start with zero weights); any other version is refused.
+    The returned dict is the (migrated) checkpoint, ``ck["interface_version"]`` is the current one
+    and ``ck["migrated_from"]`` (the original version) is set when a migration happened."""
     ck = torch.load(path, map_location=device, weights_only=False)
-    if ck["interface_version"] == 1 and INTERFACE_VERSION == 2:
-        ck = migrate_v1_to_v2(ck)
+    version = ck["interface_version"]
+    if version in SUPPORTED_VERSIONS and version < INTERFACE_VERSION:
+        ck = migrate(ck)
     assert ck["interface_version"] == INTERFACE_VERSION, "checkpoint is for another interface"
     model = TeamModel(ModelConfig(**ck["config"])).to(device)
     model.load_state_dict(ck["state_dict"])

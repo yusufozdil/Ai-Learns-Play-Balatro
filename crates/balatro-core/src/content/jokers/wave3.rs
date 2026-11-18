@@ -183,7 +183,7 @@ fn chaos_modifiers(_: &JokerInstance, m: &mut Modifiers) {
 }
 
 // --- Delayed Gratification: https://balatrowiki.org/w/Delayed_Gratification -----------------
-const DELAYED_PER_DISCARD: i32 = 2;
+pub(crate) const DELAYED_PER_DISCARD: i32 = 2;
 
 fn delayed_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundEndInfo) {
     let run = ctx.run();
@@ -252,7 +252,7 @@ fn to_do_before(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Cloud 9: https://balatrowiki.org/w/Cloud_9 ---------------------------------------------
-const CLOUD9_PER_NINE: i32 = 1;
+pub(crate) const CLOUD9_PER_NINE: i32 = 1;
 
 fn cloud9_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundEndInfo) {
     // Full deck (all piles); Stone cards have no rank and are not counted.
@@ -264,7 +264,7 @@ fn cloud9_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundEndI
 // value = current payout in dollars. The +$2 for a defeated Boss Blind is applied BEFORE that
 // round's payout (jokers.csv).
 const ROCKET_BASE_PAYOUT: f64 = 1.0;
-const ROCKET_BOSS_GAIN: f64 = 2.0;
+pub(crate) const ROCKET_BOSS_GAIN: f64 = 2.0;
 
 fn rocket_round_end(j: &mut JokerInstance, ctx: &mut EventCtx<'_>, info: &RoundEndInfo) {
     if info.boss_defeated(ctx.run()) {
@@ -396,7 +396,7 @@ fn matador_invalid(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Satellite: https://balatrowiki.org/w/Satellite -----------------------------------------
-const SATELLITE_PER_PLANET: i32 = 1;
+pub(crate) const SATELLITE_PER_PLANET: i32 = 1;
 
 fn satellite_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundEndInfo) {
     let n = i32::try_from(ctx.run().stats.unique_planets_used).unwrap_or(i32::MAX);

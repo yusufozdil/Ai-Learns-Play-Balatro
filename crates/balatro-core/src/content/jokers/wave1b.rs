@@ -199,7 +199,7 @@ fn blackboard_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Blue Joker: https://balatrowiki.org/w/Blue_Joker ---------------------------------------
-const BLUE_JOKER_CHIPS_PER_CARD: f64 = 2.0;
+pub(crate) const BLUE_JOKER_CHIPS_PER_CARD: f64 = 2.0;
 
 fn blue_joker_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let n = ctx.deck().draw_pile;
@@ -223,7 +223,7 @@ fn photograph_scored(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, _: &Card) {
 }
 
 // --- Erosion: https://balatrowiki.org/w/Erosion ---------------------------------------------
-const EROSION_MULT_PER_CARD: f64 = 4.0;
+pub(crate) const EROSION_MULT_PER_CARD: f64 = 4.0;
 
 fn erosion_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let d = ctx.deck();
@@ -234,7 +234,7 @@ fn erosion_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Stone Joker: https://balatrowiki.org/w/Stone_Joker -------------------------------------
-const STONE_JOKER_CHIPS_PER_CARD: f64 = 25.0;
+pub(crate) const STONE_JOKER_CHIPS_PER_CARD: f64 = 25.0;
 
 fn stone_joker_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let n = ctx.deck().enhancement(Enhancement::Stone);
@@ -264,7 +264,7 @@ fn smiley_scored(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 }
 
 // --- Acrobat: https://balatrowiki.org/w/Acrobat --------------------------------------------
-const ACROBAT_XMULT: f64 = 3.0;
+pub(crate) const ACROBAT_XMULT: f64 = 3.0;
 
 fn acrobat_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     if ctx.run().is_final_hand() {
@@ -274,15 +274,19 @@ fn acrobat_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 // --- Swashbuckler: https://balatrowiki.org/w/Swashbuckler ----------------------------------
 // +mult = sum of the sell values of all OTHER jokers (debuffed ones included).
-fn swashbuckler_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let me = ctx.slot();
-    let total: i32 = ctx
-        .jokers()
+/// Sum of the sell values of every joker except slot `me` (Swashbuckler). Shared with the
+/// observation's contribution block (`crate::contribution`).
+pub(crate) fn swashbuckler_total(jokers: &[JokerInstance], me: usize) -> i32 {
+    jokers
         .iter()
         .enumerate()
         .filter(|&(i, _)| i != me)
         .map(|(_, j)| j.sell_value)
-        .sum();
+        .sum()
+}
+
+fn swashbuckler_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
+    let total = swashbuckler_total(ctx.jokers(), ctx.slot());
     if total > 0 {
         ctx.add_mult(f64::from(total));
     }
@@ -448,7 +452,7 @@ fn the_tribe_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 // --- Stuntman: https://balatrowiki.org/w/Stuntman ------------------------------------------
 // +250 chips in joker_main (copyable); -2 hand size is passive (modifiers, never copied).
-const STUNTMAN_CHIPS: f64 = 250.0;
+pub(crate) const STUNTMAN_CHIPS: f64 = 250.0;
 const STUNTMAN_HAND_SIZE: i32 = -2;
 
 fn stuntman_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
@@ -469,8 +473,8 @@ fn shoot_the_moon_held(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Car
 }
 
 // --- Driver's License: https://balatrowiki.org/w/Driver%27s_License -------------------------
-const DRIVERS_LICENSE_MIN_ENHANCED: u32 = 16;
-const DRIVERS_LICENSE_XMULT: f64 = 3.0;
+pub(crate) const DRIVERS_LICENSE_MIN_ENHANCED: u32 = 16;
+pub(crate) const DRIVERS_LICENSE_XMULT: f64 = 3.0;
 
 fn drivers_license_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     if ctx.deck().enhanced() >= DRIVERS_LICENSE_MIN_ENHANCED {
@@ -480,8 +484,8 @@ fn drivers_license_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 // --- Bootstraps: https://balatrowiki.org/w/Bootstraps ---------------------------------------
 // +2 Mult per full $5 held; debt (negative money) gives nothing.
-const BOOTSTRAPS_MULT: f64 = 2.0;
-const BOOTSTRAPS_STEP: i32 = 5;
+pub(crate) const BOOTSTRAPS_MULT: f64 = 2.0;
+pub(crate) const BOOTSTRAPS_STEP: i32 = 5;
 
 fn bootstraps_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let steps = ctx.money().max(0) / BOOTSTRAPS_STEP;

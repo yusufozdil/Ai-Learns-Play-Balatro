@@ -129,7 +129,7 @@ def test_actions_conform_to_masks_in_the_env(deterministic):
     n = 64
     env = BalatroVecEnv(n, seed=5, num_threads=2, max_episode_steps=400)
     obs, masks = env.reset()
-    m = make_model(seed=2)
+    m = make_model(seed=1)  # a random-init greedy policy; seed 2 only plays (v3 init)
     h = m.init_hidden(n)
     first = torch.ones(n, dtype=torch.bool)
     invalid = steps = 0

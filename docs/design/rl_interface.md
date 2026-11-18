@@ -1,10 +1,11 @@
 # RL interface (Phase 8B): token observation, structured action codec, masks, reward
 
-`INTERFACE_VERSION = 2` (`balatro_rl._engine.INTERFACE_VERSION`, also `balatro_rl.INTERFACE_VERSION`).
+`INTERFACE_VERSION = 3` (`balatro_rl._engine.INTERFACE_VERSION`, also `balatro_rl.INTERFACE_VERSION`).
 Bump it on ANY change of a buffer name, shape, dtype, feature order, scaling, vocabulary, action
 semantics or reward semantics. Checkpoints must record it. Version 2 (Phase 10G) only *appended*
-inputs (the run's deck and stake); version-1 checkpoints load through an exact migration
-(section 12).
+inputs (the run's deck and stake), version 3 only *appended* inputs too (the next round's hands /
+discards, run counters, a per-joker contribution block); version-1 and version-2 checkpoints load
+through an exact migration (section 12).
 
 Code map: `crates/balatro-py/src/{layout,encode,env,sample,vec_env,single}.rs`,
 `python/balatro_rl/{env,select}.py`. The feature lists below are the single source of truth for
@@ -53,12 +54,12 @@ The simulator side is `balatro-core`; the player-view rules (what may be observe
 
 | name | dtype | per-env shape | content |
 |---|---|---|---|
-| `global_f` | f32 | (214,) | section 3.2 |
+| `global_f` | f32 | (220,) | section 3.2 |
 | `global_i` | i32 | (10,) | section 3.2 |
 | `hand_f` | f32 | (32, 6) | section 3.3 |
 | `hand_i` | i32 | (32, 5) | |
 | `hand_valid` | bool | (32,) | |
-| `joker_f` | f32 | (20, 13) | section 3.4 |
+| `joker_f` | f32 | (20, 17) | section 3.4 |
 | `joker_i` | i32 | (20, 5) | |
 | `joker_valid` | bool | (20,) | |
 | `cons_f` | f32 | (8, 3) | section 3.5 |
@@ -161,6 +162,28 @@ shop stickers and rewards are not:
 | 212 | `money_per_hand` | dollars per unused hand at cash-out, `/ 2` (1 normally, 2 Green Deck) |
 | 213 | `money_per_discard` | dollars per unused discard at cash-out, `/ 2` (0 normally, 1 Green Deck) |
 
+`global_f` next-round and run-counter scalars (cols 214..220, appended in v3; computed by
+`balatro_core::contribution`):
+
+| col | name | scaling |
+|---|---|---|
+| 214 | `next_hands` | hands of the next round, `/ 8` (see below) |
+| 215 | `next_discards` | discards of the next round, `/ 8` |
+| 216 | `tarots_used` | Tarot cards used this run (`stats.run.tarots_used`, Fortune Teller), `C(x)` |
+| 217 | `blinds_skipped` | blinds skipped this run (Throwback), `C(x)` |
+| 218 | `unique_planets_used` | distinct Planet cards used this run (Satellite), `C(x)` |
+| 219 | `hands_played_run` | hands played this run, exact count (Loyalty Card), `C(x)` |
+
+`next_hands` / `next_discards` (`contribution::next_round_budget`): outside `Play` (Blind select,
+Shop, open pack) the budget the next round will start with: `round_hands()` / `round_discards()`
+(base + joker, voucher, deck and stake modifiers), then the boss set-up if the next blind is The
+Needle (1 hand) or The Water (0 discards) and no active Chicot disables it, then every
+non-debuffed Burglar (Blueprint / Brainstorm copies too): +3 hands and 0 discards. During `Play`
+it is the budget the current round actually started with (`hands_left + hands_played_round`,
+`discards_left + discards_used_round`). A Rust test checks the formula against the engine's own
+`SelectBlind` for joker sets with Burglar / Chicot / Drunkard / Merry Andy / Troubadour and the
+Needle / Water / Hook bosses. Not modelled: the order-dependent Water + Burglar + Chicot case.
+
 The joker token's `perish_rounds_left` (`/ 5`, 0 when the joker is not perishable) already existed
 in version 1 (section 3.4); nothing was added there. Joker slots, consumable slots and the
 effective hand size are `joker_capacity`, `consumable_capacity` and `hand_size` above.
@@ -196,6 +219,57 @@ Idol), `aux_hand` (13: 0 none, 1..12; To Do List).
 (`S(value)`), `counter_lin` (`min(counter, 100) / 10`), `counter_log` (`ln(1 + counter) / 5`),
 `aux_byte` (`/ 255`, the joker's free state byte). `value`/`counter` are the joker's public running
 state (Ride the Bus mult, Obelisk, Loyalty countdown ...).
+
+Contribution block (cols 13..17, appended in v3): `contrib_chips` (`S(chips)`), `contrib_mult`
+(`S(mult)`), `contrib_xmult` (`ln(xmult)`, natural log, 0 = no factor), `contrib_money`
+(`S(dollars per round)`): what the joker adds to the **reference hand**, from
+`balatro_core::contribution::ContribCtx::joker` (`joker_contribution(state, slot)`). All four are 0
+for a hidden or debuffed joker (and for a copier whose chain ends at nothing). Editions are not
+included (their own column).
+
+* **Reference hand.** In `Play`: the next hand of the live round (`hands_left`, `discards_left`,
+  `discards_used_round`, `hand_plays_round`, the draw pile, the visible hand). In every other
+  phase: the first hand of the next round, before any hand or discard: `next_hands` /
+  `next_discards` above, no discard used, nothing played this round, draw pile = deck size - hand
+  size. Money, the joker list, sell values, full-deck counts (what the scoring hooks read; the
+  real game shows them as "Currently X") and run counters are read as they are now.
+* **Derived arms** (same constants as the hooks, `pub(crate)` in the joker files; Stencil,
+  Swashbuckler and Loyalty share their helper functions with the hooks): Banner `+30 x discards`
+  chips; Mystic Summit `+15` mult iff 0 discards; Raised Fist (below); Abstract `+3 x jokers`
+  mult; Blue Joker `+2 x draw pile` chips; Swashbuckler `+sum of the other jokers' sell values`
+  mult; Bull `+2 x max(money, 0)` chips; Bootstraps `+2 x floor(money / 5)` mult; Joker Stencil
+  `X empty slots` (Stencils count as empty); Fortune Teller `+tarots_used` mult; Throwback
+  `X(1 + 0.25 x blinds_skipped)`; Loyalty Card `X4` iff the reference hand is a 6th hand
+  (`hands_played_run + 1 - offset`); Erosion `+4 x (starting deck - deck)` mult; Stone Joker
+  `+25 x Stone cards` chips; Steel Joker `X(1 + 0.2 x Steel cards)`; Driver's License `X3` iff
+  >= 16 enhanced cards; Acrobat `X3` iff the reference hand is the round's last; Supernova
+  `+(most plays of any hand type this run + 1)` mult (best hand type); Card Sharp `X3` iff some
+  hand type was already played this round (so never at the first hand of the next round);
+  Baseball Card `X1.5` per other Uncommon joker; Green Joker `value + 1` (it gains +1 before every
+  hand). Unconditional: Joker `+4`, Gros Michel `+15` mult, Cavendish `X3`, Stuntman `+250`
+  chips, Misprint the expected `+11.5` mult. Money per round (round-end payouts; never copied by
+  Blueprint / Brainstorm): Delayed Gratification `$2 x discards` iff no discard used, Golden Joker
+  `$4`, Cloud 9 `$1 x nines in the deck`, Rocket `$value` (`+2` when the round is a Boss),
+  Satellite `$unique_planets_used`, To the Moon its extra interest at the current money (0 on the
+  Green Deck). Burglar is 0 (its effect is in `next_*`).
+* **Raised Fist.** `Play`: `2 x chips` of the lowest *visible* non-Stone card in hand (0 if that
+  card is debuffed; face-down cards are ignored; assumes the card stays held). Other phases: the
+  exact expectation of `2 x chips(lowest rank)` over a uniformly random `hand_size`-card hand from
+  the full deck (hypergeometric: `P(min >= r) = C(N - n_<r, h) / C(N, h)`, Stone cards take a slot
+  but never count; assumes the lowest card is not among the played ones).
+* **Generic arm** (scaling jokers, reads `value`): `+mult` Ride the Bus, Red Card, Flash Card,
+  Spare Trousers, Ceremonial Dagger, Popcorn; `+chips` Runner, Square, Wee, Castle, Ice Cream;
+  `xmult` Constellation, Madness, Vampire, Hologram, Obelisk, Lucky Cat, Campfire, Glass Joker,
+  Canio, Yorick, Hit the Road, Ramen. Conditional gains of the next hand (Ride the Bus, Runner,
+  ...) are not added.
+* **Zero by design**: effects conditional on the *played* cards (suit / rank / face jokers, "+X
+  if the hand contains a Pair", The Duo ..., Half Joker's card count, held-card jokers other
+  than Raised Fist such as Baron / Shoot the Moon / Blackboard, probabilistic per-card effects,
+  To Do List, Matador, discard jokers), retriggers, hand-size / slot / rule modifiers, Egg / Gift
+  Card (their effect is the sell value column) and the creation jokers.
+* Copiers (Blueprint, Brainstorm) show their resolved source's value as a copy (Swashbuckler
+  copied excludes the *source*, as the hook does). A Rust test checks the block in `Play` against
+  the scorer's own trace for 23 jokers in three states (`crates/balatro-core/tests/contribution.rs`).
 
 ### 3.5 Consumable tokens (`cons_f`, `cons_i`, `cons_valid`)
 
@@ -413,6 +487,8 @@ The `teacher_actions` heuristic uses `fair_info = true` (it decides on `Game::fa
   restricts each phase to its own kinds.
 * `deck` and `stake` are two more embedded `global_i` columns (their own tables, appended after all
   older tables of the shared embedding); the 11 run-configuration scalars are part of `global_f`.
+* v3: the 6 next-round / run-counter scalars are part of `global_f`, the 4 contribution columns of
+  `joker_f`; the encoder evaluates them as separate matmuls (section 12).
 
 ## 12. Version history and checkpoint migration
 
@@ -420,23 +496,31 @@ The `teacher_actions` heuristic uses `fair_info = true` (it decides on `Game::fa
 |---|---|
 | 1 | Phase 8B: 203 `global_f`, 8 `global_i` columns. |
 | 2 | Phase 10G: `global_f` +11 scalars (cols 203..214, section 3.2), `global_i` +`deck`, `stake` (cols 8, 9). Every older column keeps its index. The simulator, masks, actions and reward are unchanged. |
+| 3 | Observation-gap fix (`docs/design/error_hall.md` §1): `global_f` +6 scalars (cols 214..220: `next_hands`, `next_discards`, `tarots_used`, `blinds_skipped`, `unique_planets_used`, `hands_played_run`), `joker_f` +4 contribution columns (cols 13..17). Every older column keeps its index and value. The simulator, masks, actions and reward are unchanged. |
 
-`balatro_rl.model.load_checkpoint` accepts version 1 and migrates it exactly
-(`balatro_rl/model/migrate.py`); any other version is refused. The new input columns of the first
-`global_proj` Linear get zero weights and the new embedding tables (`deck`, `stake`; appended after the
-older tables) get zero rows, all matched **by feature name** (the v1 name lists are the v2 lists
-minus the added names), so on a Red/White game the migrated model computes the same function as the
-v1 model. The encoder evaluates the old and the new global columns as separate matmul / embedding
-sums that are then added, which makes the result bit-identical in float32 (one wider GEMM would
-round differently and flip a few near-tied decisions); `tests_py/test_migration.py` checks it
-against a recorded v1 rollout of `runs/bc/model.pt` and `runs/e2e_long_fix/latest.pt`. The Adam
-moments of a resumable checkpoint are padded with zeros the same way, a migrated checkpoint
-re-saves as version 2 (`migrated_from` is not kept).
+`balatro_rl.model.load_checkpoint` accepts versions 1 and 2 and migrates them exactly
+(`balatro_rl/model/migrate.py`; v1 goes v1 -> v2 -> v3); any other version is refused. The new
+input columns of the first `global_proj` Linear (and, v3, of `joker_proj`) get zero weights and the
+new embedding tables (`deck`, `stake`; appended after the older tables) get zero rows, all matched
+**by feature name** (the names of version `k` are the current lists minus the names added after
+`k`, `migrate.names_at`), so the migrated model computes the same function as the old model. The
+encoder evaluates the column groups of each version as separate matmul / embedding sums that are
+then added (`global_f`: 0..203 | 203..214 | 214..220; `joker_f`: 0..13 | 13..17), which makes the
+result bit-identical in float32 (one wider GEMM would round differently and flip a few near-tied
+decisions; the zero-weighted new group adds an exact 0). `tests_py/test_migration.py` checks the
+v1 path against a recorded v1 rollout of `runs/bc/model.pt` and `runs/e2e_long_fix/latest.pt`
+(atol 1e-3 because of the later sim parity fix), `tests_py/test_migration_v3.py` the v2 path
+against a recorded v2 rollout of `runs/st3/latest.pt` and `runs/st3_endless/latest.pt` over a
+deck / stake mix (atol 1e-6, actions exact; measured max difference 0.0). The Adam moments of a
+resumable checkpoint are padded with zeros the same way; a migrated checkpoint re-saves as the
+current version (`migrated_from`, the original version, is not kept).
 
-Stored BC datasets of version 1 (`runs/bc_data`) load through `bc.load_gpu`, which appends the new
-columns with the Red/White start-of-run values (`deck = stake = 0`; `base_hands` / `base_discards`
-cannot be recovered when a voucher changed them). Datasets written by `bc.collect` record
-`interface_version` in `meta.json`.
+Stored BC datasets of version 1 or 2 (`runs/bc_data`) load through `bc.load_gpu`, which appends the
+new columns (`migrate.LEGACY_DATA`): v1 -> v2 with the Red/White start-of-run values (`deck = stake
+= 0`; `base_hands` / `base_discards` cannot be recovered when a voucher changed them); v3
+`next_hands` / `next_discards` = `base_hands` / `base_discards`, the run counters and the joker
+contribution columns 0 (not recoverable from a stored observation). Datasets written by
+`bc.collect` record `interface_version` in `meta.json`.
 
 **Per-env configuration.** `VecEnv(..., deck="red", stake="white")` fixes one configuration;
 `VecEnv(..., decks=[...], stakes=[...])` (either list may be omitted, the single `deck` / `stake`

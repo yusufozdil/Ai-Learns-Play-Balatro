@@ -278,7 +278,7 @@ fn ancient_scored(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 // destroy test uses that drifted value; the 100th card still destroys it.
 const RAMEN_START: f64 = 2.0;
 const RAMEN_LOSS: f64 = 0.01;
-const RAMEN_FLOOR: f64 = 1.0;
+pub(crate) const RAMEN_FLOOR: f64 = 1.0;
 
 fn ramen_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     if j.value > RAMEN_FLOOR {
@@ -361,7 +361,7 @@ fn campfire_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // --- Throwback: https://balatrowiki.org/w/Throwback -----------------------------------------
 // No own state: x(1 + 0.25 * blinds skipped this run). Skips from before the joker was
 // acquired count (wiki), which is exactly `run.stats.blinds_skipped`.
-const THROWBACK_GAIN: f64 = 0.25;
+pub(crate) const THROWBACK_GAIN: f64 = 0.25;
 
 fn throwback_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let skipped = ctx.run().stats.blinds_skipped;

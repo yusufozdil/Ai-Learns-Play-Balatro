@@ -77,6 +77,11 @@ TABLE_SIZES = _table_sizes()
 # decisions. Mathematically it is the same single Linear / embedding sum.
 V1_GLOBAL_F = 203
 V1_GLOBAL_I = 8
+# Interface v3 appended 6 ``global_f`` columns after v2's 214 and 4 ``joker_f`` columns after the
+# 13 of v1/v2; they get their own matmul as well (zero weights after a v2 -> v3 migration add an
+# exact 0 to the v2 result).
+V2_GLOBAL_F = 214
+V2_JOKER_F = 13
 TOKEN_TYPES = ("global", "hand", "joker", "cons", "offer")
 
 
@@ -180,7 +185,16 @@ class Encoder(nn.Module):
         first, act, last = self.global_proj
         w = first.weight
         lead = F.linear(x[:, :V1_GLOBAL_F], w[:, :V1_GLOBAL_F].contiguous(), first.bias)
-        return last(act(lead + x[:, V1_GLOBAL_F:] @ w[:, V1_GLOBAL_F:].t()))
+        h = lead + x[:, V1_GLOBAL_F:V2_GLOBAL_F] @ w[:, V1_GLOBAL_F:V2_GLOBAL_F].t()
+        h = h + x[:, V2_GLOBAL_F:] @ w[:, V2_GLOBAL_F:].t()
+        return last(act(h))
+
+    def _joker_proj(self, x: torch.Tensor) -> torch.Tensor:
+        """``joker_proj(x)`` evaluated as the v2 columns plus the v3 contribution columns."""
+        lin = self.joker_proj
+        w = lin.weight
+        lead = F.linear(x[..., :V2_JOKER_F].contiguous(), w[:, :V2_JOKER_F].contiguous(), lin.bias)
+        return lead + x[..., V2_JOKER_F:] @ w[:, V2_JOKER_F:].t()
 
     @staticmethod
     def _lengths(obs: dict[str, torch.Tensor]) -> list[int]:
@@ -215,7 +229,7 @@ class Encoder(nn.Module):
             + te[1]
         )
         j = (
-            self.joker_proj(obs["joker_f"][:, :nj])
+            self._joker_proj(obs["joker_f"][:, :nj])
             + self._cat("joker_i", obs["joker_i"][:, :nj])
             + self.pos_joker.weight[:nj]
             + te[2]

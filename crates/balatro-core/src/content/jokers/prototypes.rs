@@ -172,7 +172,7 @@ pub static DEFS: &[JokerDef] = &[
 ];
 
 // --- Joker: https://balatrowiki.org/w/Joker -------------------------------------------------
-const JOKER_MULT: f64 = 4.0;
+pub(crate) const JOKER_MULT: f64 = 4.0;
 
 fn joker_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     ctx.add_mult(JOKER_MULT);
@@ -197,7 +197,7 @@ fn jolly_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Cavendish: https://balatrowiki.org/w/Cavendish -----------------------------------------
-const CAVENDISH_XMULT: f64 = 3.0;
+pub(crate) const CAVENDISH_XMULT: f64 = 3.0;
 const CAVENDISH_DESTROY_ODDS: (u32, u32) = (1, 1000);
 
 fn cavendish_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
@@ -235,7 +235,7 @@ fn baron_held(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 // Lowest-ranked held card (Stone excluded; ties: rightmost) adds 2x its chip value (face 10,
 // Ace 11) as mult. A debuffed lowest card still counts as lowest but gives +0 (the pipeline
 // skips debuffed held cards).
-const RAISED_FIST_FACTOR: f64 = 2.0;
+pub(crate) const RAISED_FIST_FACTOR: f64 = 2.0;
 
 fn raised_fist_held(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
     let held = ctx.held();
@@ -324,7 +324,7 @@ fn supernova_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Bull: https://balatrowiki.org/w/Bull ---------------------------------------------------
-const BULL_CHIPS_PER_DOLLAR: f64 = 2.0;
+pub(crate) const BULL_CHIPS_PER_DOLLAR: f64 = 2.0;
 
 fn bull_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let money = ctx.money();
@@ -349,7 +349,7 @@ fn oops_modifiers(_: &JokerInstance, m: &mut Modifiers) {
 // --- Brainstorm: https://balatrowiki.org/w/Brainstorm (copies: copy_leftmost) ----------------
 
 // --- Baseball Card: https://balatrowiki.org/w/Baseball_Card ---------------------------------
-const BASEBALL_XMULT: f64 = 1.5;
+pub(crate) const BASEBALL_XMULT: f64 = 1.5;
 
 fn baseball_other(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, other: usize) {
     if ctx
@@ -361,7 +361,7 @@ fn baseball_other(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, other: usize) {
 }
 
 // --- Golden Joker: https://balatrowiki.org/w/Golden_Joker -----------------------------------
-const GOLDEN_MONEY: i32 = 4;
+pub(crate) const GOLDEN_MONEY: i32 = 4;
 
 fn golden_round_end(_: &mut JokerInstance, ctx: &mut EventCtx<'_>, _: &RoundEndInfo) {
     ctx.add_money(GOLDEN_MONEY);

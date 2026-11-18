@@ -74,7 +74,7 @@ Two facts shape everything below.
   problem (the pair Burglar + Banner is rare). The error hall (below) attacks the second cause
   and is cheap; the feature attacks the first and is a shared-contract change.
 
-### 1.4 Proposal (not implemented; the orchestrator schedules shared-contract changes)
+### 1.4 Proposal (P1 and P2 implemented as interface v3, `rl_interface.md` §3.2 / §3.4 / §12)
 
 **P0, a probe before any change (CPU or a few GPU minutes, no contract change).** On the mined
 pool (or recorded Shop states) regress the *true* contribution of Banner / Raised Fist /

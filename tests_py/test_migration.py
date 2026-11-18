@@ -5,6 +5,8 @@
 (4 envs, 220 steps, seed 5): per step the teacher-forced ``evaluate_full`` outputs (value, logp,
 per-part log-probs, entropies, argmax hits) and the deterministic ``act`` result. A migrated v1
 checkpoint must reproduce them. Skipped when torch or the (gitignored) checkpoints are missing.
+Since interface v3 the same checkpoints migrate in two steps (v1 -> v2 -> v3); the v2 -> v3 step
+has its own test, ``test_migration_v3.py``.
 """
 
 from pathlib import Path
@@ -17,6 +19,7 @@ torch = pytest.importorskip("torch")
 from balatro_rl import INTERFACE_VERSION, LAYOUT, BalatroVecEnv  # noqa: E402
 from balatro_rl.model import ModelConfig, TeamModel, load_checkpoint, save_checkpoint  # noqa: E402
 from balatro_rl.model import migrate as mg  # noqa: E402
+from test_migration_v3 import find_run_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests_py" / "fixtures" / "v1_reference.npz"
@@ -26,6 +29,7 @@ CHECKPOINTS = {"bc": "runs/bc/model.pt", "e2e": "runs/e2e_long_fix/latest.pt"}
 NAMES = LAYOUT["feature_names"]
 GF = {n: i for i, n in enumerate(NAMES["global_f"])}
 GI = {n: i for i, n in enumerate(NAMES["global_i"])}
+JF = {n: i for i, n in enumerate(NAMES["joker_f"])}
 
 
 def reference(model):
@@ -58,14 +62,14 @@ def reference(model):
 
 @pytest.mark.parametrize("tag", list(CHECKPOINTS))
 def test_migrated_v1_checkpoint_reproduces_v1_outputs(tag):
-    path = ROOT / CHECKPOINTS[tag]
-    if not path.exists():
-        pytest.skip(f"{path} not available")
+    path = find_run_file(CHECKPOINTS[tag])
+    if path is None:
+        pytest.skip("checkpoint not available")
     old = torch.load(path, map_location="cpu", weights_only=False)
     if old["interface_version"] != 1:
         pytest.skip("checkpoint already migrated")
     model, ck = load_checkpoint(path)
-    assert ck["interface_version"] == INTERFACE_VERSION == 2 and ck["migrated_from"] == 1
+    assert ck["interface_version"] == INTERFACE_VERSION == 3 and ck["migrated_from"] == 1
     model.eval()
     ref = np.load(FIXTURE)
     got = reference(model)
@@ -90,16 +94,16 @@ def test_migrated_v1_checkpoint_reproduces_v1_outputs(tag):
 
 
 def test_migrated_checkpoint_resaves_as_v2_and_optimizer_state_is_remapped(tmp_path):
-    path = ROOT / CHECKPOINTS["e2e"]
-    if not path.exists():
-        pytest.skip(f"{path} not available")
+    path = find_run_file(CHECKPOINTS["e2e"])
+    if path is None:
+        pytest.skip("checkpoint not available")
     old = torch.load(path, map_location="cpu", weights_only=False)
     if old["interface_version"] != 1:
         pytest.skip("checkpoint already migrated")
     model, ck = load_checkpoint(path)
     save_checkpoint(tmp_path / "m.pt", model)
     again = torch.load(tmp_path / "m.pt", map_location="cpu", weights_only=False)
-    assert again["interface_version"] == 2 and "migrated_from" not in again
+    assert again["interface_version"] == INTERFACE_VERSION and "migrated_from" not in again
     m2, _ = load_checkpoint(tmp_path / "m.pt")
     for (k, a), (_, b) in zip(model.state_dict().items(), m2.state_dict().items(), strict=True):
         assert torch.equal(a, b), k
@@ -131,6 +135,8 @@ def test_synthetic_v1_checkpoint_migrates_exactly(tmp_path):
     sd = {k: v.clone() for k, v in full.state_dict().items()}
     cols = [GF[n] for n in mg.v1_names("global_f")]
     sd["encoder.global_proj.0.weight"] = sd["encoder.global_proj.0.weight"][:, cols].clone()
+    jcols = [JF[n] for n in mg.v1_names("joker_f")]
+    sd["encoder.joker_proj.weight"] = sd["encoder.joker_proj.weight"][:, jcols].clone()
     from balatro_rl.model import encoder as enc
 
     keep = sum(mg.v1_table_sizes().values())
@@ -153,7 +159,8 @@ def test_synthetic_v1_checkpoint_migrates_exactly(tmp_path):
     act = torch.from_numpy(env.teacher_actions().copy())
     ref = migrated.evaluate_full(base, masks, hid, act)
     noisy = {k: v.copy() for k, v in obs.items()}
-    noisy["global_f"][:, [GF[n] for n in mg.ADDED_GLOBAL_F]] = 0.7
+    noisy["global_f"][:, [GF[n] for n in mg.ADDED_GLOBAL_F + mg.ADDED_GLOBAL_F_V3]] = 0.7
+    noisy["joker_f"][..., [JF[n] for n in mg.ADDED_JOKER_F_V3]] = -0.3
     noisy["global_i"][:, GI["deck"]] = 9
     noisy["global_i"][:, GI["stake"]] = 6
     other = migrated.evaluate_full(noisy, masks, hid, act)
@@ -243,7 +250,8 @@ def test_configuration_columns_persist_through_the_run():
 
 def test_joker_perish_column_exists_in_v1_and_v2():
     assert "perish_rounds_left" in NAMES["joker_f"]
-    assert LAYOUT["version"] == 2
+    assert "perish_rounds_left" in mg.v1_names("joker_f")
+    assert LAYOUT["version"] == 3
 
 
 # --------------------------------------------------------------------------- per-env sampling
@@ -293,36 +301,54 @@ def test_v1_bc_dataset_loads_with_appended_columns(tmp_path):
 
     bc.collect(tmp_path, num_envs=6, steps=24, seed=3, threads=1, log=lambda *_: 0)
     new = bc.load_gpu(tmp_path, torch.device("cpu"))
-    assert new["global_f"].shape[-1] == 214 and new["global_i"].shape[-1] == 10
-    # Rewrite the two files the way a v1 collect stored them (v1 columns only).
+    assert new["global_f"].shape[-1] == 220 and new["global_i"].shape[-1] == 10
+    assert new["joker_f"].shape[-1] == 17
+    # Rewrite the files the way a v1 collect stored them (v1 columns only).
     fcols = [GF[n] for n in mg.v1_names("global_f")]
     icols = [GI[n] for n in mg.v1_names("global_i")]
+    jcols = [JF[n] for n in mg.v1_names("joker_f")]
     gf = np.load(tmp_path / "global_f.npy")[..., fcols]
     gi = np.load(tmp_path / "global_i.npy")[..., icols]
-    assert gf.shape[-1] == 203 and gi.shape[-1] == 8
+    jf = np.load(tmp_path / "joker_f.npy")[..., jcols]
+    assert gf.shape[-1] == 203 and gi.shape[-1] == 8 and jf.shape[-1] == 13
     np.save(tmp_path / "global_f.npy", gf)
     np.save(tmp_path / "global_i.npy", gi)
+    np.save(tmp_path / "joker_f.npy", jf)
     old = bc.load_gpu(tmp_path, torch.device("cpu"))
     assert old["global_f"].shape == new["global_f"].shape
+    assert old["joker_f"].shape == new["joker_f"].shape
     assert torch.equal(old["global_i"], new["global_i"])  # Red/White: deck = stake = 0
-    drift = [GF["base_hands"], GF["base_discards"]]  # vouchers may have changed these
-    keep = [i for i in range(214) if i not in drift]
+    # Not recoverable: vouchers may have changed the base values; the v3 columns.
+    drift = {GF["base_hands"], GF["base_discards"]} | {GF[n] for n in mg.ADDED_GLOBAL_F_V3}
+    keep = [i for i in range(len(GF)) if i not in drift]
     assert torch.equal(old["global_f"][..., keep], new["global_f"][..., keep])
+    assert torch.equal(old["joker_f"][..., jcols], new["joker_f"][..., jcols])
+    assert not old["joker_f"][..., [JF[n] for n in mg.ADDED_JOKER_F_V3]].any()
+    # A v2 dataset (214 / 13 columns) loads too.
+    v2 = new["global_f"].numpy()[..., [GF[n] for n in mg.v2_names("global_f")]]
+    np.save(tmp_path / "global_f.npy", v2.astype(np.float16))
+    mid = bc.load_gpu(tmp_path, torch.device("cpu"))
+    v3cols = {GF[n] for n in mg.ADDED_GLOBAL_F_V3}
+    keep = [i for i in range(len(GF)) if i not in v3cols]
+    assert torch.equal(mid["global_f"][..., keep], new["global_f"][..., keep])
 
 
 # --------------------------------------------------------------------------- PPO paths
 
 
-def _to_v1(src, dst):
-    """Rewrite a v2 PPO checkpoint as a v1 one (cut the new columns / table rows and the matching
-    Adam moments by name) - the inverse of ``migrate_v1_to_v2``."""
+def _to_v1(src, dst, version=1):
+    """Rewrite a current PPO checkpoint as a ``version`` one (cut the newer columns / table rows
+    and the matching Adam moments by name) - the inverse of ``model.migrate``."""
     ck = torch.load(src, map_location="cpu", weights_only=False)
-    cols = [GF[n] for n in mg.v1_names("global_f")]
+    cols = [GF[n] for n in mg.names_at(version, "global_f")]
+    jcols = [JF[n] for n in mg.names_at(version, "joker_f")]
     keep = sum(mg.v1_table_sizes().values())
     cut = {
         "encoder.global_proj.0.weight": lambda t: t[:, cols].clone(),
-        "encoder.table.weight": lambda t: t[:keep].clone(),
+        "encoder.joker_proj.weight": lambda t: t[:, jcols].clone(),
     }
+    if version == 1:
+        cut["encoder.table.weight"] = lambda t: t[:keep].clone()
     names = [n for n, _ in TeamModel(ModelConfig(**ck["config"])).named_parameters()]
     for name, fn in cut.items():
         shape = tuple(ck["state_dict"][name].shape)
@@ -331,7 +357,7 @@ def _to_v1(src, dst):
         for k, v in st.items():
             if isinstance(v, torch.Tensor) and tuple(v.shape) == shape:
                 st[k] = fn(v)
-    ck["interface_version"] = 1
+    ck["interface_version"] = version
     torch.save(ck, dst)
 
 
@@ -364,7 +390,18 @@ def test_ppo_resume_and_init_from_v1_checkpoints_and_sampled_training(tmp_path):
     assert t2.update_idx == 2
     t2.train()
     assert t2.update_idx == 3
-    assert torch.load(v1 / "latest.pt", weights_only=False)["interface_version"] == 2
+    assert torch.load(v1 / "latest.pt", weights_only=False)["interface_version"] == 3
+    # The same from a v2 run directory.
+    v2 = tmp_path / "v2run"
+    v2.mkdir()
+    _to_v1(out / "latest.pt", v2 / "latest.pt", version=2)
+    cfg2b = tiny_cfg(
+        tmp_path, out_dir=str(v2), total_steps=16 * 16 * 3, eval_every=0, save_every=1, **kw
+    )
+    t2b = Trainer(cfg2b, echo=lambda *_: 0, device="cpu", resume=True)
+    assert t2b.update_idx == 2
+    t2b.train()
+    assert torch.load(v2 / "latest.pt", weights_only=False)["interface_version"] == 3
     # --init (with the KL penalty reference) from a v1 checkpoint.
     _to_v1(out / "latest.pt", tmp_path / "init_v1.pt")
     cfg3 = tiny_cfg(

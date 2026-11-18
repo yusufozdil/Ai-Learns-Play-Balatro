@@ -312,24 +312,29 @@ fn half_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // X1 per empty joker slot; every Joker Stencil owned counts as one extra empty slot (its own).
 // `joker_slots` already includes Negative bonuses and Negative jokers are in `jokers()`, so
 // they cancel out. A Blueprint copy reads the same board (Blueprint is not a Stencil).
-const STENCIL_XMULT_PER_SLOT: f64 = 1.0;
+pub(crate) const STENCIL_XMULT_PER_SLOT: f64 = 1.0;
 
-fn stencil_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let slots = i64::from(ctx.run().joker_slots);
-    let owned = ctx.jokers().len() as i64;
-    let stencils = ctx
-        .jokers()
+/// Empty joker slots as Joker Stencil counts them (each Stencil counts as empty). Shared with
+/// the observation's contribution block (`crate::contribution`).
+pub(crate) fn stencil_empty_slots(joker_slots: u32, jokers: &[JokerInstance]) -> i64 {
+    let slots = i64::from(joker_slots);
+    let owned = jokers.len() as i64;
+    let stencils = jokers
         .iter()
         .filter(|jk| jk.id == JokerId::JokerStencil)
         .count() as i64;
-    let empty = (slots - owned + stencils).max(0);
+    (slots - owned + stencils).max(0)
+}
+
+fn stencil_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
+    let empty = stencil_empty_slots(ctx.run().joker_slots, ctx.jokers());
     if empty > 0 {
         ctx.x_mult(STENCIL_XMULT_PER_SLOT * empty as f64);
     }
 }
 
 // --- Banner: https://balatrowiki.org/w/Banner ---
-const BANNER_CHIPS_PER_DISCARD: f64 = 30.0;
+pub(crate) const BANNER_CHIPS_PER_DISCARD: f64 = 30.0;
 
 fn banner_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let left = ctx.run().discards_left;
@@ -339,7 +344,7 @@ fn banner_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 }
 
 // --- Mystic Summit: https://balatrowiki.org/w/Mystic_Summit ---
-const SUMMIT_MULT: f64 = 15.0;
+pub(crate) const SUMMIT_MULT: f64 = 15.0;
 
 fn summit_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     if ctx.run().discards_left == 0 {
@@ -349,8 +354,8 @@ fn summit_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 
 // --- Misprint: https://balatrowiki.org/w/Misprint ---
 // Uniform integer +0..=+23 Mult (wiki: "+0 to +23"); `rng_range` upper bound is exclusive.
-const MISPRINT_MIN: usize = 0;
-const MISPRINT_MAX_EXCLUSIVE: usize = 24;
+pub(crate) const MISPRINT_MIN: usize = 0;
+pub(crate) const MISPRINT_MAX_EXCLUSIVE: usize = 24;
 
 fn misprint_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let m = ctx.rng_range(MISPRINT_MIN, MISPRINT_MAX_EXCLUSIVE);
@@ -374,7 +379,7 @@ fn fibonacci_scored(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) 
 
 // --- Steel Joker: https://balatrowiki.org/w/Steel_Joker ---
 // X(1 + 0.2 n), n = Steel cards in the full deck.
-const STEEL_XMULT_PER_CARD: f64 = 0.2;
+pub(crate) const STEEL_XMULT_PER_CARD: f64 = 0.2;
 
 fn steel_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let n = ctx.deck().by_enhancement[Enhancement::Steel.index()];
@@ -393,7 +398,7 @@ fn scary_scored(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 }
 
 // --- Abstract Joker: https://balatrowiki.org/w/Abstract_Joker ---
-const ABSTRACT_MULT_PER_JOKER: f64 = 3.0;
+pub(crate) const ABSTRACT_MULT_PER_JOKER: f64 = 3.0;
 
 fn abstract_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let n = ctx.jokers().len();

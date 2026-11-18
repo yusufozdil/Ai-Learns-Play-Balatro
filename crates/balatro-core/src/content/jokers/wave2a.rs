@@ -205,8 +205,8 @@ fn dagger_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // but is already marked). Every played hand counts, also hands that score nothing. The
 // hand number `n = hands_played_run - offset` (current hand included) gives X4 when
 // `n % 6 == 0`: hands 1-5 nothing, the 6th hand X4, then it repeats.
-const LOYALTY_PERIOD: u32 = 6;
-const LOYALTY_XMULT: f64 = 4.0;
+pub(crate) const LOYALTY_PERIOD: u32 = 6;
+pub(crate) const LOYALTY_XMULT: f64 = 4.0;
 const LOYALTY_RECORDED: u8 = 1;
 
 fn loyalty_acquire(j: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
@@ -216,9 +216,15 @@ fn loyalty_acquire(j: &mut JokerInstance, ctx: &mut EventCtx<'_>) {
     }
 }
 
+/// Loyalty Card fires on the hand that brings `hands_played_run` (current hand included) to
+/// `offset + 6k`, k >= 1. Shared with the observation's contribution block.
+pub(crate) fn loyalty_fires(hands_played_run: u32, offset: u32) -> bool {
+    let n = hands_played_run.saturating_sub(offset);
+    n > 0 && n.is_multiple_of(LOYALTY_PERIOD)
+}
+
 fn loyalty_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
-    let n = ctx.run().hands_played_run.saturating_sub(j.counter);
-    if n > 0 && n.is_multiple_of(LOYALTY_PERIOD) {
+    if loyalty_fires(ctx.run().hands_played_run, j.counter) {
         ctx.x_mult(LOYALTY_XMULT);
     }
 }
@@ -227,7 +233,7 @@ fn loyalty_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // No state. +15 mult; at the end of every round 1 in 6 (Oops! All 6s doubles it) it destroys
 // itself and the run flag `GrosMichelExtinct` is set (Cavendish becomes available). End-of-round
 // effects are never copied, so Blueprint cannot trigger the roll. Cannot be Eternal.
-const GROS_MICHEL_MULT: f64 = 15.0;
+pub(crate) const GROS_MICHEL_MULT: f64 = 15.0;
 const GROS_MICHEL_EXTINCT_ODDS: (u32, u32) = (1, 6);
 
 fn gros_michel_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
@@ -280,7 +286,7 @@ fn constellation_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // --- Green Joker: https://balatrowiki.org/w/Green_Joker ------------------------------------
 // value = current +mult (starts 0, never below 0). +1 for every hand played (the played hand
 // already benefits), -1 for every discard ACTION (not per card).
-const GREEN_HAND_GAIN: f64 = 1.0;
+pub(crate) const GREEN_HAND_GAIN: f64 = 1.0;
 const GREEN_DISCARD_LOSS: f64 = 1.0;
 
 fn green_before(j: &mut JokerInstance, _: &mut ScoreCtx<'_>) {
@@ -301,7 +307,7 @@ fn green_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // No state: X3 when the played hand type was already played earlier this round.
 // `hand_plays_round` includes the current hand, so "already played" is `> 1`. Only the exact
 // hand type counts (a Straight Flush after a Flush does not).
-const CARD_SHARP_XMULT: f64 = 3.0;
+pub(crate) const CARD_SHARP_XMULT: f64 = 3.0;
 
 fn card_sharp_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let plays = ctx.run().hand_plays_round[ctx.hand_type().index()];
@@ -462,7 +468,7 @@ fn obelisk_main(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
 // No own state: +1 mult per Tarot card used this run, read from `run().stats.tarots_used`
 // (retroactive: Tarots used before buying it count, per the wiki). The consumable system
 // (Phase 4) must update `RunStats::tarots_used` when a Tarot is used.
-const FORTUNE_TELLER_MULT_PER_TAROT: f64 = 1.0;
+pub(crate) const FORTUNE_TELLER_MULT_PER_TAROT: f64 = 1.0;
 
 fn fortune_teller_main(_: &mut JokerInstance, ctx: &mut ScoreCtx<'_>) {
     let used = ctx.run().stats.tarots_used;

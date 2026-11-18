@@ -9,6 +9,7 @@ use balatro_core::action_mask::{ActionKind, CardSelect, card_select, structured_
 use balatro_core::blinds::BlindKind;
 use balatro_core::boss;
 use balatro_core::card::Card;
+use balatro_core::contribution::{ContribCtx, next_round_budget};
 use balatro_core::enums::Phase;
 use balatro_core::joker::JokerInstance;
 use balatro_core::packs::PackItem;
@@ -233,6 +234,14 @@ fn write_global(s: &GameState, row: &mut Row<'_>) {
     w.flag(ddef.no_interest);
     w.put(div(f64::from(ddef.hand_reward), 2.0));
     w.put(div(f64::from(ddef.discard_reward), 2.0));
+    // Next round and run counters (interface version 3).
+    let (next_hands, next_discards) = next_round_budget(s);
+    w.put(div(f64::from(next_hands), 8.0));
+    w.put(div(f64::from(next_discards), 8.0));
+    w.put(cc(f64::from(s.stats.run.tarots_used)));
+    w.put(cc(f64::from(s.stats.run.blinds_skipped)));
+    w.put(cc(f64::from(s.stats.run.unique_planets_used)));
+    w.put(cc(f64::from(s.stats.hands_played)));
     debug_assert_eq!(w.i, GLOBAL_F);
 }
 
@@ -267,6 +276,7 @@ fn joker_flags(j: &JokerInstance, f: &mut [f32]) {
 fn write_jokers(s: &GameState, row: &mut Row<'_>) {
     let nf = JOKER_F.len();
     let ni = JOKER_I.len();
+    let contrib = ContribCtx::new(s);
     for i in 0..s.jokers.len().min(JOKER_CAP) {
         row.joker_valid[i] = true;
         let f = &mut row.joker_f[i * nf..(i + 1) * nf];
@@ -283,6 +293,12 @@ fn write_jokers(s: &GameState, row: &mut Row<'_>) {
         f[10] = f64::from(j.counter.min(100)) as f32 / 10.0;
         f[11] = (f64::from(j.counter).ln_1p() / 5.0) as f32;
         f[12] = (j.aux_byte() as f32) / 255.0;
+        // Contribution block (interface version 3); 0 for debuffed jokers.
+        let c = contrib.joker(i);
+        f[13] = sl(c.chips);
+        f[14] = sl(c.mult);
+        f[15] = c.xmult.max(1e-300).ln() as f32;
+        f[16] = sl(c.money);
         let c = &mut row.joker_i[i * ni..(i + 1) * ni];
         c[0] = joker_item(j.id.index());
         c[1] = j.edition.index() as i32 + 1;
@@ -662,6 +678,58 @@ mod tests {
         assert_eq!(f(&o, "eternal_on"), 1.0);
         assert_eq!(f(&o, "perishable_on"), 0.0);
         assert_eq!(f(&o, "base_discards"), 2.0 / 8.0);
+    }
+
+    #[test]
+    fn v3_next_round_counters_and_contribution_columns() {
+        let names = global_f_names();
+        let col = |n: &str| names.iter().position(|x| x == n).unwrap();
+        let jf = |n: &str| JOKER_F.iter().position(|x| *x == n).unwrap();
+        let nf = JOKER_F.len();
+        let mut g = Game::new(5, GameConfig::default());
+        for (i, id) in [JokerId::Banner, JokerId::Burglar, JokerId::Constellation]
+            .into_iter()
+            .enumerate()
+        {
+            g.add_joker(JokerInstance::new(50 + i as u32, id).with_value(1.5))
+                .unwrap();
+        }
+        {
+            let s = g.state_mut();
+            s.stats.run.tarots_used = 4;
+            s.stats.run.blinds_skipped = 2;
+            s.stats.run.unique_planets_used = 1;
+            s.stats.hands_played = 19;
+        }
+        let o = encode(g.state());
+        assert_eq!(o.global_f[col("next_hands")], 7.0 / 8.0);
+        assert_eq!(o.global_f[col("next_discards")], 0.0);
+        assert_eq!(o.global_f[col("tarots_used")], cc(4.0));
+        assert_eq!(o.global_f[col("blinds_skipped")], cc(2.0));
+        assert_eq!(o.global_f[col("unique_planets_used")], cc(1.0));
+        assert_eq!(o.global_f[col("hands_played_run")], cc(19.0));
+        // Banner under Burglar: 0 chips; Burglar itself 0; Constellation x1.5.
+        for k in [
+            "contrib_chips",
+            "contrib_mult",
+            "contrib_xmult",
+            "contrib_money",
+        ] {
+            assert_eq!(o.joker_f[jf(k)], 0.0, "Banner {k}");
+            assert_eq!(o.joker_f[nf + jf(k)], 0.0, "Burglar {k}");
+        }
+        assert_eq!(o.joker_f[2 * nf + jf("contrib_xmult")], 1.5f64.ln() as f32);
+        // Without Burglar, Banner gives 30 x 4 chips.
+        g.state_mut().jokers.remove(1);
+        g.state_mut().refresh_modifiers();
+        let o = encode(g.state());
+        assert_eq!(o.global_f[col("next_hands")], 0.5);
+        assert_eq!(o.global_f[col("next_discards")], 0.5);
+        assert_eq!(o.joker_f[jf("contrib_chips")], sl(120.0));
+        // A debuffed joker: no contribution.
+        g.state_mut().jokers[0].debuffed = true;
+        let o = encode(g.state());
+        assert_eq!(o.joker_f[jf("contrib_chips")], 0.0);
     }
 
     #[test]

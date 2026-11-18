@@ -221,6 +221,9 @@ def test_training_with_truncation_bootstrap_reorder_cost_and_guarded_validation(
         eval_every=2,
         eval_move_limit=2,
         save_every=1,
+        # A seed whose random-init greedy policy lives past 7 steps (with the v3 input widths
+        # seed 0 plays High Cards and loses every eval game in 5 steps).
+        seed=1,
     )
     tr = Trainer(cfg, echo=lambda *_: 0, device="cpu")
     tr.train()
