@@ -17,7 +17,7 @@ MOD="$MODS/balatrobot"
 [ -d "$STAGING/src/lua" ] || { echo "pristine BalatroBot not found: $STAGING" >&2; exit 1; }
 
 BACKUP="$MOD/.bridge_backup"
-FILES="balatrobot.lua src/lua/utils/gamestate.lua src/lua/endpoints/sell.lua"
+FILES="balatrobot.lua src/lua/utils/gamestate.lua src/lua/endpoints/sell.lua src/lua/endpoints/buy.lua src/lua/endpoints/pack.lua"
 
 if [ "${1:-}" = "--revert" ]; then
   for f in $FILES; do cp -v "$STAGING/$f" "$MOD/$f"; done

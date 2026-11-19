@@ -275,3 +275,26 @@ def test_mouth_locked_hand_is_reconstructed_from_only_hand():
     assert tr.state["boss_state"]["hand"] == "Pair"
     pred = parity.predict_play(tr.state, d["mask"])
     assert pred["hand_type"] == "TwoPair" and pred["pred"] == 0.0
+
+
+def test_payout_check_flags_a_cash_out_that_differs_from_the_engine(tmp_path):
+    """The engine pays the round out inside the winning Play; `Runner._check_payout` compares it
+    with the money the real game shows after `cash_out` (an early cash-out used to pay the
+    previous round's total)."""
+    from balatro_rl.bridge.runner import GameResult
+
+    r = _runner(tmp_path, [])
+    res = GameResult(game=0, seed="X", outcome="error")
+    r._expect_money = 14
+    r._check_payout(res, {"state": "SHOP", "money": 14}, 5, [{"name": "blind1", "dollars": 4}])
+    assert res.extra == {"payout_checks": 1}
+    r._expect_money = 14
+    r._check_payout(res, {"state": "SHOP", "money": 10}, 5, [{"name": "blind1", "dollars": 4}])
+    assert res.extra == {"payout_checks": 2, "payout_mismatch": 1}
+    r._expect_money = None  # no prediction (the Play did not end the round): nothing to check
+    r._check_payout(res, {"state": "SHOP", "money": 3}, 5, None)
+    assert res.extra["payout_checks"] == 2
+    r.close()
+    recs = [json.loads(x) for x in (tmp_path / "log.jsonl").read_text().splitlines()]
+    warn = [x for x in recs if x["ev"] == "warn"]
+    assert len(warn) == 1 and warn[0]["engine"] == 14 and warn[0]["real"] == 10

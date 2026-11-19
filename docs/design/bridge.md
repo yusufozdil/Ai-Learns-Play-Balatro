@@ -47,14 +47,14 @@ Files:
 | `runner.py` | `Runner`, `ModelPolicy`, `RandomPolicy`, JSONL log, known-bug blocks |
 | `bridge/lua/` | the Lua patch (section 2) |
 
-## 2. The Lua patch (`bridge/`, version 4)
+## 2. The Lua patch (`bridge/`, version 6)
 
 Stock BalatroBot 1.5.2 gives joker counters only as effect *text* and exposes none of the
 round-target cards (Idol / Ancient / Castle / Mail-In), held tags, the boss state, the open pack's
 kind, the full deck or the discard pile, and has no Director's Cut / Retcon endpoint. The patch is
 minimal and separately versioned:
 
-* `bridge/lua/bridge_ext.lua` (new file, `VERSION = 4`; v4 adds `bridge.cash_out_ready` and `bridge.paused`): `card_raw(card)` (the raw `card.ability`
+* `bridge/lua/bridge_ext.lua` (new file, `VERSION = 6`; v4 adds `bridge.cash_out_ready` and `bridge.paused`; v6 adds `bridge.eval_rows` and makes `cash_out_ready` wait for the round's real total, see section 11, "Audit of the 100-game run"): `card_raw(card)` (the raw `card.ability`
   table, seal, edition, base rank/suit, debuff, facing, centre key, costs) and `game_raw()`
   (selected `G.GAME` fields: `current_round` incl. `idol_card` / `ancient_card` / `castle_card` /
   `mail_card` / `free_rerolls` / `reroll_cost_increase`, `round_resets`, held `tags`, the `blind` object, `orbital_choices`,
@@ -67,11 +67,14 @@ minimal and separately versioned:
 * `bridge/lua/endpoints/continue_endless.lua` (new endpoint `continue_endless`, only in
   `ROUND_EVAL` after a win): waits for the win screen and presses its "Endless" button
   (`G.FUNCS.exit_overlay_menu`); `cash_out` follows once `bridge.cash_out_ready` is true. BalatroBot has no such call.
-* `bridge/lua/balatrobot-1.5.2.patch`: a small diff of three stock files (`balatrobot.lua`: load the
+* `bridge/lua/balatrobot-1.5.2.patch`: a small diff of five stock files (`balatrobot.lua`: load the
   extension and register the endpoints; `src/lua/utils/gamestate.lua`: add `raw` to every card and
   call `augment`; `src/lua/endpoints/sell.lua`: allow `sell` while a booster pack is open, the stock
   endpoint only accepts SELECTING_HAND / SHOP although the game allows it and the policy often wants
-  to sell a joker to make room for a Buffoon pick). Both hooks are wrapped in `pcall`: an error in the extension can never break the
+  to sell a joker to make room for a Buffoon pick; **v5** `src/lua/endpoints/buy.lua` and
+  `pack.lua`: the game's own room rule (`G.FUNCS.check_for_buy_space`: a Negative card brings its
+  own slot, so it may be bought / picked with full joker or consumable slots) and `buy {card, use: true}` =
+  the shop's "Buy and use" button, which the game allows with full consumable slots). Both hooks are wrapped in `pcall`: an error in the extension can never break the
   stock gamestate (it is reported as `bridge_error`).
 * `bridge/apply_lua_patch.sh [--revert]` installs pristine 1.5.2 (from the staging directory) + the patch + the new
   files into the installed mod, after backing up the originals once to
@@ -212,8 +215,10 @@ BalatroBot's own `modifier.enhancement` field is *localised text* (#194) and is 
 * **Rejected actions.** Any `ApiError` is logged (`reject`), the action is masked
   (`kind` or `(kind, arg0)`) and the policy is queried again on the same state; after 12 rejects in
   one state the game is abandoned (`error`).
-* **BuyAndUse** needs a free consumable slot in BalatroBot (`buy` refuses otherwise); the
-  rejection path handles it.
+* **BuyAndUse**: with a free consumable slot `buy` then `use` (last slot); with full slots (the
+  engine allows it, so does the game: `buy_from_shop` skips the room check for the "Buy and use"
+  button) `buy {card, use: true}` of the v5 patch. A Negative joker / consumable may be bought with
+  full slots (engine rule = game rule); stock `buy` / `pack` refused both, v5 does not.
 
 ## 6. Game flow
 
@@ -227,7 +232,7 @@ BalatroBot's own `modifier.enhancement` field is *localised text* (#194) and is 
 | `HAND_PLAYED`, `DRAW_TO_HAND`, `NEW_ROUND`, `*_PACK`, `PLAY_TAROT` or `bridge.controller_locked` | transition: poll every 0.4 s up to 90 s |
 | `GAME_OVER` | loss; the next game starts with `menu` |
 | `won == true` (ante-8 boss beaten) | win, recorded the moment the gamestate shows it (`won_ante = 8`, `ante_num` already reads 9 on the win screen), whatever happens afterwards. Without `--endless` the run is abandoned. With `--endless` the runner presses `continue_endless`, waits for `bridge.cash_out_ready`, `cash_out`s and keeps playing with `endless=True` engine states until the run is lost or the boss of `--endless-max-ante` (default 12) is beaten (`ante_num > cap`). The log has `won_ante`, `endless_ante` (highest `ante_num` seen) and `endless_end` (`loss` / `cap` for a regular end; `crash` / `hang` / `error` / `max_decisions` when the continuation broke down). The outcome is `win` in all cases |
-| `ROUND_EVAL` | `cash_out`, but only once `bridge.cash_out_ready` (all end-of-round rows built, cash-out button exists); polled up to 90 s (`Runner.wait_cash_out_ready`) |
+| `ROUND_EVAL` | `cash_out`, but only once `bridge.cash_out_ready` (all end-of-round rows built, cash-out button exists **and `current_round.dollars` equals the round's real total**, patch v6: an early press pays the previous round's total); polled up to 90 s (`Runner.wait_cash_out_ready`); the engine's payout is compared with the real one (`Runner._check_payout`) |
 
 ## 7. Hidden information
 
@@ -267,7 +272,9 @@ removes tag jokers too in both. Real prices equal the engine's (2034 checked sho
 | #198 thin decks | hang | not handled (not reached on Red/White so far) |
 | #194 `modifier.enhancement` is localised text | wrong enhancement | not used; the centre key from the patch's `raw` is used |
 | `sell` only in SELECTING_HAND / SHOP, `use` only in SELECTING_HAND / SHOP | the engine allows both while a pack is open; 3260 rejected `SellJoker` in one game | `sell` patched (section 2); `use` of a held consumable in a pack is masked (`known_bug_blocks`) |
-| `buy` refuses a joker / consumable when the slots are full | engine allows Negative / BuyAndUse | rejection path (logged with context) |
+| `buy` refuses a joker / consumable when the slots are full | the game allows Negative cards and "Buy and use" with full slots (the engine does too; 22 + 50 rejects in the 100-game run) | fixed by patch v5 (`buy`, `pack` follow the game's room rule, `buy use=true`); the rejection path stays as a safety net |
+| `use` in `BLIND_SELECT` | the engine allows it, BalatroBot refuses (INVALID_STATE) | `known_bug_blocks` masks it |
+| **early `cash_out`** pays the previous round's total | **real money lower than the engine's in ~1 of 3 rounds** (stale `G.GAME.current_round.dollars`, hands / interest rows lost) | v6: `cash_out_ready` waits until `current_round.dollars` equals the round's real total; `Runner._check_payout` logs `payout_mismatch` |
 | `use` of a consumable "cannot be used at this time" while the game is still animating | rejected action | retried up to 3x after 1.5 s |
 | stock `play` returns early once `G.GAME.won` is set (every round of an endless run); an immediate `cash_out` crashes the game (`G.round_eval` nil) | endless mode only | `bridge.cash_out_ready` is polled before every `cash_out` (section 11, Endless mode) |
 | any unanswered call | `BridgeTimeout` | the game is recorded as `hang` (or, after the ante-8 win, as a `win` with `endless_end: hang`); `bridge_play.py` restarts the game (section 12) |
@@ -431,6 +438,82 @@ keep `hang` / `error` and are excluded from the win rate (reported separately).
   `tests_py/fixtures/bridge_mismatch/mouth_locked_hand.json.gz`.
 
 
+### Audit of the 100-game run (`final200_real100`, 2026-11-19): what the bridge got wrong
+
+The run (Red / White, `runs/final200/latest.pt`, endless on) won 73 / 100 against 84.6 % in the
+simulator (600 simulator games with the same policy). 14 of the 27 losses were at hand-restricting
+bosses, which suggested a missing boss state in the translation. Audit method: replay a logged seed
+(the game is deterministic per seed and the policy is deterministic: RLR098, RLR064, RLR024
+reproduced decision for decision), `bridge_play.py --dump-states DIR` saves every gamestate the
+policy decides on, and `translate` + the engine are queried on those states (fixtures:
+`tests_py/fixtures/bridge_boss/`, tests `tests_py/test_bridge_boss.py`).
+
+**Boss state: the translation was right.** Per boss, the per-round state the engine keeps versus the
+bridge:
+
+| boss | engine state | bridge |
+|---|---|---|
+| The Eye | no separate "used hand types" set: `hand_plays_round` (rejected repeats count as played, like `blind.hands`); a repeat scores 0 (`before_play`), there is no action mask | `hands[name].played_this_round` (verified on RLR064: Pair 1, 2, 3 after the repeats); `blind.hands` agrees |
+| The Mouth | `boss_state.hand` = first hand type, set after the first Play (empty before) | `blind.only_hand` (`false` before the first hand, the type after); the observation lane `boss_hand` was 0 before and `HighCard` after on RLR098 |
+| The Needle | `hands_left` 1, `boss_state.removed` = hands taken | `round.hands_left` 1 and `blind.hands_sub` 3 from the first draw on, also after discards (RLR024) |
+| The Water | `discards_left` 0, `removed` | `round.discards_left`, `blind.discards_sub` |
+| The Ox | `boss_state.hand` = most played hand at ante start | `current_round.most_played_poker_hand` (the game refreshes it after every boss round) |
+| Cerulean Bell / Crimson Heart / Amber Acorn / Manacle | forced card / debuffed joker / hidden flag / hand size - 1 | `forced_selection`, debuffed joker, `facing=back`, `hand_limit` |
+| The Psychic, Wall, Needle target | 5 cards or 0 / x4 / x1 | `blind.chips` (the bridge target is the real one), `pred` agreed with the real chips in every boss play |
+| The Hook, Arm, Tooth, Serpent, House, Wheel, Fish, Mark, Pillar, Plant, suit bosses, Flint, Verdant Leaf, Violet Vessel | stateless per round (or per card: `facing`, `debuff`, `played_this_ante`) | per-card fields of `raw` |
+
+The Eye and Mouth failures are the policy's: with an identical observation the same policy also plays
+zero-score hands in the simulator (600 games: 11 % of Eye plays and 4.7 % of Mouth plays score 0; real
+run: 28 % / 16 %, where the real run is also poorer, see below). The critic does see the boss lane
+(RLR098 value 2.88 vs 3.74 without `boss_hand`), the actor mostly does not act on it (it changed
+its action in 21 % of simulated Eye states when the hand-type counters were zeroed). The Psychic loss
+(RLR074) had only valid 5-card plays, a plain miss (508 / 600). There is no mask in the engine for
+these bosses; a fix is a policy matter (training, or a "would score 0" mask), not a translation one.
+
+**The real bug: an early `cash_out` paid the previous round's total.** Comparing the engine's payout
+(inside the winning Play) with the real money after `cash_out` showed differences in about one round
+of three (RLR098 round 2: engine +9, real +5; real `eval_rows` blind 4 + hands 4 + interest 1 = 9).
+`G.FUNCS.cash_out` pays `G.GAME.current_round.dollars`, which the `bottom` row of `evaluate_round`
+writes in a late event, and `bridge.cash_out_ready` (v4) only checked that *a* `cash_out_button`
+UIBox exists, which is also true for the previous round's button. Pressing early paid the previous
+round's amount (hands / interest / joker rows of the round were lost, sometimes the previous round
+paid more). Effect in the 100-game run: real money at the same stage 10-30 % below the simulator
+(money at the blind selects of ante 2: real 7.8 / 10.9 / 12.9 against 10.9 / 12.5 / 14.2 in the simulator), the policy
+shops less, and every later boss is harder (the excess losses are on the high-target / low-margin
+bosses: Needle 5 of 25 vs 3.4 % in the simulator, Wall 3 of 22 vs 1.6 %, Amber Acorn 4 of 15 vs 6.8 %).
+Fix (patch v6): `add_round_eval_row` / `evaluate_round` are wrapped, `bridge.eval_rows` lists the
+real rows and `cash_out_ready` also requires `current_round.dollars == eval_total` (the amount of
+the `bottom` row). `Runner._check_payout` compares the engine's post-Play money with the real money
+after every cash-out (`payout_checks` / `payout_mismatch` in the game result, `warn` event with
+the rows): 0 mismatches in the verification games, before the fix 15 of 23 cash-outs of three
+replayed games differed (1-4 dollars each, both signs).
+
+**Rejected actions** (86 in 100 games, all classes understood):
+
+| class | n | root cause | fix |
+|---|---|---|---|
+| `BuyAndUse`, consumable slots full | 50 | the game's "Buy and use" button needs no free slot (`G.FUNCS.buy_from_shop` skips `check_for_buy_space` for `id == 'buy_and_use'`); the engine rule is right, stock `buy` refuses | patch v5: `buy {card, use: true}`; `actions.plan_action` uses it when the slots are full. Its completion test must not include "money == before - price": The Hermit / Temperance change the money and the first version hung on a Hermit (RLR015, decision 161, 90 s timeout); fixed (the test is "shop card gone, use animation over") |
+| `Buy` / pick of a joker, joker slots full | 22 + 2 | always a Negative edition card: the game's rule (`#cards + 1 <= limit + card.ability.card_limit`) lets it in, the engine too | patch v5: `buy` and `pack` use the game's rule |
+| `UseConsumable` / `BuyAndUse` The Fool "cannot be used" | 11 | **simulator rule wrong**: the real game records `c_fool` as `last_tarot_planet` after a Fool is used and refuses the next Fool until another Tarot / Planet is used (measured through the bridge: pluto, fool, fool -> the second is refused, `last_tarot_planet = c_fool`). The engine never recorded the Fool and offered it | engine: Fool is recorded, `fool_can_use` needs `last != Fool`; tests `the_fool_*`; the heuristic agent follows |
+| `UseConsumable` in `BLIND_SELECT` | 1 | the engine allows it, BalatroBot's `use` does not | `known_bug_blocks` masks it |
+
+Rule changes in the engine alter the simulator slightly (a second Fool is no longer usable after
+the first); the policy's training data did contain that bug, the effect is tiny (a Fool in 1 of 30
+games).
+
+**Verification on the real game (patch v6, new engine, 2026-11-19)**, logs `runs/bridge/bossfix_rlr*.jsonl`,
+`hang15b.jsonl`; every cash-out of every game matched the engine (`payout_mismatch` 0 in 5 + 14 + 5 + 30 + 29 + 32
+checks):
+
+| seed | before (100-game run) | after | note |
+|---|---|---|---|
+| RLR098 (Mouth) | loss ante 2, HighCard then 6 zero-score hands | loss ante 2, the same 6 zero-score hands (game diverged at the shop, economy now right) | policy weakness, observation verified identical to the simulator's |
+| RLR064 (Eye) | loss ante 5: Pair, then Pair x3 scored 0 | loss ante 5: Pair 8236, Pair 0, FullHouse 2079, ThreeOfAKind 770 | one repeat instead of three, still short (10315 / 22000) |
+| RLR024 (Needle) | loss ante 2, 750 / 800 | the same game, 750 / 800 | needle state verified, a near miss |
+| RLR015 | win, 28 rejects | win ante 11, 0 rejects, 12 `buy use=true` calls (first version hung on a Hermit, fixed) | |
+| RLR010 | win, 9 rejects | win ante 11, 0 rejects | the Fool class gone |
+| RLR003 | win, 5 rejects | win ante 11, 0 rejects | |
+
 ## 12. How to run
 
 ```
@@ -444,6 +527,8 @@ uv run --no-sync python scripts/bridge_report.py runs/bridge/run.jsonl
 `--policy random` plays random legal actions (bridge debugging, no model needed);
 `scripts/bridge_replay_mismatch.py DUMP` reproduces a mismatching hand offline from `<log>.mismatch/`;
 `scripts/bridge_joker_sweep.py` plays one hand per joker (`add` endpoint) for per-joker parity;
+`--dump-states DIR` saves EVERY gamestate the policy decides on (and every `ROUND_EVAL` before the cash-out) as `g<game>_d<decision>_<state>.json.gz`,
+for offline audits of the translation (replay a logged seed: the game and the policy are deterministic);
 `--fixture-dir DIR` saves a few gzipped gamestates per phase (the recorded fixtures of
 `tests_py/fixtures/bridge/` come from there).
 

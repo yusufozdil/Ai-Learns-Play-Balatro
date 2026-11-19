@@ -88,11 +88,15 @@ fn free_slot_can_use(c: &UseCheck<'_>) -> bool {
 }
 
 // --- The Fool: https://balatrowiki.org/w/The_Fool --------------------------------------------
-// Copies the last Tarot/Planet used this run (never itself; Spectrals never count; the game
-// layer keeps `GameState::last_tarot_planet`). Needs a free slot after it leaves its own.
+// Copies the last Tarot/Planet used this run (Spectrals never count; the game layer keeps
+// `GameState::last_tarot_planet`). Using The Fool itself records `c_fool` as the last card, as in
+// the base game (`set_consumeable_usage` sets `last_tarot_planet` for every Tarot), and
+// `Card:can_use_consumeable` refuses a Fool while that is the record: a second Fool is dead until
+// another Tarot/Planet is used. Needs a free slot after it leaves its own.
 
 fn fool_can_use(c: &UseCheck<'_>) -> bool {
-    c.state().last_tarot_planet.is_some() && c.free_consumable_slots() > 0
+    matches!(c.state().last_tarot_planet, Some(id) if id != C::TheFool)
+        && c.free_consumable_slots() > 0
 }
 
 fn fool(ctx: &mut UseCtx<'_>) {

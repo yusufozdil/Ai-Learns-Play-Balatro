@@ -21,7 +21,9 @@ engine kind             BalatroBot calls
 7 SellConsumable        ``sell consumable``
 8 MoveJoker             ``rearrange jokers`` (remove ``from``, insert at ``to``)
 9 Buy                   ``buy card``
-10 BuyAndUse            ``buy card`` then ``use consumable`` (the new last slot)
+10 BuyAndUse            ``buy card`` then ``use consumable`` (the new last slot); with full
+                        consumable slots ``buy card use=true`` (bridge patch v5, the game's
+                        own "Buy and use" button needs no free slot)
 11 OpenPack             ``buy pack``
 12 BuyVoucher           ``buy voucher``
 13 Reroll               ``reroll``
@@ -151,8 +153,15 @@ def plan_action(action, tr: Translation) -> list[Call]:
     elif kind == BUY:
         calls.append(Call("buy", {"card": a0}))
     elif kind == BUY_AND_USE:
-        calls.append(Call("buy", {"card": a0}))
-        calls.append(Call("use", {}, tag="use_new_consumable"))
+        st = tr.state
+        held = st.get("consumables") or []
+        capacity = st.get("consumable_slots", 2) + sum(1 for c in held if c["negative"])
+        if len(held) >= capacity:
+            # stock `buy` refuses a consumable with full slots; the game's own button does not
+            calls.append(Call("buy", {"card": a0, "use": True}))
+        else:
+            calls.append(Call("buy", {"card": a0}))
+            calls.append(Call("use", {}, tag="use_new_consumable"))
     elif kind == OPEN_PACK:
         calls.append(Call("buy", {"pack": a0}))
     elif kind == BUY_VOUCHER:

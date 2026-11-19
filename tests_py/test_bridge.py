@@ -230,6 +230,28 @@ def test_plan_simple_actions():
     assert mv[0].method == "rearrange" and mv[0].params == {"jokers": [1, 2, 0]}
 
 
+def test_buy_and_use_with_full_consumable_slots_uses_the_patch_endpoint():
+    """Real game: the shop's "Buy and use" needs no free slot (`buy_from_shop` skips the space
+    check for it); stock `buy` refuses, so the bridge patch (v5) adds `use` to `buy`."""
+    from balatro_rl.bridge.state import Translation
+
+    def tr(consumables, slots=2):
+        return Translation(
+            state={"jokers": [], "consumables": consumables, "consumable_slots": slots},
+            phase="Shop",
+        )
+
+    plain = {"id": "Mars", "negative": False}
+    neg = {"id": "Mars", "negative": True}
+    full = A.plan_action([A.BUY_AND_USE, 1, 0, 0], tr([plain, plain]))
+    assert [(c.method, c.params) for c in full] == [("buy", {"card": 1, "use": True})]
+    room = A.plan_action([A.BUY_AND_USE, 1, 0, 0], tr([plain]))
+    assert [(c.method, c.tag) for c in room] == [("buy", ""), ("use", "use_new_consumable")]
+    # a Negative consumable brings its own slot: 2 slots (+1) holding 2 normal + 1 negative = full
+    assert len(A.plan_action([A.BUY_AND_USE, 0, 0, 0], tr([plain, plain, neg]))) == 1
+    assert len(A.plan_action([A.BUY_AND_USE, 0, 0, 0], tr([plain, neg]))) == 2
+
+
 def test_plan_hand_actions_rearrange_to_engine_order():
     # engine position p lives at real index order[p]; Play first rearranges the real hand
     order = [2, 0, 1, 3, 4, 5, 6, 7]
@@ -420,6 +442,10 @@ def test_known_bug_blocks():
     assert b[(A.PICK_PACK_ITEM, 1)] == "balatrobot#199"
     assert (A.PICK_PACK_ITEM, 0) not in b
     assert (A.USE_CONSUMABLE, 0) in b
+    # `use` is refused in BLIND_SELECT too (the engine allows it)
+    tr = Translation(state={**state, "consumables": [{}, {}]}, phase="BlindSelect")
+    b = known_bug_blocks(tr)
+    assert (A.USE_CONSUMABLE, 0) in b and (A.USE_CONSUMABLE, 1) in b
 
 
 def test_prediction_variants_cover_the_misprint_support():

@@ -115,7 +115,9 @@ pub fn plan(id: C, game: &Game, ctx: &Ctx) -> Option<(u32, f64)> {
     };
     match id {
         C::BlackHole | C::TheSoul => Some((0, 3.0)),
-        C::TheFool => (consumable_room && s.last_tarot_planet.is_some()).then_some((0, 0.3)),
+        C::TheFool => (consumable_room
+            && matches!(s.last_tarot_planet, Some(last) if last != C::TheFool))
+        .then_some((0, 0.3)),
         C::TheHighPriestess => consumable_room.then_some((0, 0.5)),
         C::TheEmperor => consumable_room.then_some((0, 0.25)),
         C::Judgement => s.has_joker_room().then_some((0, 0.7)),

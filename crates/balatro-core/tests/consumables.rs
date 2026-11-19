@@ -538,8 +538,8 @@ fn the_fool_copies_the_last_tarot_or_planet() {
     use_c(&mut g, 0, 0).expect("Fool");
     let ids: Vec<C> = g.state().consumables.iter().map(|c| c.id).collect();
     assert_eq!(ids, vec![C::TheHermit, C::Mercury]);
-    // The Fool itself is never recorded.
-    assert_eq!(g.state().last_tarot_planet, Some(C::Mercury));
+    // The Fool itself is recorded (base game: `c_fool`), which blocks another Fool.
+    assert_eq!(g.state().last_tarot_planet, Some(C::TheFool));
     assert_eq!(g.state().stats.run.tarots_used, 1);
 }
 

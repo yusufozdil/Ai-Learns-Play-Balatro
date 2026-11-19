@@ -243,7 +243,7 @@ fn fortune_teller_counts_every_tarot_used_but_no_planet() {
 // ----- The Fool -------------------------------------------------------------------------------
 
 #[test]
-fn the_fool_copies_the_last_tarot_or_planet_but_never_itself() {
+fn the_fool_copies_the_last_tarot_or_planet_and_blocks_a_second_fool() {
     let mut g = in_play(11);
     give(&mut g, C::Strength);
     use_c(&mut g, 0, 1).expect("Strength");
@@ -251,24 +251,25 @@ fn the_fool_copies_the_last_tarot_or_planet_but_never_itself() {
     use_c(&mut g, 0, 0).expect("Fool");
     let ids: Vec<C> = g.state().consumables.iter().map(|c| c.id).collect();
     assert_eq!(ids, vec![C::Strength]);
-    // The Fool does not become "last used": a second Fool still copies Strength.
+    // Real game (`set_consumeable_usage`): using The Fool records `c_fool` as the last card, and
+    // `Card:can_use_consumeable` refuses a Fool while that is the record (measured on the real
+    // game through the bridge: "The Fool cannot be used at this time").
+    assert_eq!(g.state().last_tarot_planet, Some(C::TheFool));
     give(&mut g, C::TheFool);
-    use_c(&mut g, 1, 0).expect("Fool again");
-    let ids: Vec<C> = g.state().consumables.iter().map(|c| c.id).collect();
-    assert_eq!(ids, vec![C::Strength, C::Strength]);
-    assert_eq!(g.state().last_tarot_planet, Some(C::Strength));
+    assert_eq!(use_c(&mut g, 1, 0), Err(ActionError::CannotUse));
     assert_eq!(
         tarot_count(&g),
-        3,
-        "Strength and both Fools are Tarots used"
+        2,
+        "Strength and the first Fool are Tarots used"
     );
-    // A Planet used later is the new "last".
+    // Any Tarot or Planet used later is the new "last" and wakes the second Fool up.
     g.state_mut().consumables.clear();
     give(&mut g, C::Mars);
     use_c(&mut g, 0, 0).expect("Mars");
     give(&mut g, C::TheFool);
     use_c(&mut g, 0, 0).expect("Fool");
     assert_eq!(g.state().consumables[0].id, C::Mars);
+    assert_eq!(g.state().last_tarot_planet, Some(C::TheFool));
 }
 
 // ----- enhancement tarots -----------------------------------------------------------------------

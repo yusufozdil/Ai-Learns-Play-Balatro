@@ -151,12 +151,15 @@ class Runner:
         endless_max_ante: int = 12,
         endless_wait: float = 2.0,
         cash_out_timeout: float = 90.0,
+        state_dump_dir: str | Path | None = None,
     ):
+        self.state_dump_dir = Path(state_dump_dir) if state_dump_dir else None
         self.cash_out_timeout = cash_out_timeout
         self.endless = endless
         self.endless_max_ante = endless_max_ante
         self.endless_wait = endless_wait
         self._continued = False
+        self._expect_money: int | None = None
         self.c = client
         self.policy = policy
         self.predict = predict
@@ -196,6 +199,17 @@ class Runner:
         with gzip.open(self.fixture_dir / f"{kind.lower()}_{n}.json.gz", "wt") as f:
             json.dump(gs, f)
 
+    def _maybe_dump_state(self, gs: dict, res: GameResult, tag: str = "") -> None:
+        """``--dump-states``: every gamestate the policy decides on, for offline audits."""
+        if self.state_dump_dir is None:
+            return
+        import gzip
+
+        self.state_dump_dir.mkdir(parents=True, exist_ok=True)
+        name = f"g{res.game}_d{res.decisions + 1:04d}_{tag or gs['state'].lower()}.json.gz"
+        with gzip.open(self.state_dump_dir / name, "wt") as f:
+            json.dump(gs, f)
+
     # -- state handling ----------------------------------------------------------------
 
     def settle(self, gs: dict, res: GameResult | None = None) -> dict:
@@ -223,7 +237,12 @@ class Runner:
                 gs = self.wait_cash_out_ready(gs)
                 if gs["state"] != "ROUND_EVAL":
                     continue
+                if res is not None:
+                    self._maybe_dump_state(gs, res, tag="roundeval")
+                before_money = int(gs.get("money", 0))
+                rows = (gs.get("bridge") or {}).get("eval_rows")
                 gs = self.c.call("cash_out")
+                self._check_payout(res, gs, before_money, rows)
                 continue
             if st in TRANSIENT_STATES or (gs.get("bridge") or {}).get("controller_locked"):
                 if time.time() - t0 > self.settle_timeout:
@@ -232,6 +251,18 @@ class Runner:
                 gs = self.c.gamestate()
                 continue
             return gs
+
+    def _check_payout(self, res, gs: dict, money_before: int, rows) -> None:
+        """The engine pays the round out inside the winning Play: compare with the real cash-out."""
+        expect, self._expect_money = self._expect_money, None
+        if res is None or expect is None or gs.get("state") != "SHOP":
+            return
+        res.extra["payout_checks"] = res.extra.get("payout_checks", 0) + 1
+        real = int(gs.get("money", 0))
+        if real != expect:
+            res.extra["payout_mismatch"] = res.extra.get("payout_mismatch", 0) + 1
+            self.log("warn", game=res.game, msg="payout_mismatch", engine=expect, real=real,
+                     money_before=money_before, rows=rows)  # fmt: skip
 
     def wait_cash_out_ready(self, gs: dict) -> dict:
         """Poll until the end-of-round rows are built (``bridge.cash_out_ready``).
@@ -326,6 +357,7 @@ class Runner:
                 res.note = "unexpected MENU"
                 return
             self._maybe_fixture(gs)
+            self._maybe_dump_state(gs, res)
             # pack origin: a pack opened right after a skip comes from a tag
             if gs["state"] == "SMODS_BOOSTER_OPENED" and prev_action is not None:
                 if prev_action[0] == A.SKIP_BLIND:
@@ -479,6 +511,9 @@ class Runner:
         )  # fmt: skip
         if pred is not None:
             self._log_play(action, tr, gs, new, pred, res)
+            self._expect_money = (
+                pred.get("post_money") if pred.get("post_phase") == "Shop" else None
+            )
         return True, new
 
     def _log_play(self, action, tr, before: dict, after: dict, pred: dict, res: GameResult) -> None:
@@ -533,6 +568,9 @@ def known_bug_blocks(tr: Translation) -> dict[tuple[int, int], str]:
     if tr.phase == "PackOpen":  # `use` of a held consumable needs SELECTING_HAND or SHOP
         for slot in range(len(s["consumables"])):
             out[(A.USE_CONSUMABLE, slot)] = "balatrobot:use-in-pack"
+    if tr.phase == "BlindSelect":  # `use` needs SELECTING_HAND or SHOP, the engine also allows this
+        for slot in range(len(s["consumables"])):
+            out[(A.USE_CONSUMABLE, slot)] = "balatrobot:use-in-blind-select"
     if tr.phase == "BlindSelect" and s["blind"] in ("Small", "Big"):
         tag = s["blind_tags"][0 if s["blind"] == "Small" else 1]
         if tag in PACK_TAGS:  # #233: skipping into a tag pack never returns

@@ -1424,7 +1424,9 @@ fn push_purple_seals(cards: &[Card], fx: &mut Vec<SideEffect>) {
 }
 
 /// Run counters after a use: per-id count, Tarot/Planet/unique-Planet stats (Fortune Teller,
-/// Satellite) and The Fool's last Tarot/Planet (never The Fool, never a Spectral).
+/// Satellite) and The Fool's last Tarot/Planet (every Tarot and Planet, The Fool included: the
+/// base game's `set_consumeable_usage` records `c_fool` and then refuses another Fool; never a
+/// Spectral). The effect of The Fool ran before this, so it copied the previous record.
 fn record_use(s: &mut GameState, id: ConsumableId) {
     let first = s.consumable_uses(id) == 0;
     if let Some(n) = s.consumable_use_counts.get_mut(id.index()) {
@@ -1440,7 +1442,7 @@ fn record_use(s: &mut GameState, id: ConsumableId) {
         }
         ConsumableKind::Spectral => {}
     }
-    if id.kind() != ConsumableKind::Spectral && id != ConsumableId::TheFool {
+    if id.kind() != ConsumableKind::Spectral {
         s.last_tarot_planet = Some(id);
     }
 }

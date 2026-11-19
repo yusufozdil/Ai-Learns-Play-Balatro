@@ -4,7 +4,7 @@
 ---  * `bridge` (selected G.GAME fields: current_round targets, round_resets, tags, blind, ...),
 ---  * `discard` (the discard pile) and `playing_cards` (every playing card of the run).
 ---Everything is wrapped in pcall by the caller; an error never breaks the stock gamestate.
-local M = { VERSION = 4 }
+local M = { VERSION = 6 }
 
 local MAX_DEPTH = 3
 
@@ -183,16 +183,61 @@ local function cash_out_ready()
   if not G.round_eval:get_UIE_by_ID("dollar_blind1") then
     return false
   end
+  local button = false
   for _, b in ipairs(G.I.UIBOX) do
     if b:get_UIE_by_ID("cash_out_button") then
-      return true
+      button = true
+      break
     end
   end
-  return false
+  if not button then
+    return false
+  end
+  -- The button of the PREVIOUS round's cash-out can still be listed in G.I.UIBOX, so its
+  -- existence proves nothing: `G.FUNCS.cash_out` pays `G.GAME.current_round.dollars`, which the
+  -- `bottom` row of THIS round's `evaluate_round` writes in a late event. Pressing early pays
+  -- the previous round's total (found by comparing the engine's payout with the real one: hands
+  -- and interest rows were lost in ~1 of 3 rounds). `M.eval_total` is that row's amount
+  -- (recorded by the `add_round_eval_row` wrapper, `nil` if the hook is not installed).
+  if M._eval_hooked then
+    return M.eval_total ~= nil and G.GAME.current_round.dollars == M.eval_total
+  end
+  return true
+end
+
+---Cash-out rows of the last `evaluate_round` (blind1, hands, discards, jokerN, tagN, interest):
+---`add_round_eval_row` is wrapped once (lazily, when the first gamestate is built) and every row
+---is recorded as `{name, dollars}`; `evaluate_round` clears the list. Pure observation, used to
+---compare the engine's cash-out with the real one (`bridge.eval_rows`).
+M.eval_rows = {}
+M.eval_total = nil
+local function install_eval_hooks()
+  if M._eval_hooked or not rawget(_G, "add_round_eval_row") or not (G and G.FUNCS and G.FUNCS.evaluate_round) then
+    return
+  end
+  local orig_row = add_round_eval_row
+  _G.add_round_eval_row = function(config, ...)
+    pcall(function()
+      if config and config.name == "bottom" then
+        M.eval_total = config.dollars
+      elseif config then
+        M.eval_rows[#M.eval_rows + 1] = { name = config.name, dollars = config.dollars, disp = config.disp }
+      end
+    end)
+    return orig_row(config, ...)
+  end
+  local orig_eval = G.FUNCS.evaluate_round
+  G.FUNCS.evaluate_round = function(...)
+    M.eval_rows = {}
+    M.eval_total = nil
+    return orig_eval(...)
+  end
+  M._eval_hooked = true
 end
 
 ---Selected G.GAME fields.
 function M.game_raw()
+  pcall(install_eval_hooks)
   local g = G.GAME
   if not g then
     return nil
@@ -241,6 +286,7 @@ function M.game_raw()
     state_complete = G.STATE_COMPLETE and true or false,
     controller_locked = G.CONTROLLER and G.CONTROLLER.locked and true or false,
     cash_out_ready = cash_out_ready(),
+    eval_rows = M.eval_rows,
     paused = G.SETTINGS and G.SETTINGS.paused and true or false,
     hand_limit = G.hand and G.hand.config and G.hand.config.card_limit,
   }

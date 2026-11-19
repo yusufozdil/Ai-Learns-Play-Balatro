@@ -60,6 +60,7 @@ def predict_play(state: dict, mask: int, variants: int = 4, wide: int = 256) -> 
     before = float(state["round_score"])
     gains: list[float] = []
     hand_types: list[str | None] = []
+    post: dict = {}
     invalid = False
     i = 0
     while i < variants:
@@ -74,6 +75,8 @@ def predict_play(state: dict, mask: int, variants: int = 4, wide: int = 256) -> 
         after = json.loads(g.export_state())
         gains.append(float(after["round_score"]) - before)
         hand_types.append(after["last_hand"])
+        if i == 1:  # the engine pays the round out inside the winning Play
+            post = {"post_phase": after["phase"], "post_money": int(after["money"])}
     if invalid or not gains:
         return {"invalid": True}
     return {
@@ -84,6 +87,7 @@ def predict_play(state: dict, mask: int, variants: int = 4, wide: int = 256) -> 
         "deterministic": len(set(gains)) == 1,
         "hand_type": hand_types[0],
         "flags": static_flags(state, mask),
+        **post,
     }
 
 

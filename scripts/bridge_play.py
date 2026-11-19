@@ -72,6 +72,9 @@ def main() -> int:
         "--fixture-limit", type=int, default=3, help="fixtures kept per phase/pack kind"
     )
     ap.add_argument("--fixture-dir", help="save a few gzipped gamestates per phase here")
+    ap.add_argument(
+        "--dump-states", help="save EVERY gamestate the policy decides on here (gzip, per game)"
+    )
     args = ap.parse_args()
 
     client = Client(args.url, timeout=args.timeout)
@@ -93,6 +96,7 @@ def main() -> int:
         fixture_limit=args.fixture_limit,
         endless=args.endless,
         endless_max_ante=args.endless_max_ante,
+        state_dump_dir=args.dump_states,
     )
     results = []
     done = finished_seeds(args.log) if args.resume else set()
