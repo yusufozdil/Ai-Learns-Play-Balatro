@@ -1,4 +1,4 @@
----ContinueEndless endpoint, part of the ai-plays-balatro bridge patch.
+---ContinueEndless endpoint, part of the Ai-Learns-Play-Balatro bridge patch.
 ---After the ante-8 boss is beaten the game shows the win screen; its "Endless" button is
 ---`G.FUNCS.exit_overlay_menu`. This endpoint waits for the win screen, presses that button and
 ---returns the gamestate (still ROUND_EVAL; `cash_out` follows, but only once

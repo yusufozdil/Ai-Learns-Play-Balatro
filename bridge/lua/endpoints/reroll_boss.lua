@@ -1,4 +1,4 @@
----RerollBoss endpoint (Director's Cut / Retcon), part of the ai-plays-balatro bridge patch.
+---RerollBoss endpoint (Director's Cut / Retcon), part of the Ai-Learns-Play-Balatro bridge patch.
 return {
   name = "reroll_boss",
   description = "Reroll the boss blind of the current ante (Director's Cut once per ante, Retcon unlimited; costs $10)",
