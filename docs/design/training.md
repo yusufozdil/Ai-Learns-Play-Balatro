@@ -424,3 +424,69 @@ The shipped checkpoint `runs/final200/latest.pt` (not in the repository) was tra
 `--adv-norm per_config`, `--stake-curriculum auto`, `--scenario-prob 0.1`, `--boss-hall 0.2`, `--lr 5e-5`
 (decaying to 10 %), `--kl-coef 0`, `--critic-warmup 2`, validation on Red / Black with the `val` set. Model: 4 layers,
 d_model 128, 4 heads, GRU memory 128. Evaluate it with `scripts/evaluate.py --checkpoint <path> --set val`.
+
+## 17. Reproducing `final200`
+
+`final200` is the last of nine stages. The full recipe is in the repository: one JSON per stage in
+`configs/final200/` (the recorded `config.json` of each original run, with local paths made relative; the BC
+file is reconstructed, see below) and a driver that turns every key into the matching `train_ppo.py` /
+`bc_smoke.py` flag and runs the chain.
+
+```bash
+make setup setup-train
+uv run --no-sync python scripts/reproduce_final200.py --dry-run   # print the nine commands
+uv run --no-sync python scripts/reproduce_final200.py             # run the chain, ~17 GPU hours
+uv run --no-sync python scripts/reproduce_final200.py --smoke --out-root runs/repro_smoke   # ~35 s end-to-end test
+```
+
+Stage `X` writes `runs/X/` and is initialised from the previous stage's `latest.pt`. The driver is resumable:
+a finished stage is skipped (`--force` reruns it), an interrupted PPO stage continues from its `latest.pt`
+(`--resume`); `--from STAGE` / `--only STAGE` select stages, `--out-root` moves all outputs. Every PPO flag is
+written out explicitly, so later changes of a default in `PPOConfig` do not change the recipe.
+
+| # | stage | init | env steps | decks | stakes | key flags | wall time | last validation (512 games, det.) |
+|---|---|---|---|---|---|---|---|---|
+| 0 | `bc` | heuristic teacher data | 1.5M samples, 12 epochs | red / white | | `bc_smoke.py --stage all`, 1024 envs x 1500 steps, seed 1, lr 7e-4 | 6 + 15 min (collect + train) | test: 5.29 ante / 6.5% win (teacher 5.91 / 16.1%) |
+| 1 | `e2e_long` | `bc` | 100M | red | white | `--kl-coef 0.3 --kl-anneal-updates 120 --critic-warmup 2 --lr 1e-4 --reorder-cost -0.05 --eval-move-limit 2`, seed 0 | 3.75 h | 7.50 / 66.4% (Red / White) |
+| 2 | `e2e_long_fix` | `e2e_long` | 6M | red | white | `--reorder-cost -0.25 --lr 5e-5 --kl-coef 0 --critic-warmup 0 --eval-move-limit 2`, seed 1 | 13 min | 7.51 / 64.1% (Red / White) |
+| 3 | `st1` | `e2e_long_fix` | 24M | red | white, red, green | `--margin 1 --margin-cap 4 --zero-play -0.3 --reorder-cost -0.25`, seed 0 | 55 min | 6.29 / 21.9% (Red / Green) |
+| 4 | `st2_v2_s1` | `st1` | 30M | red, blue, yellow, green, black | white, red, green, black, blue | `--adv-norm per_config --stake-curriculum auto --scenario-prob 0.1 --boss-hall 0.2`, seed 1 | 72 min | 6.28 / 19.7% (Red / Black) |
+| 5 | `st3` | `st2_v2_s1` | 40M | same five | all eight | same flags, seed 2 | 98 min | 6.20 / 20.5% (Red / Black) |
+| 6 | `st3_endless` | `st3` | 24M | same five | all eight | `--endless --endless-max-ante 12`, seed 4 | 60 min | 6.33 / 23.8% (Red / Black) |
+| 7 | `obs_v2` | `st3_endless` | 15M | same five | all eight | same as 6, seed 5 | 35 min | 6.24 / 24.8% (Red / Black) |
+| 8 | **`final200`** | `obs_v2` | 200M | same five | all eight | same as 6, seed 6, `--eval-every 16` | 7.45 h | 6.75 / 39.8% (Red / Black); holdout Red / White 84.6% (README) |
+
+Every PPO stage uses 1024 envs x 128 steps, `--lr` decaying to 10 %, the reward `margin 1.0 / cap 4 /
+zero-play -0.3 / reorder -0.25` from stage 3 on, and the model of `model.md` (4 layers, d_model 128,
+GRU 128, ~2M parameters). Validation columns are the last periodic evaluation in `runs/<stage>/log.jsonl`
+(the validation configuration changes between stages, so the numbers of different rows are not comparable;
+the hard Red / Black validation is why the late rows read 6-7 ante rather than 7.5). Wall times are the last
+`wall_seconds` of each log (one process, no restarts), total 16.7 h of PPO plus ~21 min of BC, i.e. **about 17
+GPU hours**; the original runs used one RTX 5060 Ti (16 GB, CUDA 12.8 wheels, `make setup-train`) and a 12-thread
+Ryzen 5 7600, ~8000 env steps/s end to end. BC writes ~4.5 GB of data to `runs/bc_data` and loads it onto the GPU.
+
+**Config keys with no flag any more.** `error_hall`, `error_hall_pool`, `error_hall_min_dq`, `error_hall_holdout`
+(an experiment that was removed before release) appear in the configs of stages 5-8 with their off values
+(`0.0`, `""`, `0.0`, `0.0`); the driver drops them and refuses a config where one is not off. Every other key maps to
+a current flag (`reward` terms to `--reorder-cost`, `--margin`, `--margin-cap`, `--zero-play`; `model` to `--memory`,
+`--d-model`, `--layers`).
+
+**The `bc` config is reconstructed.** The original BC run left no config file. `configs/final200/00_bc.json` holds the
+`bc_smoke.py` arguments that reproduce its recorded data (`meta.json`: 1024 envs x 1500 steps, seed 1, no noise,
+1.536M samples, teacher 5.83 ante / 15.8% win) and training (12 epochs, cosine learning rate from 7e-4); all
+other arguments are the script defaults.
+
+**Caveats: a rerun is statistically similar, not bit-identical.**
+
+- GPU nondeterminism (atomics, TF32, cuDNN kernels) makes two runs of the same stage diverge, and RL amplifies
+  small differences over a long run; section 11 measured a spread of about +-3 points of win rate between
+  seeds of the same recipe.
+- The simulator received rule-parity fixes after some of the stages were trained (checked against the real game
+  through the bridge), so the original stages saw slightly different rules than a rerun does.
+- The original stages ran on older observation interfaces (`bc` to `e2e_long_fix` on v1, `st1` onwards on v2; the name `obs_v2` refers to a v2-vs-v3 comparison run, not a migration) and were
+  migrated by `python/balatro_rl/model/migrate.py`; a rerun uses the current interface (v3, `rl_interface.md`)
+  from the BC data on, so its columns that did not exist back then are trained from the start instead of
+  starting at zero weights.
+- Each stage's original run was started from the frozen checkout of its time; the configs were recorded, the code
+  was not, so the driver runs every stage with today's code.
+- The `bc` data is regenerated (deterministic given the seed and the current simulator and interface).

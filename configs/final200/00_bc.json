@@ -1,0 +1,21 @@
+{
+  "_note": "Reconstructed, not recorded: the original run (2026-11-14) left no config file. Values are the scripts/bc_smoke.py arguments that match runs/bc/{games,history}.json and runs/bc_data/meta.json of the shipped lineage (1024 envs x 1500 steps of heuristic-teacher data, seed 1, 12 epochs); all other arguments are the script defaults.",
+  "name": "bc",
+  "script": "bc_smoke",
+  "out_dir": "runs/bc",
+  "data_dir": "runs/bc_data",
+  "envs": 1024,
+  "steps": 1500,
+  "seed": 1,
+  "noise": 0.0,
+  "epochs": 12,
+  "chunk": 32,
+  "group": 128,
+  "lr": 0.0007,
+  "value_coef": 0.1,
+  "max_minutes": 40.0,
+  "memory": "gru",
+  "d_model": 128,
+  "layers": 4,
+  "games": 1024
+}

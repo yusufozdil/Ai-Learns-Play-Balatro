@@ -89,12 +89,15 @@ uv run --no-sync python scripts/evaluate.py --checkpoint final200.pt --set holdo
 
 ```bash
 uv run --no-sync python scripts/train_ppo.py --help
+uv run --no-sync python scripts/reproduce_final200.py --dry-run   # the whole chain, as commands
 ```
 
-`final200` was the last stage of a chain of runs (behaviour cloning from the heuristic agent,
-then PPO stages on growing deck / stake sets). The full configuration of every stage and the
-reasoning behind it are in [`docs/design/training.md`](docs/design/training.md); a single
-200M-step stage takes about 7.5 hours on one RTX 50-series GPU.
+`final200` was the last stage of a chain of nine runs (behaviour cloning from the heuristic
+agent, then PPO stages on growing deck / stake sets). The recorded configuration of every
+stage is in [`configs/final200/`](configs/final200), and `scripts/reproduce_final200.py` runs
+the whole chain (about 17 hours on one 16 GB GPU, resumable; `--smoke` is a 35-second test).
+The stage table, wall times and the caveats (a rerun is statistically similar, not
+bit-identical) are in [`docs/design/training.md`](docs/design/training.md#17-reproducing-final200).
 
 ### Real game (optional)
 

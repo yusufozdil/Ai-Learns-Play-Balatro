@@ -117,16 +117,19 @@ def main() -> None:
         if cache.exists():
             base = {k: _load(v) for k, v in json.loads(cache.read_text()).items()}
         else:
-            bc, _ = load_checkpoint(args.bc, dev)
             if not args.route:
                 base["random"] = ev.run_games("random", ev.random_actor, args.games, **kw)
             base["teacher"] = ev.run_games("teacher", ev.teacher_actor, args.games, **kw)
-            base["bc_det"] = ev.evaluate_model(
-                bc, args.games, True, args.route, name="bc_det", **kw
-            )
-            base["bc_sample"] = ev.evaluate_model(
-                bc, args.games, False, args.route, name="bc_sample", **kw
-            )
+            if args.bc.exists():
+                bc, _ = load_checkpoint(args.bc, dev)
+                base["bc_det"] = ev.evaluate_model(
+                    bc, args.games, True, args.route, name="bc_det", **kw
+                )
+                base["bc_sample"] = ev.evaluate_model(
+                    bc, args.games, False, args.route, name="bc_sample", **kw
+                )
+            else:
+                print(f"note: {args.bc} not found, skipping the BC baselines")
             cache.write_text(json.dumps({k: _dump(v) for k, v in base.items()}))
         for r in base.values():
             print(r.line())
