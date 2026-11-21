@@ -113,10 +113,6 @@ class PPOConfig:
     boss_hall_size: int = 4096  # FIFO pool size (fresh states)
     boss_hall_min_ante: int = 5  # only bosses of this ante or later enter the pool
     boss_hall_per_update: int = 512  # at most this many new states per update (random subset)
-    error_hall: float = 0.0  # P(reset starts from an error-hall pool state), pool: below
-    error_hall_pool: str = ""  # comma list of pool files (scripts/errhall_mine.py)
-    error_hall_min_dq: float = 0.0  # drop pool states whose confirmed dP(win) is below this
-    error_hall_holdout: float = 0.0  # fraction of the pool's GAMES kept out (errhall_probe.py)
     bootstrap_truncation: bool = True  # GAE bootstraps through step-limit truncation (not terminal)
     # --- speed options (all opt-in; the defaults are the original fp32 / eager training)
     update_dtype: str = "fp32"  # "bf16": autocast the update (and KL reference) passes
@@ -138,7 +134,9 @@ class PPOConfig:
     eval_move_limit: int | None = None  # validation repetition guard (evaluate.ModelActor)
     eval_deck: str = "red"  # validation configuration (default Red / White: comparable to history)
     eval_stake: str = "white"
-    eval_set: str = "dev"  # evaluate.EVAL_SETS: dev = prefix of the test set (history), val = opt-in
+    eval_set: str = (
+        "dev"  # evaluate.EVAL_SETS: dev = prefix of the test set (history), val = opt-in
+    )
     save_every: int = 5
     ckpt_keep_best: bool = True
     # --- model (used when not initialised from a checkpoint)
@@ -153,14 +151,6 @@ class PPOConfig:
         assert 0.0 <= self.scenario_prob <= 0.2, "scenario_prob must be in [0, 0.2]"
         assert 0.0 <= self.boss_hall <= 1.0, "boss_hall must be in [0, 1]"
         assert self.scenario_prob + self.boss_hall <= 1.0, "scenario_prob + boss_hall must be <= 1"
-        assert 0.0 <= self.error_hall <= 1.0, "error_hall must be in [0, 1]"
-        assert self.scenario_prob + self.boss_hall + self.error_hall <= 1.0 + 1e-9, (
-            "scenario_prob + boss_hall + error_hall must be <= 1 (shares of the episode starts)"
-        )
-        assert 0.0 <= self.error_hall_holdout < 1.0, "error_hall_holdout must be in [0, 1)"
-        assert self.error_hall == 0.0 or self.error_hall_pool.strip(), (
-            "error_hall > 0 needs --error-hall-pool FILE[,FILE]"
-        )
 
 
 # --------------------------------------------------------------------------- pure helpers
@@ -225,7 +215,8 @@ def normalize_adv_per_group(
 ) -> torch.Tensor:
     """Advantage normalisation within each group of policy rows (``ctrl``): every row gets
     ``(adv - mean) / (std + 1e-8)`` of its group; groups with fewer than ``min_rows`` policy rows
-    use the statistics of all policy rows (so a rare stake never has its few advantages blown up)."""
+    use the statistics of all policy rows (so a rare stake never has its few advantages blown
+    up)."""
     cnt, mean, std = group_stats(adv, ctrl, group, n_groups)
     a = adv[ctrl]
     g_mean, g_std = a.mean(), a.std()
@@ -372,7 +363,6 @@ class Trainer:
         self.hall_pool: deque = deque(maxlen=max(1, cfg.boss_hall_size))
         self._hall_new: dict = {}
         self._hall_rng = np.random.default_rng(cfg.seed + 7919 * (self.resumes + 1))
-        self._init_error_hall()
         self.stake_ema: dict[str, float] = {}
         self.stake_weights: dict[str, float] = {}
         if cfg.stake_curriculum == "auto":
@@ -487,21 +477,15 @@ class Trainer:
             with p("env_step"):
                 _, _, reward, done, inv = self.env.step(a_np)
             invalid += int(inv.sum())
-            if self.errhall_on:
-                ended = np.flatnonzero(done != 0)  # before an import zeroes the row's done
             with p("store_misc"):
                 b["reward"][t] = torch.from_numpy(reward).to(dev)
                 self.first = torch.from_numpy(done != 0).to(dev)
                 b["trunc"][t] = torch.from_numpy(done == 3).to(dev)
-            if self.errhall_on and len(ended):
-                self._errhall_resets(ended)  # after the results are stored (import rewrites rows)
         o, m = prepare(self.obs, self.masks, dev)
         self.last_value, _ = model.value(o, m, self.hidden, first=self.first)
         if dev.type == "cuda":
             torch.cuda.synchronize()
         fin = self.env.drain_finished_ex()
-        if self.errhall_on:
-            self._errhall_annotate(fin)
         return {
             "rollout_seconds": time.perf_counter() - t_start,
             "model_seconds": model_s,
@@ -813,24 +797,20 @@ class Trainer:
         stake ``ep_win/<stake>`` ``ep_ante/<stake>`` ``ep_n/<stake>`` (natural), and separate
         ``scn_*`` / ``hall_*`` statistics of the episodes that began from a scenario / a
         boss-hall state (those start mid-run: steps, returns and antes are not comparable)."""
-        nat = [r for r in fin if not r["scenario"] and not r["hall"] and not r.get("errhall")]
+        nat = [r for r in fin if not r["scenario"] and not r["hall"]]
         out = cls.episode_stats(cls._tuples(nat))
         for stake in sorted({r["stake"] for r in nat}):
             rs = [r for r in nat if r["stake"] == stake]
             out[f"ep_n/{stake}"] = len(rs)
             out[f"ep_win/{stake}"] = float(np.mean([r["code"] == 2 for r in rs]))
             out[f"ep_ante/{stake}"] = float(np.mean([r["ante"] for r in rs]))
-        for tag, key in (("scn", "scenario"), ("hall", "hall"), ("errhall", "errhall")):
+        for tag, key in (("scn", "scenario"), ("hall", "hall")):
             rs = [r for r in fin if r.get(key)]
             if rs:
                 st = cls.episode_stats(cls._tuples(rs))
                 out.update(
                     {f"{tag}_{k[3:] if k.startswith('ep_') else k}": v for k, v in st.items()}
                 )
-        for cat in sorted({r["errcat"] for r in fin if r.get("errhall")}):
-            rs = [r for r in fin if r.get("errhall") and r["errcat"] == cat]
-            out[f"errhall_n/{cat}"] = len(rs)
-            out[f"errhall_win/{cat}"] = float(np.mean([r["code"] == 2 for r in rs]))
         return out
 
     # ------------------------------------------------------------------ stake ladder v2
@@ -841,7 +821,7 @@ class Trainer:
         without data yet counts as on target), spread evenly over the decks of the pool, pushed
         with ``set_config_weights`` (applies to the episodes that start afterwards)."""
         cfg = self.cfg
-        nat = [r for r in fin if not r["scenario"] and not r["hall"] and not r.get("errhall")]
+        nat = [r for r in fin if not r["scenario"] and not r["hall"]]
         pool = self.env.config_pool()
         stakes = list(dict.fromkeys(s for _, s in pool))
         for st in stakes:
@@ -861,87 +841,6 @@ class Trainer:
         per_stake = {st: sum(1 for _, s in pool if s == st) for st in stakes}
         self.env.set_config_weights([self.stake_weights[s] / per_stake[s] for _, s in pool])
         return self.stake_weights
-
-    # ------------------------------------------------------------------ error hall
-
-    def _init_error_hall(self) -> None:
-        """``--error-hall``: static pool of confirmed-mistake states (mined by
-        ``scripts/errhall_mine.py``). Off (the default): nothing is built, the env and the RNG are
-        never touched, so the training is bit for bit the previous one."""
-        cfg = self.cfg
-        self.errhall_on = cfg.error_hall > 0
-        if not self.errhall_on:
-            return
-        from balatro_rl.analysis.hall import read_pool
-
-        recs = read_pool(
-            cfg.error_hall_pool, min_dq=cfg.error_hall_min_dq, holdout=cfg.error_hall_holdout
-        )
-        assert recs, f"error hall pool {cfg.error_hall_pool!r} is empty"
-        self.err_pool = [(r["category"], r["state"]) for r in recs]
-        self.err_by_cfg: dict[tuple[str, str], list[int]] = defaultdict(list)
-        self.err_by_stake: dict[str, list[int]] = defaultdict(list)
-        for k, r in enumerate(recs):
-            self.err_by_cfg[(r["deck"], r["stake"])].append(k)
-            self.err_by_stake[r["stake"]].append(k)
-        # Share of ALL episode starts = error_hall: the reset sources of the env (scenario s, boss
-        # hall h) are drawn first and only the episodes that start naturally (probability about
-        # 1 - s - h) are replaced, so the conditional probability is e / (1 - s - h).
-        free = 1.0 - cfg.scenario_prob - cfg.boss_hall
-        self.err_q = min(1.0, cfg.error_hall / free) if free > 1e-12 else 0.0
-        self.err_rng = np.random.default_rng(cfg.seed + 104729 * (self.resumes + 1))
-        self.err_fifo: list[deque] = [deque() for _ in range(cfg.num_envs)]
-        self.err_started: dict[str, int] = defaultdict(int)
-        self.err_fallback = 0
-        self.echo(
-            f"error hall: {len(recs)} states ({len(self.err_by_cfg)} deck/stake configs), "
-            f"P(start) {cfg.error_hall:.3f} (conditional on a natural reset: {self.err_q:.3f})"
-        )
-
-    def _errhall_resets(self, ended: np.ndarray) -> None:
-        """Right after ``env.step``: of the envs whose episode just ended (and that auto-reset to
-        a *natural* new episode), a fraction ``err_q`` is replaced by a pool state of the same
-        (deck, stake) (else the same stake; else it stays natural) via ``import_state`` with a
-        fresh reseed (same visible state, new hidden future). The step's ``done`` already cut the
-        GAE trace and reset the recurrent state, exactly as for a boss-hall start."""
-        org = self.env.origins()
-        cand = [int(i) for i in ended if org[i] == 0]
-        if not cand:
-            return
-        draws = self.err_rng.random(len(cand))
-        gi = self.obs["global_i"]
-        for i, u in zip(cand, draws, strict=True):
-            if u >= self.err_q:
-                continue
-            key = (DECK_NAMES[int(gi[i, DECK_COL])], STAKE_NAMES[int(gi[i, STAKE_COL])])
-            ids = self.err_by_cfg.get(key) or self.err_by_stake.get(key[1])
-            if not ids:
-                self.err_fallback += 1
-                continue
-            cat, state = self.err_pool[ids[int(self.err_rng.integers(len(ids)))]]
-            self.env.import_state(i, state, reseed=int(self.err_rng.integers(1, 2**62)))
-            self.err_fifo[i].append(cat)
-            self.err_started[cat] += 1
-
-    def _errhall_annotate(self, fin: list[dict]) -> None:
-        """Tag the finished records of imported episodes (``errhall``, ``errcat``): the only
-        ``import_state`` calls of the trainer are the hall's, and records come ordered by env then
-        completion, so each imported record pops its env's oldest pending category."""
-        for r in fin:
-            r["errhall"] = bool(r["imported"])
-            if r["errhall"]:
-                r["errcat"] = self.err_fifo[r["env"]].popleft()
-
-    def errhall_log(self) -> dict:
-        out = {
-            "errhall_pool": len(self.err_pool),
-            "errhall_started": sum(self.err_started.values()),
-            "errhall_fallback": self.err_fallback,
-        }
-        for cat, n in sorted(self.err_started.items()):
-            out[f"errhall_started/{cat}"] = n
-        self.err_started, self.err_fallback = defaultdict(int), 0
-        return out
 
     def update_hall(self) -> dict:
         """Boss hall: add this rollout's boss-select states (random subset) to the FIFO pool and
@@ -1054,8 +953,6 @@ class Trainer:
                 v2["stake_win_ema"] = dict(self.stake_ema)
             if self.hall_on:
                 v2.update(self.update_hall())
-            if self.errhall_on:
-                v2.update(self.errhall_log())
             roll_s, upd_s = col["rollout_seconds"], st["update_seconds"]
             rec = {
                 "type": "update",

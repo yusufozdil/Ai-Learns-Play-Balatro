@@ -1,5 +1,5 @@
 //! Booster packs: [`PackSpec`] (kind x size), the open pack of the `PackOpen` phase, and content
-//! generation. Phase 5.0. Rules: docs/mechanics/packs.md, notes.md §4.1b/§4.1d; numbers:
+//! generation. Phase 5.0. Rules: docs/mechanics/packs.md; numbers:
 //! `data/shop_weights.rs`. Guide: `docs/design/shop_packs_vouchers_tags.md`.
 //!
 //! Contents are rolled when the pack is opened, on `RngKey::Packs`. Arcana and Spectral packs

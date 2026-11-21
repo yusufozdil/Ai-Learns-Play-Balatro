@@ -11,6 +11,7 @@ confined to <root>/runs:
   /api/results  summaries of runs/eval/*.json
   /api/log?job=<id>|run=<name>[&n=200]   log tail (plain text)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,11 +31,35 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NAME_RE = re.compile(r"^[A-Za-z0-9_.+-]+$")
 ACTIVE_SECS = 180  # a log touched within this window counts as "running"
 
-UPDATE_KEYS = ("update", "global_step", "wall_seconds", "steps_per_sec", "ep_win", "ep_ante",
-               "ep_return", "vloss", "ent", "approx_kl", "explained_var", "rollout_seconds",
-               "update_seconds", "stage_label")
-EVAL_KEYS = ("update", "global_step", "det_win_rate", "det_mean_ante", "det_games", "det_truncated",
-             "sam_win_rate", "sam_mean_ante", "sam_games", "new_best", "eval_seconds")
+UPDATE_KEYS = (
+    "update",
+    "global_step",
+    "wall_seconds",
+    "steps_per_sec",
+    "ep_win",
+    "ep_ante",
+    "ep_return",
+    "vloss",
+    "ent",
+    "approx_kl",
+    "explained_var",
+    "rollout_seconds",
+    "update_seconds",
+    "stage_label",
+)
+EVAL_KEYS = (
+    "update",
+    "global_step",
+    "det_win_rate",
+    "det_mean_ante",
+    "det_games",
+    "det_truncated",
+    "sam_win_rate",
+    "sam_mean_ante",
+    "sam_games",
+    "new_best",
+    "eval_seconds",
+)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -47,7 +72,9 @@ def read_json(path: Path, default=None):
 
 
 def num(v):
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+    return (
+        v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+    )
 
 
 def iso_to_ts(s):
@@ -104,11 +131,19 @@ class LogCache:
                         if not isinstance(d, dict):
                             continue
                         if d.get("type") == "update":
-                            st["updates"].append({k: num(d.get(k)) if k != "stage_label" else d.get(k)
-                                                  for k in UPDATE_KEYS if k in d})
+                            st["updates"].append(
+                                {
+                                    k: num(d.get(k)) if k != "stage_label" else d.get(k)
+                                    for k in UPDATE_KEYS
+                                    if k in d
+                                }
+                            )
                         elif d.get("type") == "eval":
-                            row = {k: (d.get(k) if k == "new_best" else num(d.get(k)))
-                                   for k in EVAL_KEYS if k in d}
+                            row = {
+                                k: (d.get(k) if k == "new_best" else num(d.get(k)))
+                                for k in EVAL_KEYS
+                                if k in d
+                            }
                             st["evals"].append(row)
             return st
 
@@ -129,7 +164,11 @@ def eta_info(updates: list, total) -> dict:
     last = updates[-1]
     gs = last.get("global_step")
     info = {"global_step": gs, "total_steps": total, "wall_seconds": last.get("wall_seconds")}
-    tail = [u for u in updates[-15:] if u.get("global_step") is not None and u.get("wall_seconds") is not None]
+    tail = [
+        u
+        for u in updates[-15:]
+        if u.get("global_step") is not None and u.get("wall_seconds") is not None
+    ]
     sps = None
     if len(tail) >= 2:
         dw = tail[-1]["wall_seconds"] - tail[0]["wall_seconds"]
@@ -178,13 +217,34 @@ class App:
             return
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            sample = {"updated": datetime.now().astimezone().isoformat(timespec="seconds"),
-                      "phase": "Örnek faz (orchestrator bu dosyayı günceller)",
-                      "items": [
-                          {"id": "E1", "title": "Örnek: deney 1", "status": "running", "branch": None, "result": None},
-                          {"id": "E2", "title": "Örnek: deney 2", "status": "todo", "branch": None, "result": None},
-                          {"id": "E0", "title": "Örnek: bitmiş iş", "status": "done", "branch": None, "result": "%50 win"}],
-                      "notes": "Bu bir örnek dosyadır."}
+            sample = {
+                "updated": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "phase": "Example phase (edit this file to update the roadmap)",
+                "items": [
+                    {
+                        "id": "E1",
+                        "title": "Example: experiment 1",
+                        "status": "running",
+                        "branch": None,
+                        "result": None,
+                    },
+                    {
+                        "id": "E2",
+                        "title": "Example: experiment 2",
+                        "status": "todo",
+                        "branch": None,
+                        "result": None,
+                    },
+                    {
+                        "id": "E0",
+                        "title": "Example: finished job",
+                        "status": "done",
+                        "branch": None,
+                        "result": "50% win",
+                    },
+                ],
+                "notes": "This is an example file.",
+            }
             p.write_text(json.dumps(sample, indent=2, ensure_ascii=False))
         except OSError:
             pass
@@ -196,10 +256,23 @@ class App:
             return cached
         out: dict = {}
         try:
-            r = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
-                                "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=4)
+            r = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
             v = [x.strip() for x in r.stdout.strip().splitlines()[0].split(",")]
-            out["gpu"] = {"util": float(v[0]), "mem_used": float(v[1]), "mem_total": float(v[2]), "temp": float(v[3])}
+            out["gpu"] = {
+                "util": float(v[0]),
+                "mem_used": float(v[1]),
+                "mem_total": float(v[2]),
+                "temp": float(v[3]),
+            }
         except Exception:
             out["gpu"] = None
         try:
@@ -223,7 +296,11 @@ class App:
         names = []
         try:
             for d in self.runs.iterdir():
-                if d.is_dir() and NAME_RE.match(d.name) and ((d / "log.jsonl").exists() or (d / "config.json").exists()):
+                if (
+                    d.is_dir()
+                    and NAME_RE.match(d.name)
+                    and ((d / "log.jsonl").exists() or (d / "config.json").exists())
+                ):
                     names.append(d.name)
         except OSError:
             pass
@@ -237,20 +314,34 @@ class App:
         total = num(cfg.get("total_steps"))
         eta = eta_info(st["updates"], total)
         last_ev = st["evals"][-1] if st["evals"] else {}
-        best_ev = max((e for e in st["evals"] if e.get("det_win_rate") is not None),
-                      key=lambda e: e["det_win_rate"], default={})
+        best_ev = max(
+            (e for e in st["evals"] if e.get("det_win_rate") is not None),
+            key=lambda e: e["det_win_rate"],
+            default={},
+        )
         mt = st["mtime"] or (d / "config.json").stat().st_mtime
         init = cfg.get("init_checkpoint")
         return {
-            "name": name, "mtime": mt, "active": (time.time() - mt) < ACTIVE_SECS and bool(st["updates"]),
-            "init": init, "total_steps": total, "global_step": eta.get("global_step"),
-            "progress": eta.get("progress"), "eta_seconds": eta.get("eta_seconds"),
+            "name": name,
+            "mtime": mt,
+            "active": (time.time() - mt) < ACTIVE_SECS and bool(st["updates"]),
+            "init": init,
+            "total_steps": total,
+            "global_step": eta.get("global_step"),
+            "progress": eta.get("progress"),
+            "eta_seconds": eta.get("eta_seconds"),
             "steps_per_sec": eta.get("steps_per_sec"),
-            "decks": cfg.get("decks"), "stakes": cfg.get("stakes"),
-            "reward": cfg.get("reward"), "eval_set": f"{cfg.get('eval_deck', '-')}/{cfg.get('eval_stake', '-')}",
-            "seed": cfg.get("seed"), "num_envs": cfg.get("num_envs"), "lr": cfg.get("lr"),
-            "last_val_win": last_ev.get("det_win_rate"), "last_val_ante": last_ev.get("det_mean_ante"),
-            "best_val_win": best_ev.get("det_win_rate"), "n_evals": len(st["evals"]),
+            "decks": cfg.get("decks"),
+            "stakes": cfg.get("stakes"),
+            "reward": cfg.get("reward"),
+            "eval_set": f"{cfg.get('eval_deck', '-')}/{cfg.get('eval_stake', '-')}",
+            "seed": cfg.get("seed"),
+            "num_envs": cfg.get("num_envs"),
+            "lr": cfg.get("lr"),
+            "last_val_win": last_ev.get("det_win_rate"),
+            "last_val_ante": last_ev.get("det_mean_ante"),
+            "best_val_win": best_ev.get("det_win_rate"),
+            "n_evals": len(st["evals"]),
         }
 
     def run_series(self, name: str, maxn: int) -> dict | None:
@@ -268,12 +359,35 @@ class App:
                 ev = self.cache.get(self.runs / m.group(1) / "log.jsonl")["evals"]
                 if ev:
                     last = ev[-1]
-                    ref = {"label": f"init: {m.group(1)}", "det_win_rate": last.get("det_win_rate"),
-                           "det_mean_ante": last.get("det_mean_ante")}
-        return {"name": name, "summary": summ, "config": {k: cfg.get(k) for k in (
-                    "total_steps", "decks", "stakes", "init_checkpoint", "eval_deck", "eval_stake",
-                    "eval_games", "eval_every", "reward", "lr", "seed", "num_envs")},
-                "ref": ref, "evals": st["evals"], "updates": downsample(st["updates"], maxn)}
+                    ref = {
+                        "label": f"init: {m.group(1)}",
+                        "det_win_rate": last.get("det_win_rate"),
+                        "det_mean_ante": last.get("det_mean_ante"),
+                    }
+        return {
+            "name": name,
+            "summary": summ,
+            "config": {
+                k: cfg.get(k)
+                for k in (
+                    "total_steps",
+                    "decks",
+                    "stakes",
+                    "init_checkpoint",
+                    "eval_deck",
+                    "eval_stake",
+                    "eval_games",
+                    "eval_every",
+                    "reward",
+                    "lr",
+                    "seed",
+                    "num_envs",
+                )
+            },
+            "ref": ref,
+            "evals": st["evals"],
+            "updates": downsample(st["updates"], maxn),
+        }
 
     # -- results
     def results(self) -> list[dict]:
@@ -302,20 +416,35 @@ class App:
     def summarize_eval(stem: str, data) -> list[dict]:
         if not isinstance(data, dict):
             return []
-        entries = [(None, data)] if "games" in data else [(k, v) for k, v in data.items()
-                                                          if isinstance(v, dict) and "games" in v]
+        entries = (
+            [(None, data)]
+            if "games" in data
+            else [(k, v) for k, v in data.items() if isinstance(v, dict) and "games" in v]
+        )
         out = []
         for k, v in entries:
             n, p = num(v.get("games")), num(v.get("win_rate"))
             se = math.sqrt(p * (1 - p) / n) if (n and p is not None and n > 0) else None
             tag = k if k is not None else None
             sset = "/".join(str(data[x]) for x in ("deck", "stake") if x in data) or None
-            out.append({"file": stem, "entry": tag, "name": v.get("name") if isinstance(v.get("name"), str) else tag,
-                        "set": sset, "checkpoint": data.get("checkpoint") if isinstance(data.get("checkpoint"), str) else None,
-                        "global_step": num(data.get("global_step")), "games": n,
-                        "mean_ante": num(v.get("mean_ante")), "win_rate": p,
-                        "win_pct": p * 100 if p is not None else None, "se_pct": se * 100 if se is not None else None,
-                        "truncated": num(v.get("truncated"))})
+            out.append(
+                {
+                    "file": stem,
+                    "entry": tag,
+                    "name": v.get("name") if isinstance(v.get("name"), str) else tag,
+                    "set": sset,
+                    "checkpoint": data.get("checkpoint")
+                    if isinstance(data.get("checkpoint"), str)
+                    else None,
+                    "global_step": num(data.get("global_step")),
+                    "games": n,
+                    "mean_ante": num(v.get("mean_ante")),
+                    "win_rate": p,
+                    "win_pct": p * 100 if p is not None else None,
+                    "se_pct": se * 100 if se is not None else None,
+                    "truncated": num(v.get("truncated")),
+                }
+            )
         return out
 
     # -- queue
@@ -335,6 +464,7 @@ class App:
                 d["id"] = p.stem
                 out.append(d)
             return out
+
         st = read_json(self.queue / "status.json", {}) or {}
         pid = st.get("runner_pid")
         alive = False
@@ -344,8 +474,13 @@ class App:
                 alive = True
             except OSError:
                 pass
-        return {"running": lst("running"), "pending": lst("pending"), "done": lst("done", 30)[::-1],
-                "failed": lst("failed", 30)[::-1], "runner_alive": alive}
+        return {
+            "running": lst("running"),
+            "pending": lst("pending"),
+            "done": lst("done", 30)[::-1],
+            "failed": lst("failed", 30)[::-1],
+            "runner_alive": alive,
+        }
 
     def job_run(self, job: dict) -> str | None:
         cands = []
@@ -369,7 +504,11 @@ class App:
         if q["running"]:
             j = q["running"][0]
             started = iso_to_ts(j.get("started"))
-            now = {"source": "queue", "job": j, "elapsed": time.time() - started if started else None}
+            now = {
+                "source": "queue",
+                "job": j,
+                "elapsed": time.time() - started if started else None,
+            }
             cur_run = self.job_run(j)
         else:
             best = None
@@ -379,7 +518,11 @@ class App:
                     best = s
             if best:
                 cur_run = best["name"]
-                now = {"source": "untracked", "job": {"name": best["name"], "kind": "train"}, "elapsed": None}
+                now = {
+                    "source": "untracked",
+                    "job": {"name": best["name"], "kind": "train"},
+                    "elapsed": None,
+                }
         run = self.run_summary(cur_run) if cur_run else None
         if now is not None:
             now["run"] = run
@@ -387,11 +530,23 @@ class App:
         names = self.run_names()
         default_run = cur_run
         if default_run is None and names:
-            default_run = max(names, key=lambda n: (self.runs / n / "log.jsonl").stat().st_mtime
-                              if (self.runs / n / "log.jsonl").exists() else 0)
-        return {"time": time.time(), "now": now, "system": self.system(),
-                "roadmap": read_json(self.runs / "dashboard" / "roadmap.json"),
-                "queue": q, "default_run": default_run, "root": str(self.root)}
+            default_run = max(
+                names,
+                key=lambda n: (
+                    (self.runs / n / "log.jsonl").stat().st_mtime
+                    if (self.runs / n / "log.jsonl").exists()
+                    else 0
+                ),
+            )
+        return {
+            "time": time.time(),
+            "now": now,
+            "system": self.system(),
+            "roadmap": read_json(self.runs / "dashboard" / "roadmap.json"),
+            "queue": q,
+            "default_run": default_run,
+            "root": str(self.root),
+        }
 
 
 # --------------------------------------------------------------------------- http
@@ -411,7 +566,11 @@ def make_handler(app: App):
             self.wfile.write(body)
 
         def jsend(self, obj, code=200):
-            self.send(code, json.dumps(obj, allow_nan=False, default=str).encode(), "application/json; charset=utf-8")
+            self.send(
+                code,
+                json.dumps(obj, allow_nan=False, default=str).encode(),
+                "application/json; charset=utf-8",
+            )
 
         def do_GET(self):
             u = urlparse(self.path)
@@ -491,54 +650,54 @@ a{color:var(--acc);cursor:pointer}.empty{color:var(--mut);padding:30px 0;text-al
 </style></head><body>
 <header><h1>BalatroRL Panel</h1><span class="mut" id="upd"></span><span class="mut" id="err"></span></header>
 <main>
-<section class="card" id="now"><h2>Şu an koşan</h2><div id="nowbody" class="mut">yükleniyor…</div></section>
-<section class="card"><h2>Yol haritası <span class="mut" id="roadmeta"></span></h2><div id="road"></div></section>
-<section class="card"><h2>Canlı koşu</h2>
- <div class="ctl"><label>Koşu <select id="runsel"></select></label>
-  <label>Karşılaştır (en fazla 2) <select id="cmpsel" multiple size="3"></select></label>
-  <label>Yumuşatma <input id="smooth" type="number" min="1" max="200" value="10" style="width:60px"></label>
+<section class="card" id="now"><h2>Running now</h2><div id="nowbody" class="mut">loading…</div></section>
+<section class="card"><h2>Roadmap <span class="mut" id="roadmeta"></span></h2><div id="road"></div></section>
+<section class="card"><h2>Live run</h2>
+ <div class="ctl"><label>Run <select id="runsel"></select></label>
+  <label>Compare (max 2) <select id="cmpsel" multiple size="3"></select></label>
+  <label>Smoothing <input id="smooth" type="number" min="1" max="200" value="10" style="width:60px"></label>
   <span class="mut" id="runinfo"></span></div>
  <div class="charts" id="charts"></div></section>
-<section class="card"><h2>Kuyruk <span class="mut" id="qmeta"></span></h2><div id="queue"></div><div id="logbox"></div></section>
-<section class="card"><h2>Sonuçlar (runs/eval)</h2>
- <div class="ctl"><input id="rfilter" placeholder="filtre…"><span class="mut" id="rcount"></span></div><div class="tw" id="results"></div></section>
-<section class="card"><h2>Koşular</h2><div class="tw" id="runs"></div></section>
+<section class="card"><h2>Queue <span class="mut" id="qmeta"></span></h2><div id="queue"></div><div id="logbox"></div></section>
+<section class="card"><h2>Results (runs/eval)</h2>
+ <div class="ctl"><input id="rfilter" placeholder="filter…"><span class="mut" id="rcount"></span></div><div class="tw" id="results"></div></section>
+<section class="card"><h2>Runs</h2><div class="tw" id="runs"></div></section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const COLORS=['#4c8df0','#e8884c','#49b36f'];
 const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
-const fd=s=>{if(s==null||!isFinite(s))return '-';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}s ${m}dk`:m?`${m}dk ${s%60}sn`:`${s}sn`};
+const fd=s=>{if(s==null||!isFinite(s))return '-';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${m}m`:m?`${m}m ${s%60}s`:`${s}s`};
 const pct=(v,d=1)=>v==null?'-':(v*100).toFixed(d)+'%';
 const f2=(v,d=2)=>v==null?'-':Number(v).toFixed(d);
 const mil=v=>v==null?'-':(v/1e6).toFixed(2)+'M';
-const when=t=>t?new Date(t*1000).toLocaleString('tr-TR',{dateStyle:'short',timeStyle:'short'}):'-';
+const when=t=>t?new Date(t*1000).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'}):'-';
 const J=async u=>{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(u+' '+r.status);return r.json()};
 let S={},RUNS=[],RES=[],sel=store.get('sel',null),cmp=store.get('cmp',[]),openLog=null,sortR=store.get('sortR',{k:'mtime',d:-1}),sortRuns={k:'mtime',d:-1};
 
 function nowCard(){
   const n=S.now,sy=S.system||{};let h='';
-  if(!n){h='<div class="mut">Şu an koşan iş yok.</div>'+(S.queue.runner_alive?'':' <span class="pill s-failed">kuyruk daemon kapalı</span>');}
+  if(!n){h='<div class="mut">Nothing is running.</div>'+(S.queue.runner_alive?'':' <span class="pill s-failed">queue daemon off</span>');}
   else{const j=n.job,r=n.run;
-    h=`<div class="kv"><div><span class="mut">${n.source==='queue'?'Kuyruk işi':'Kuyruk dışı koşu'}</span><b>${esc(j.name)}</b></div>
-    <div><span class="mut">tür</span><b>${esc(j.kind||'-')}</b></div>
+    h=`<div class="kv"><div><span class="mut">${n.source==='queue'?'Queue job':'Run outside the queue'}</span><b>${esc(j.name)}</b></div>
+    <div><span class="mut">kind</span><b>${esc(j.kind||'-')}</b></div>
     <div><span class="mut">branch / commit</span><b>${esc(j.branch||'-')} ${esc(j.commit||'')}</b></div>
-    <div><span class="mut">geçen süre</span><b>${fd(n.elapsed)}</b></div>`;
-    if(r&&r.progress!=null)h+=`<div><span class="mut">ilerleme</span><b>${(r.progress*100).toFixed(1)}%</b></div><div><span class="mut">ETA</span><b>${fd(r.eta_seconds)}</b></div><div><span class="mut">hız</span><b>${f2(r.steps_per_sec,0)} adım/sn</b></div><div><span class="mut">son val kazanma</span><b>${pct(r.last_val_win)}</b></div>`;
-    else if(j.expected_minutes&&n.elapsed!=null)h+=`<div><span class="mut">tahmini</span><b>${f2(j.expected_minutes,0)} dk</b></div>`;
+    <div><span class="mut">elapsed</span><b>${fd(n.elapsed)}</b></div>`;
+    if(r&&r.progress!=null)h+=`<div><span class="mut">progress</span><b>${(r.progress*100).toFixed(1)}%</b></div><div><span class="mut">ETA</span><b>${fd(r.eta_seconds)}</b></div><div><span class="mut">speed</span><b>${f2(r.steps_per_sec,0)} steps/s</b></div><div><span class="mut">last val win</span><b>${pct(r.last_val_win)}</b></div>`;
+    else if(j.expected_minutes&&n.elapsed!=null)h+=`<div><span class="mut">expected</span><b>${f2(j.expected_minutes,0)} min</b></div>`;
     h+='</div>';
-    if(r&&r.progress!=null)h+=`<div class="bar"><i style="width:${r.progress*100}%"></i></div><div class="mut">${mil(r.global_step)} / ${mil(r.total_steps)} adım${j.notes?' · '+esc(j.notes):''}</div>`;
+    if(r&&r.progress!=null)h+=`<div class="bar"><i style="width:${r.progress*100}%"></i></div><div class="mut">${mil(r.global_step)} / ${mil(r.total_steps)} steps${j.notes?' · '+esc(j.notes):''}</div>`;
     else if(j.notes)h+=`<div class="mut">${esc(j.notes)}</div>`;}
   h+='<hr style="border:0;border-top:1px solid var(--line);margin:8px 0"><div class="kv">';
   if(sy.gpu)h+=`<div><span class="mut">GPU</span><b>${sy.gpu.util}%</b>${sy.gpu.mem_used.toFixed(0)}/${sy.gpu.mem_total.toFixed(0)} MB · ${sy.gpu.temp}°C</div>`;
-  if(sy.load)h+=`<div><span class="mut">CPU yük</span><b>${sy.load[0].toFixed(1)}</b>/ ${sy.cpus} çekirdek (5dk ${sy.load[1].toFixed(1)})</div>`;
+  if(sy.load)h+=`<div><span class="mut">CPU load</span><b>${sy.load[0].toFixed(1)}</b>/ ${sy.cpus} cores (5 min ${sy.load[1].toFixed(1)})</div>`;
   if(sy.ram)h+=`<div><span class="mut">RAM</span><b>${((sy.ram.total_mb-sy.ram.avail_mb)/1024).toFixed(1)} GB</b>/ ${(sy.ram.total_mb/1024).toFixed(1)} GB</div>`;
-  h+=`<div><span class="mut">Kuyruk daemon</span><b>${S.queue.runner_alive?'açık':'kapalı'}</b>${S.queue.pending.length} bekliyor</div></div>`;
+  h+=`<div><span class="mut">Queue daemon</span><b>${S.queue.runner_alive?'on':'off'}</b>${S.queue.pending.length} pending</div></div>`;
   $('nowbody').innerHTML=h;
 }
 function roadCard(){
-  const r=S.roadmap;if(!r){$('road').innerHTML='<div class="mut">roadmap.json yok</div>';return}
+  const r=S.roadmap;if(!r){$('road').innerHTML='<div class="mut">no roadmap.json</div>';return}
   $('roadmeta').textContent=(r.phase?'· '+r.phase+' ':'')+(r.updated?'· '+r.updated:'');
   let h='<div class="road">';
   (r.items||[]).forEach(i=>{h+=`<div class="it"><span class="pill s-${esc(i.status)}">${esc(i.status)}</span> <b>${esc(i.id)}</b> ${esc(i.title)}<small>${esc(i.branch||'')}${i.result?' → '+esc(i.result):''}</small></div>`});
@@ -549,15 +708,15 @@ function jobRow(j,state){
   return `<tr><td>${esc(j.id)}</td><td>${esc(j.kind||'')}</td><td>${esc(j.branch||'')} ${esc(j.commit||'')}</td><td class="n">${d}</td><td>${j.exit_code!=null?'exit '+j.exit_code:''}${j.error?' '+esc(j.error):''}</td><td>${esc(j.notes||'')}</td><td>${state==='pending'?'':`<a data-log="${esc(j.id)}">log</a>`}</td></tr>`;
 }
 function queueCard(){
-  const q=S.queue;$('qmeta').textContent=q.runner_alive?'· daemon açık':'· daemon kapalı';
-  const sec=(t,a,st)=>`<h3 style="font-size:13px;margin:8px 0 2px">${t} (${a.length})</h3>`+(a.length?`<div class="tw"><table><tr><th>iş</th><th>tür</th><th>branch/commit</th><th class="n">süre</th><th>sonuç</th><th>not</th><th></th></tr>${a.map(j=>jobRow(j,st)).join('')}</table></div>`:'<div class="mut">-</div>');
-  $('queue').innerHTML=sec('Koşuyor',q.running,'running')+sec('Bekleyen',q.pending,'pending')+sec('Biten',q.done,'done')+sec('Başarısız',q.failed,'failed');
+  const q=S.queue;$('qmeta').textContent=q.runner_alive?'· daemon on':'· daemon off';
+  const sec=(t,a,st)=>`<h3 style="font-size:13px;margin:8px 0 2px">${t} (${a.length})</h3>`+(a.length?`<div class="tw"><table><tr><th>job</th><th>kind</th><th>branch/commit</th><th class="n">time</th><th>result</th><th>notes</th><th></th></tr>${a.map(j=>jobRow(j,st)).join('')}</table></div>`:'<div class="mut">-</div>');
+  $('queue').innerHTML=sec('Running',q.running,'running')+sec('Pending',q.pending,'pending')+sec('Done',q.done,'done')+sec('Failed',q.failed,'failed');
   document.querySelectorAll('[data-log]').forEach(a=>a.onclick=()=>{openLog=a.dataset.log;showLog()});
 }
 async function showLog(){
   if(!openLog){$('logbox').innerHTML='';return}
   try{const t=await (await fetch('/api/log?n=200&job='+encodeURIComponent(openLog),{cache:'no-store'})).text();
-  $('logbox').innerHTML=`<div style="margin-top:8px"><b>${esc(openLog)}</b> — son 200 satır <a id="closelog">kapat</a></div><pre>${esc(t)}</pre>`;
+  $('logbox').innerHTML=`<div style="margin-top:8px"><b>${esc(openLog)}</b> — last 200 lines <a id="closelog">close</a></div><pre>${esc(t)}</pre>`;
   $('closelog').onclick=()=>{openLog=null;showLog()};const p=$('logbox').querySelector('pre');p.scrollTop=p.scrollHeight}catch(e){}
 }
 function sortRows(a,s){return a.slice().sort((x,y)=>{const u=x[s.k],v=y[s.k];if(u==null&&v==null)return 0;if(u==null)return 1;if(v==null)return -1;return (u<v?-1:u>v?1:0)*s.d})}
@@ -570,15 +729,15 @@ function resultsCard(){
   const f=$('rfilter').value.toLowerCase();
   const rows=sortRows(RES.filter(r=>!f||JSON.stringify([r.file,r.entry,r.name,r.set,r.checkpoint]).toLowerCase().includes(f)),sortR);
   $('rcount').textContent=`${rows.length}/${RES.length}`;
-  const cols=[{k:'file',t:'dosya'},{k:'entry',t:'giriş',f:r=>esc(r.entry||'')},{k:'set',t:'set',f:r=>esc(r.set||'')},{k:'games',t:'oyun',n:1},{k:'mean_ante',t:'ort. ante',n:1,f:r=>f2(r.mean_ante)},
-   {k:'win_pct',t:'kazanma % ± SE',n:1,f:r=>r.win_pct==null?'-':`${r.win_pct.toFixed(1)} ± ${f2(r.se_pct,1)}`},{k:'truncated',t:'kesilen',n:1,f:r=>pct(r.truncated)},{k:'global_step',t:'adım',n:1,f:r=>mil(r.global_step)},{k:'mtime',t:'değişiklik',f:r=>when(r.mtime)}];
+  const cols=[{k:'file',t:'file'},{k:'entry',t:'entry',f:r=>esc(r.entry||'')},{k:'set',t:'set',f:r=>esc(r.set||'')},{k:'games',t:'games',n:1},{k:'mean_ante',t:'mean ante',n:1,f:r=>f2(r.mean_ante)},
+   {k:'win_pct',t:'win % ± SE',n:1,f:r=>r.win_pct==null?'-':`${r.win_pct.toFixed(1)} ± ${f2(r.se_pct,1)}`},{k:'truncated',t:'truncated',n:1,f:r=>pct(r.truncated)},{k:'global_step',t:'steps',n:1,f:r=>mil(r.global_step)},{k:'mtime',t:'modified',f:r=>when(r.mtime)}];
   $('results').innerHTML=mkTable(cols,rows,sortR,null);
   $('results').querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortR={k,d:sortR.k===k?-sortR.d:-1};store.set('sortR',sortR);resultsCard()});
 }
 function runsCard(){
   const rows=sortRows(RUNS.map(r=>({...r,cfg:`${r.decks||'-'} / ${r.stakes||'-'}`,initn:r.init||'-'})),sortRuns);
-  const cols=[{k:'name',t:'koşu',f:r=>(r.active?'<span class="pill s-running">aktif</span> ':'')+esc(r.name)},{k:'initn',t:'init',f:r=>esc(r.initn)},{k:'global_step',t:'adım',n:1,f:r=>`${mil(r.global_step)} / ${mil(r.total_steps)}`},
-   {k:'cfg',t:'deck / stake'},{k:'eval_set',t:'val seti'},{k:'last_val_win',t:'son val kazanma',n:1,f:r=>pct(r.last_val_win)},{k:'best_val_win',t:'en iyi',n:1,f:r=>pct(r.best_val_win)},{k:'mtime',t:'değişiklik',f:r=>when(r.mtime)}];
+  const cols=[{k:'name',t:'run',f:r=>(r.active?'<span class="pill s-running">active</span> ':'')+esc(r.name)},{k:'initn',t:'init',f:r=>esc(r.initn)},{k:'global_step',t:'steps',n:1,f:r=>`${mil(r.global_step)} / ${mil(r.total_steps)}`},
+   {k:'cfg',t:'deck / stake'},{k:'eval_set',t:'val set'},{k:'last_val_win',t:'last val win',n:1,f:r=>pct(r.last_val_win)},{k:'best_val_win',t:'best',n:1,f:r=>pct(r.best_val_win)},{k:'mtime',t:'modified',f:r=>when(r.mtime)}];
   $('runs').innerHTML=mkTable(cols,rows,sortRuns,null,r=>`class="click ${r.name===sel?'sel':''}" data-run="${esc(r.name)}"`);
   $('runs').querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortRuns={k,d:sortRuns.k===k?-sortRuns.d:-1};runsCard()});
   $('runs').querySelectorAll('tr[data-run]').forEach(tr=>tr.onclick=()=>{setSel(tr.dataset.run);window.scrollTo({top:$('runsel').getBoundingClientRect().top+scrollY-60,behavior:'smooth'})});
@@ -612,9 +771,9 @@ function chart(el,series,o){
 function ma(pts,w){if(w<=1)return pts;const out=[];const q=[];let s=0;pts.forEach(p=>{if(p[1]==null){out.push([p[0],null]);return}q.push(p[1]);s+=p[1];if(q.length>w)s-=q.shift();out.push([p[0],s/q.length])});return out}
 const serU=(d,k)=>d.updates.map(u=>[u.global_step,u[k]]);
 const serE=(d,k)=>d.evals.map(u=>[u.global_step,u[k]]);
-function metaText(d){const c=d.config||{};return `${d.name}: val ${c.eval_deck||'-'}/${c.eval_stake||'-'}, ${c.eval_games||'?'} oyun/${c.eval_every||'?'} güncelleme`}
+function metaText(d){const c=d.config||{};return `${d.name}: val ${c.eval_deck||'-'}/${c.eval_stake||'-'}, ${c.eval_games||'?'} games/${c.eval_every||'?'} updates`}
 async function liveCard(){
-  const names=[sel,...cmp.filter(c=>c!==sel)].filter(Boolean);if(!names.length){$('charts').innerHTML='<div class="empty">koşu yok</div>';return}
+  const names=[sel,...cmp.filter(c=>c!==sel)].filter(Boolean);if(!names.length){$('charts').innerHTML='<div class="empty">no runs</div>';return}
   const ds=(await Promise.all(names.map(n=>J('/api/run?name='+encodeURIComponent(n)).catch(()=>null)))).filter(Boolean);if(!ds.length)return;
   const w=Math.max(1,+$('smooth').value||1);const multi=ds.length>1;
   const per=(fn)=>ds.map((d,i)=>fn(d,COLORS[i%3],i)).flat();
@@ -622,13 +781,13 @@ async function liveCard(){
   const hl=[];if(d0.ref&&d0.ref.det_win_rate!=null)hl.push({y:d0.ref.det_win_rate,label:d0.ref.label});
   const hlA=[];if(d0.ref&&d0.ref.det_mean_ante!=null)hlA.push({y:d0.ref.det_mean_ante,label:d0.ref.label});
   const specs=[
-   {t:'Val kazanma oranı (det düz, sampled kesik)',s:per((d,c)=>[{name:d.name+' det',color:c,pts:serE(d,'det_win_rate')},{name:d.name+' sam',color:c,dash:1,w:1.2,pts:serE(d,'sam_win_rate')}]),o:{fmt:v=>(v*100).toFixed(1)+'%',hlines:hl}},
-   {t:'Val ortalama ante',s:per((d,c)=>[{name:d.name+' det',color:c,pts:serE(d,'det_mean_ante')},{name:d.name+' sam',color:c,dash:1,w:1.2,pts:serE(d,'sam_mean_ante')}]),o:{hlines:hlA}},
-   {t:'Eğitim ep_win (yumuşatılmış)',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'ep_win'),w)}]),o:{fmt:v=>(v*100).toFixed(1)+'%'}},
-   {t:'Eğitim ep_ante (yumuşatılmış)',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'ep_ante'),w)}])},
-   {t:'Adım/sn',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'steps_per_sec'),w)}]),o:{fmt:v=>v.toFixed(0),floor0:1}},
+   {t:'Val win rate (det solid, sampled dashed)',s:per((d,c)=>[{name:d.name+' det',color:c,pts:serE(d,'det_win_rate')},{name:d.name+' sam',color:c,dash:1,w:1.2,pts:serE(d,'sam_win_rate')}]),o:{fmt:v=>(v*100).toFixed(1)+'%',hlines:hl}},
+   {t:'Val mean ante',s:per((d,c)=>[{name:d.name+' det',color:c,pts:serE(d,'det_mean_ante')},{name:d.name+' sam',color:c,dash:1,w:1.2,pts:serE(d,'sam_mean_ante')}]),o:{hlines:hlA}},
+   {t:'Training ep_win (smoothed)',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'ep_win'),w)}]),o:{fmt:v=>(v*100).toFixed(1)+'%'}},
+   {t:'Training ep_ante (smoothed)',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'ep_ante'),w)}])},
+   {t:'Steps/s',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'steps_per_sec'),w)}]),o:{fmt:v=>v.toFixed(0),floor0:1}},
    {t:'Explained variance',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'explained_var'),w)}])},
-   {t:'Entropi',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'ent'),w)}])},
+   {t:'Entropy',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'ent'),w)}])},
    {t:'approx_kl',s:per((d,c)=>[{name:d.name,color:c,pts:ma(serU(d,'approx_kl'),w)}]),o:{fmt:v=>v.toExponential(1)}}];
   const root=$('charts');
   if(root.children.length!==specs.length){root.innerHTML=specs.map(()=>'<div class="ch"><h3></h3><div class="cb"></div></div>').join('')}
@@ -647,13 +806,13 @@ let first=true;
 async function tick(){
   try{
     [S,RUNS,RES]=await Promise.all([J('/api/state'),J('/api/runs'),J('/api/results')]);
-    $('err').textContent='';$('upd').textContent='güncellendi '+new Date().toLocaleTimeString('tr-TR');
+    $('err').textContent='';$('upd').textContent='updated '+new Date().toLocaleTimeString('en-GB');
     if(!RUNS.some(r=>r.name===sel)){sel=(S.default_run&&RUNS.some(r=>r.name===S.default_run))?S.default_run:(RUNS[0]&&RUNS[0].name)||null}
     if(first){first=false}
     nowCard();roadCard();queueCard();resultsCard();runsCard();
     if(document.activeElement!==$('cmpsel')&&document.activeElement!==$('runsel'))fillSel();
     await liveCard();showLog();
-  }catch(e){$('err').textContent='bağlantı hatası: '+e.message}
+  }catch(e){$('err').textContent='connection error: '+e.message}
 }
 tick();setInterval(tick,10000);
 </script></body></html>
@@ -661,7 +820,9 @@ tick();setInterval(tick,10000);
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--root", default=str(REPO_ROOT))
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1")

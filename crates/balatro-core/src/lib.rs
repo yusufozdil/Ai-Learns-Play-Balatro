@@ -1,7 +1,7 @@
 //! `balatro-core`: headless, deterministic rules engine for Balatro-style runs.
 //!
-//! Pure Rust, no Python dependency. See `prd.md` §3 for the architecture and `notes.md` §1 for
-//! non-negotiable rules (determinism, no copied game assets/code, errors instead of panics).
+//! Pure Rust, no Python dependency. Non-negotiable rules:
+//! (determinism, no copied game assets/code, errors instead of panics).
 
 pub mod action_mask;
 pub mod actions;

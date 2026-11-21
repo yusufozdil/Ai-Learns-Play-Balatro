@@ -44,7 +44,7 @@ Inputs: played cards in hand order (left to right), held cards (not played) in h
    d. J's edition Polychrome (x1.5 mult) last (A1 step 5.4).
    - Debuffed joker: no effect and no edition effects (A2; edition effects for debuffed jokers `UNVERIFIED`, recommended: none).
    - Consequence: all additions made by a joker to the right happen later; ordering is significant because +mult must precede x mult to benefit.
-7. Consumable-like final modifiers: Observatory voucher gives x1.5 mult per matching Planet card held in the consumable slots, applied left to right after jokers (A1 step 6). Plasma Deck: chips and mult are balanced (averaged) after that (A1 step 7). Both are late-game; out of scope for Faz 1.
+7. Consumable-like final modifiers: Observatory voucher gives x1.5 mult per matching Planet card held in the consumable slots, applied left to right after jokers (A1 step 6). Plasma Deck: chips and mult are balanced (averaged) after that (A1 step 7). Both are late-game; out of scope for the first phase.
 8. Score: `hand_score = chips * mult`. Rounding: the wiki sources do not describe any rounding of fractional values (A1 silent; search found none). `UNVERIFIED`. Recommendation: keep `chips` and `mult` as f64 with no intermediate rounding at any step (x1.5 on odd values yields fractions), and set `hand_score = floor(chips * mult)` once, then add to the round score. Flint is the only case where the wiki states explicit rounding (round up). Provide a single `round_score` function so it can be changed in one place if real-game tests disagree.
 9. After scoring (wiki A1 does not give the order; see notes). Recommended order, `UNVERIFIED`:
    a. Add `hand_score` to the round score; decrement hands left.
@@ -57,9 +57,9 @@ Inputs: played cards in hand order (left to right), held cards (not played) in h
 
 - Discard: no scoring; seals/jokers react on discard (Purple Seal Tarot; Burnt Joker; debuffed cards' discard effects are nullified, A7).
 - End of round: Gold cards in hand pay $3 each; Blue Seal cards in hand create Planet for last-played hand type (A3, A5).
-- Probabilities (Lucky, Glass) use the shared `chance()` function so Oops! All 6s applies (prd.md Faz 1 item 3).
+- Probabilities (Lucky, Glass) use the shared `chance()` function so Oops! All 6s applies.
 
-## Differences versus prd.md 3.2 draft
+## Differences versus the original draft
 
 1. Card step order: the wiki lists enhancement, then SEAL (Gold Seal), then edition, then on-scored jokers (A1). The draft lists enhancement, edition, then Gold Seal. Only the money timing differs; no score impact. Use the wiki order.
 2. Joker phase: the wiki puts Baseball Card's x1.5 BEFORE the target joker's Polychrome, and "independent jokers" sit between Foil/Holo and Polychrome. The draft put Baseball Card after Polychrome. Use the wiki order (6a-6d). Numerically it affects only the order of x multipliers (commutative), so final results are equal unless an additive effect sits in between; still implement the wiki order.

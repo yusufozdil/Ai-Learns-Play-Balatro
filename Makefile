@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: setup setup-train test test-rs test-py lint fmt build-py bench snapshot bc-smoke ppo-e2e ppo-s1 eval-ckpt
+.PHONY: setup setup-train test test-rs test-py lint fmt build-py bench bc-smoke ppo-e2e ppo-s1 eval-ckpt
 
 # `uv run --no-sync` so uv never rebuilds/uninstalls the maturin-installed extension.
 UVR := uv run --no-sync
@@ -57,10 +57,3 @@ fmt:
 
 bench:
 	cargo bench -p balatro-core
-
-# Phase-end archive (no git yet). Usage: make snapshot PHASE=1
-snapshot:
-	@test -n "$(PHASE)" || (echo "usage: make snapshot PHASE=<n>" && exit 1)
-	tar --exclude=./target --exclude=./.venv --exclude=./snapshots --exclude='__pycache__' \
-	    --exclude='*.so' -czf snapshots/phase-$(PHASE)-$$(date +%Y%m%d-%H%M).tar.gz .
-	@ls -lh snapshots | tail -1

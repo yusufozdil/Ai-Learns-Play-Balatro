@@ -211,7 +211,7 @@ fn garbage_on_gain(ctx: &mut TagCtx<'_>) -> bool {
     true
 }
 
-// --- Ethereal Tag --- a free Spectral Pack (Normal size, see notes.md).
+// --- Ethereal Tag --- a free Spectral Pack (Normal size).
 fn ethereal_on_gain(ctx: &mut TagCtx<'_>) -> bool {
     ctx.queue_pack(PackSpec {
         kind: PackKind::Spectral,

@@ -700,7 +700,7 @@ pub struct DiscardInfo<'a> {
     /// The cards were discarded by a boss (The Hook), not by a discard action: no discard was
     /// used (`discards_used_round` unchanged). "First discard" effects (Burnt Joker, Trading
     /// Card) must ignore it; per-card discard effects (Green Joker, Ramen, Castle, Mail-In
-    /// Rebate, Hit the Road, Yorick, Faceless) still apply (notes.md §4.2, bosses.md).
+    /// Rebate, Hit the Road, Yorick, Faceless) still apply (docs/mechanics/bosses.md).
     pub forced: bool,
 }
 

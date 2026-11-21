@@ -40,7 +40,7 @@ def main() -> None:
     if len(metas) > 1:
         print("WARNING: files differ in set/seed/deck/stake:", *sorted(metas), sep="\n  ")
     print(f"{'file':<40} {'games':>6} {'win% +- SE':>14} {'ante +- SE':>14}")
-    for f, (r, _) in zip(args.files, rs):
+    for f, (r, _) in zip(args.files, rs, strict=False):
         w = np.array(r.wins, dtype=float)
         a = np.array(r.antes, dtype=float)
         print(
@@ -48,7 +48,7 @@ def main() -> None:
             f"{a.mean():>8.3f} +- {sem(a):<5.3f}"
         )
     base = rs[0][0]
-    for f, (r, _) in zip(args.files[1:], rs[1:]):
+    for f, (r, _) in zip(args.files[1:], rs[1:], strict=False):
         c = ev.compare(r, base)
         print(
             f"paired {f.stem} - {args.files[0].stem}: n={c['games']} "

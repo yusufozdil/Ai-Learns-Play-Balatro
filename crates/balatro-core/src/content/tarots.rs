@@ -163,7 +163,7 @@ fn emperor(ctx: &mut UseCtx<'_>) {
 }
 
 // --- The Hermit: https://balatrowiki.org/w/The_Hermit ----------------------------------------
-// Doubles money, at most +$20; $0 when money <= 0 (notes.md §4.1b).
+// Doubles money, at most +$20; $0 when money <= 0.
 const HERMIT_CAP: i32 = 20;
 
 fn hermit(ctx: &mut UseCtx<'_>) {
@@ -203,7 +203,7 @@ fn wheel(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Strength: https://balatrowiki.org/w/Strength --------------------------------------------
-// Rank +1; King -> Ace, Ace -> 2. Stone cards have no rank and are skipped (notes.md §4.1b).
+// Rank +1; King -> Ace, Ace -> 2. Stone cards have no rank and are skipped.
 
 fn next_rank(r: Rank) -> Rank {
     match r {
@@ -240,7 +240,7 @@ fn hanged_man(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Death: https://balatrowiki.org/w/Death ---------------------------------------------------
-// The LEFT selected card becomes a copy of the RIGHT one (hand order; notes.md §4.1b/§4.2).
+// The LEFT selected card becomes a copy of the RIGHT one (hand order).
 
 fn death(ctx: &mut UseCtx<'_>) {
     if let (Some(left), Some(right)) = (ctx.target_pos(0), ctx.target_pos(1)) {

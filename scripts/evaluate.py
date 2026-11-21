@@ -1,4 +1,5 @@
-"""Evaluate checkpoints on a fixed game set (default dev: 1000 games, seed ``TEST_SEED``) against baselines.
+"""Evaluate checkpoints on a fixed game set (default dev: 1000 games, seed ``TEST_SEED``) against
+baselines.
 
     uv run --no-sync python scripts/evaluate.py --checkpoint runs/e2e/best.pt --name e2e
     uv run --no-sync python scripts/evaluate.py --checkpoint runs/s1/best.pt --route play
@@ -11,7 +12,8 @@ non-default ``--deck`` / ``--stake``, so the Red/White cache names are unchanged
 (baselines are then teacher / BC under the same routing).
 ``--set {dev,holdout,val}`` / ``--seed-base`` pick the games (see ``evaluate.py`` docs; default dev
 is bit-identical to the historical protocol); a non-dev set adds ``_<set>`` to the baseline cache
-and result names. ``--memory {zero,shuffle}`` is the recurrent-memory knockout (adds ``_mem<mode>``).
+and result names. ``--memory {zero,shuffle}`` is the recurrent-memory knockout (adds
+``_mem<mode>``).
 Results go to ``runs/eval/<name>.json`` (``<name>`` gets ``_<deck>_<stake>`` for a non-default
 configuration unless ``--name`` is given).
 """
@@ -60,7 +62,7 @@ def main() -> None:
         "--memory",
         choices=ev.MEMORY_MODES,
         default="normal",
-        help="recurrent-memory knockout: zero = reset hidden each step, shuffle = permute across envs",
+        help="recurrent-memory knockout: zero = reset hidden each step, shuffle = permute envs",
     )
     ap.add_argument("--modes", default="det,sample", help="comma list of det,sample")
     ap.add_argument("--route", default=None, help="phases the model plays (rest: teacher)")

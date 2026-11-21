@@ -1,6 +1,6 @@
 """Table of raw eval JSONs: name / games / mean ante / win% +- SE / trunc%.
 
-    uv run --no-sync python scripts/summarize_evals.py 'runs/eval/decks_*.json' [--mode det]
+uv run --no-sync python scripts/summarize_evals.py 'runs/eval/decks_*.json' [--mode det]
 """
 
 from __future__ import annotations

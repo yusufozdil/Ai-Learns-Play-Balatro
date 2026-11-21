@@ -1,6 +1,6 @@
 //! Phase 4B: the 18 Spectral cards through `Game::step` (use, target-count errors, `can_use`,
 //! effects, seed determinism, card-count invariants, joker reactions). Guide:
-//! docs/design/consumables_bosses.md; rules docs/mechanics/consumables.md §3, notes.md §4.1b.
+//! docs/design/consumables_bosses.md; rules docs/mechanics/consumables.md §3
 
 use balatro_core::actions::{Action, ActionError};
 use balatro_core::agents::{Agent, RandomAgent};

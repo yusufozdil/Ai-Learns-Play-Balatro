@@ -351,7 +351,7 @@ fn plasma_deck_doubles_blinds_and_balances_score() {
     let boss_mult = g.state().boss_mult();
     assert_eq!(g.state().target, 300.0 * boss_mult * 2.0);
     // Scoring: a lone Ace = High Card 5 chips + 11 = 16 chips x 1 mult. Plasma balances to
-    // floor((16 + 1) / 2) = 8 each (back.lua:157-161) -> 8 x 8 = 64.
+    // floor((16 + 1) / 2) = 8 each -> 8 x 8 = 64.
     let mut p = game(DeckKind::Plasma, 1);
     p.step(Action::SelectBlind).unwrap();
     set_first_card(&mut p, Rank::Ace);

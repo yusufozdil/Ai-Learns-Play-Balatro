@@ -54,7 +54,7 @@ Notes:
 | Polychrome | x1.5 mult when scored |
 | Negative | +1 joker slot (jokers) / +1 consumable slot (consumables) (C2). Not a playing-card edition in normal play; the evaluator enum may keep it, but cards will never carry it unless a later task adds a source. `UNVERIFIED` whether any in-game effect gives a playing card Negative; recommended: do not generate. |
 
-Appearance rates in packs: Foil 4%, Holographic 2.8%, Polychrome 1.2% (x2 Hone, x4 Glow Up); enhancement 40%, seal 20% (C2; the wiki table is ambiguous, `UNVERIFIED`; only needed for pack generation in Faz 5).
+Appearance rates in packs: Foil 4%, Holographic 2.8%, Polychrome 1.2% (x2 Hone, x4 Glow Up); enhancement 40%, seal 20% (C2; the wiki table is ambiguous, `UNVERIFIED`; only needed for pack generation).
 
 ## Seals (C2, C5)
 
@@ -65,7 +65,7 @@ Appearance rates in packs: Foil 4%, Holographic 2.8%, Polychrome 1.2% (x2 Hone, 
 | Blue | creates the Planet card for the last played hand type of the round, needs a free consumable slot | card held in hand at end of round (C2, C5) |
 | Purple | creates a Tarot card, needs a free consumable slot | when the card is discarded (C2, C5) |
 
-Seals can be re-triggered by jokers (Sock and Buskin retriggering a Gold Seal face card pays again) (C2). The prd draft enum has 5 seals including none: Gold, Red, Blue, Purple + none.
+Seals can be re-triggered by jokers (Sock and Buskin retriggering a Gold Seal face card pays again) (C2). The simulator enum has 5 seals including none: Gold, Red, Blue, Purple + none.
 
 ## Debuffed cards (C7, C2)
 - Keep base rank and suit, still count for hand detection and "contains" (hands.md).

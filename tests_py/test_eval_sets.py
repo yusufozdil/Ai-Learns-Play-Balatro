@@ -99,5 +99,7 @@ def test_memory_modes_and_normal_is_default():
 
 def test_holdout_prefix_matches_named_seed():
     h = ev.run_games("r", ev.random_actor, 8, seed=ev.HOLDOUT_SEED, max_episode_steps=200)
-    h2 = ev.run_games("r", ev.random_actor, 4, seed=ev.EVAL_SETS["holdout"][0], max_episode_steps=200)
+    h2 = ev.run_games(
+        "r", ev.random_actor, 4, seed=ev.EVAL_SETS["holdout"][0], max_episode_steps=200
+    )
     assert h2.antes == h.antes[:4]

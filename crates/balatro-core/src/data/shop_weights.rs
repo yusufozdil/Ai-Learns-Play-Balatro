@@ -1,5 +1,5 @@
 //! Shop type weights, rarity odds, edition odds, booster-pack tables and card-generation odds.
-//! Sources: docs/mechanics/shop.md §2-§5, packs.md §1-§4, notes.md §4.1d. Numbers marked
+//! Sources: docs/mechanics/shop.md §2-§5, packs.md §1-§4. Numbers marked
 //! UNVERIFIED there are recalled from the original game and kept here in one place.
 
 use crate::card::Card;
@@ -24,7 +24,7 @@ pub const WEIGHT_PLANET: f64 = 4.0;
 pub const WEIGHT_PLAYING_CARD: f64 = 4.0;
 /// Spectral weight (Ghost Deck only; no implemented deck uses it yet).
 pub const WEIGHT_SPECTRAL_GHOST_DECK: f64 = 2.0;
-/// Tarot/Planet weight with the Merchant voucher (shop.md §2; notes.md §4.1d).
+/// Tarot/Planet weight with the Merchant voucher (shop.md §2).
 pub const WEIGHT_MERCHANT: f64 = 9.6;
 /// Tarot/Planet weight with the Tycoon voucher.
 pub const WEIGHT_TYCOON: f64 = 32.0;
@@ -39,7 +39,7 @@ pub const RARITY_WEIGHTS: [(Rarity, f64); 3] = [
     (Rarity::Rare, 5.0),
 ];
 
-/// Joker edition thresholds (shop.md §4, notes.md §4.1d): one uniform roll `r`; the band that
+/// Joker edition thresholds (shop.md §4): one uniform roll `r`; the band that
 /// contains `1 - r` wins. Negative `0.3%` (never scaled), then Polychrome up to `0.6% * m`,
 /// Holographic up to `2% * m`, Foil up to `4% * m`, where `m` = Hone 2 / Glow Up 4.
 pub const JOKER_NEGATIVE_BAND: f64 = 0.003;
@@ -67,7 +67,7 @@ pub const STANDARD_SEAL_CHANCE: f64 = 0.2;
 /// Illusion: enhancement chance of a shop playing card (shop.md §5).
 pub const ILLUSION_ENHANCEMENT_CHANCE: f64 = 0.4;
 /// Illusion: seal chance of a shop playing card. The real game (v1.0.1o) never puts seals on shop
-/// cards (wiki: Illusion, a known bug); we mirror it (notes.md §3, game-bug policy).
+/// cards (wiki: Illusion, a known bug); we mirror it (game-bug policy).
 pub const ILLUSION_SEAL_CHANCE: f64 = 0.0;
 /// Enhancements a random playing card can get: all 8 (UNVERIFIED that Stone is included).
 pub const CARD_ENHANCEMENTS: [Enhancement; 8] = [

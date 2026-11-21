@@ -2,7 +2,7 @@
 //!
 //! Phase 4.0 prototypes: The Hook, The Wall, The Psychic, The Plant, The Needle, The Flint,
 //! The Mark, Verdant Leaf. Phase 4C added the other 20 (all 28 are defined).
-//! Guide: `docs/design/consumables_bosses.md`; rules: docs/mechanics/bosses.md, notes.md §4.1c.
+//! Guide: `docs/design/consumables_bosses.md`; rules: docs/mechanics/bosses.md
 
 use crate::blinds::{MULT_NEEDLE, MULT_VIOLET_VESSEL, MULT_WALL};
 use crate::boss::{BossCtx, BossDef, BossHooks, DrawCtx, DrawKind, PlayCtx};
@@ -208,7 +208,7 @@ pub static DEFS: &[BossDef] = &[
 
 // --- The Hook: https://balatrowiki.org/w/The_Hook ---------------------------------------------
 // Before the hand scores, 2 random held cards are discarded (fewer if fewer are held). They fire
-// a forced discard event (Green Joker/Ramen react; Burnt/Trading Card do not, notes.md §4.2).
+// a forced discard event (Green Joker/Ramen react; Burnt/Trading Card do not).
 const HOOK_DISCARDS: usize = 2;
 
 fn hook_before_play(ctx: &mut PlayCtx<'_>) {
@@ -268,7 +268,7 @@ fn verdant_joker_sold(ctx: &mut BossCtx<'_>) {
 
 // --- The Ox: https://balatrowiki.org/w/The_Ox -------------------------------------------------
 // The most played hand of the run is fixed when the ante starts (`boss().hand`); playing it sets
-// money to $0. Ties go to the highest tier (notes.md §4.1c); with nothing played yet (only
+// money to $0. Ties go to the highest tier; with nothing played yet (only
 // possible in tests, the Ox appears from ante 6) the fallback is High Card. The boss triggers
 // (Matador) whenever the hand matches, even at $0.
 
@@ -416,7 +416,7 @@ fn pillar_debuffs(card: &Card, _: &RuleFlags) -> bool {
 }
 
 // --- The Tooth: https://balatrowiki.org/w/The_Tooth ------------------------------------------
-// $1 per played card, taken before scoring; money may go negative (notes.md §4.1c).
+// $1 per played card, taken before scoring; money may go negative.
 const TOOTH_PER_CARD: i32 = 1;
 
 fn tooth_before_play(ctx: &mut PlayCtx<'_>) {

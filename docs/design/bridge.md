@@ -282,7 +282,7 @@ removes tag jokers too in both. Real prices equal the engine's (2034 checked sho
 
 ## 10. What cannot be mapped, and known gaps
 
-* **Draw order / RNG**: not mirrored (non-goal, `prd.md` section 1); the policy never sees them.
+* **Draw order / RNG**: not mirrored (a non-goal); the policy never sees them.
 * **Orbital tag hand, held tags**: only through the patch (`orbital_choices`, `tags`).
 * **Pack origin** (`Shop` vs `Tag`) is inferred from the previous action; it only matters for
   skipping rules.
@@ -378,10 +378,7 @@ sweep is slow (about 2 jokers per minute) and was stopped there for time; the re
 After the ante-8 win the game shows the win screen (paused game, "Endless" button =
 `G.FUNCS.exit_overlay_menu`), BalatroBot has no call for it, so the patch adds `continue_endless`.
 
-**Root cause of the old crashes** (`functions/common_events.lua:1148: attempt to index field
-'round_eval' (a nil value)`, seed `BRG027` 4 of 4 times with `runs/st2_v2_s1/latest.pt`, logs
-`runs/bridge/endless2..5`): line 1148 of the lovely-patched dump is
-`G.round_eval:add_child(full_row, ...)`, an event of `add_round_eval_row`. The cash-out rows are
+**Root cause of the old crashes** (the game crashed with "attempt to index field 'round_eval' (a nil value)" while adding a cash-out row, seed `BRG027` 4 of 4 times): the cash-out rows are
 queued by `evaluate_round` and built by events over several seconds; `G.FUNCS.cash_out` sets
 `G.round_eval = nil` (`button_callbacks.lua`, in an event), so a `cash_out` sent while rows are
 still queued kills the game. Stock `play` makes sure the rows are done before it returns (it waits

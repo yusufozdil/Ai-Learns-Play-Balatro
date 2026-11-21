@@ -1,5 +1,5 @@
 //! Pure money math: interest, hands money, sell value, shop prices, reroll cost, cash-out.
-//! Sources: docs/mechanics/economy.md, blinds.md §4/§6/§8, shop.md §6-§8; notes.md §4.1c/§4.1d.
+//! Sources: docs/mechanics/economy.md, blinds.md §4/§6/§8, shop.md §6-§8
 
 use crate::blinds::{BlindKind, blind_reward};
 use crate::data::prices::{
@@ -7,7 +7,7 @@ use crate::data::prices::{
     INTEREST_STEP, LIQUIDATION_PERCENT, REROLL_INCREMENT,
 };
 
-/// Shop discount from vouchers (shop.md §6). Applies to cards, packs and vouchers (notes.md §4.1d).
+/// Shop discount from vouchers (shop.md §6). Applies to cards, packs and vouchers.
 #[derive(
     Debug,
     Clone,
@@ -65,7 +65,7 @@ pub fn discards_reward(discards_left: i32) -> i32 {
 }
 
 /// Sell value: `max(1, floor(cost_paid / 2)) + extra` (Egg/Gift Card bonus). `cost_paid` is the
-/// discounted price at purchase (notes.md §4.1d).
+/// discounted price at purchase.
 pub fn sell_value(cost_paid: i32, extra: i32) -> i32 {
     (cost_paid / 2).max(1).saturating_add(extra)
 }
@@ -137,7 +137,7 @@ pub struct CashOut {
     pub final_money: i32,
 }
 
-/// Compute the cash-out in the order fixed by notes.md §4.1c: gold cards held -> interest on that
+/// Compute the cash-out in the project's fixed order: gold cards held -> interest on that
 /// balance (money + gold) -> blind reward -> hands money -> joker payouts. Interest therefore
 /// ignores the blind reward, hands money and joker cash-out money.
 pub fn cash_out(input: &CashOutInput) -> CashOut {

@@ -1,5 +1,5 @@
 //! Structured action space for the RL env (Phase 8A): an action is `[kind, arg0, arg1, cards]`
-//! (notes.md §3, format B) and the legal choices are described level by level instead of as a
+//! (format B) and the legal choices are described level by level instead of as a
 //! flat list, so the model can pick the kind, then the argument, then the cards one at a time.
 //!
 //! ```text

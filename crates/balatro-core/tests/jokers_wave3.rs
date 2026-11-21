@@ -1,6 +1,6 @@
 //! Phase 3 `wave3` economy jokers (content/jokers/wave3.rs): trigger / non-trigger / state /
 //! Blueprint for each, plus Game-level checks of the cash-out path (joker payouts are not
-//! interest base, notes.md §4.1c). Every expected number is derived in a comment.
+//! interest base). Every expected number is derived in a comment.
 
 use balatro_core::actions::Action;
 use balatro_core::card::Card;

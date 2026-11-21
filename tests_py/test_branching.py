@@ -54,7 +54,9 @@ def trajectory(g, actions):
 
 
 def same_traj(a, b):
-    return len(a) == len(b) and all(x[0] == y[0] and same_view(x[1], y[1]) for x, y in zip(a, b))
+    return len(a) == len(b) and all(
+        x[0] == y[0] and same_view(x[1], y[1]) for x, y in zip(a, b, strict=False)
+    )
 
 
 # ---------------------------------------------------------------- Game.clone / export / reseed
@@ -183,8 +185,8 @@ def test_partial_reseed_streams():
     h0 = hand_obs(plain)
     hs = hand_obs(shop_only)
     hd = hand_obs(deck_only)
-    assert all(np.array_equal(p, q) for p, q in zip(h0, hs))
-    assert not all(np.array_equal(p, q) for p, q in zip(h0, hd))
+    assert all(np.array_equal(p, q) for p, q in zip(h0, hs, strict=False))
+    assert not all(np.array_equal(p, q) for p, q in zip(h0, hd, strict=False))
     # Everything but the deck stream identical to the plain clone's state right after reseed.
     a, b = plain.clone(), plain.clone()
     b.reseed(3, streams=["misc"])
@@ -302,7 +304,7 @@ def test_import_does_not_disturb_other_envs_or_future_seeds():
         return log
 
     a, b = run(False), run(True)
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=False):
         assert np.array_equal(x[0], y[0]) and x[1:] == y[1:]
 
 
@@ -325,8 +327,8 @@ def test_import_across_thread_counts_is_identical():
         return out
 
     a, b = run(1), run(5)
-    for x, y in zip(a, b):
-        assert all(np.array_equal(p, q) for p, q in zip(x, y))
+    for x, y in zip(a, b, strict=False):
+        assert all(np.array_equal(p, q) for p, q in zip(x, y, strict=False))
 
 
 def test_import_reseed_diverges_but_view_matches():
@@ -417,7 +419,12 @@ def test_default_unchanged_without_branching_calls():
 
 def test_finished_ex_reports_deck_and_stake():
     env = BalatroVecEnv(
-        6, seed=1, num_threads=2, max_episode_steps=2, decks=["red", "plasma"], stakes=["white", "gold"]
+        6,
+        seed=1,
+        num_threads=2,
+        max_episode_steps=2,
+        decks=["red", "plasma"],
+        stakes=["white", "gold"],
     )
     env.reset()
     drive(env, 30)

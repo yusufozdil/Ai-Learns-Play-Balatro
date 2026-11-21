@@ -1,15 +1,14 @@
-# Consumable and boss contract (Phase 4.0): guide for content authors
+# Consumable and boss contract: guide for content authors
 
 This is the contract the 52 consumables (12 Planets, 22 Tarots, 18 Spectrals) and the 28 boss
-blinds are written against. **Phase 4A/4B/4C agents: follow this document exactly and write
-only your own files** (table in §1). If something cannot be expressed cleanly, do not hack around
-it: describe the gap in your report and the orchestrator extends the contract.
+blinds are written against. **Follow this document exactly.** If something cannot be expressed
+cleanly, do not hack around it: extend the contract (and this document) instead.
 
 Code: `src/consumable.rs` (instance, def, `UseCheck`, `UseCtx`, pools), `src/boss.rs` (def,
 hooks, `BossState`, contexts, selection, game glue), ids `src/content/ids.rs`, registry
 `src/content/mod.rs`. Working examples: `content/{planets,tarots,spectrals,bosses}.rs`.
 Contract tests: `tests/consumables.rs`, `tests/boss_contract.rs`. Rules:
-`docs/mechanics/{consumables,bosses,cards}.md`, decisions `notes.md` §4.1b/§4.1c/§4.2.
+`docs/mechanics/{consumables,bosses,cards}.md`.
 Joker hooks that react to consumables/bosses: `docs/design/hooks.md`.
 
 ---
@@ -175,7 +174,7 @@ and `check_invariants()`. Set up positions with `g.state_mut()` (hand cards, mon
 1. Do not check slot room for creations (except "up to N" counts); do not check Eternal.
 2. Untargeted cards that act on the hand need `needs_hand: true` (Sigil, Ouija, Familiar, Grim,
    Incantation, Immolate). Targeted cards need `min_targets >= 1`.
-3. Stone cards have no rank/suit: Strength, Sigil, Ouija skip them (notes.md §4.1b).
+3. Stone cards have no rank/suit: Strength, Sigil, Ouija skip them.
 4. Death: **left** (`target_pos(0)`) becomes the **right** (`target_pos(1)`).
 5. Random distinct hand cards (Immolate, Familiar's victim): pick without replacement from the
    positions; queue `destroy_card` for each. Never destroy by mutating the hand.
@@ -238,7 +237,7 @@ on disable), `shuffle_jokers()`, `rng_range`, `chance` (`RngKey::Bosses`), `disa
 game disables the boss after the hook).
 
 **`DrawCtx`**: `kind()`, `is_face(card)` (Pareidolia-aware, ignores debuff), `chance(num, den)`
-(Oops! All 6s applies, notes.md §4.1c).
+(Oops! All 6s applies).
 
 **`PlayCtx`** (works on references so the preview can share it): `played()`, `hand_type()`,
 `held()`, `money()`, `plays_round(ht)` (includes this hand), `level(ht)`, `boss()`;
@@ -301,14 +300,14 @@ bosses are covered automatically), and `check_invariants()`. The smoke test
 2. `before_play` must be deterministic given its inputs (it runs in previews on copies): use only
    `PlayCtx` (rolls through `discard_random_held`). Adding new randomness there → ask.
 3. Suit bosses: `card.has_suit(suit, rules)` on the passed (un-debuffed) card makes Wild cards
-   debuffed and respects Smeared (notes.md §4.1c).
-4. Eye/Mouth compare `hand_type()`, not `contains` (notes.md §4.1c). Counts include this hand:
+   debuffed and respects Smeared.
+4. Eye/Mouth compare `hand_type()`, not `contains`. Counts include this hand:
    The Eye rejects when `plays_round(ht) > 1`. `hand_plays_round` also counts rejected hands, so
    Eye and Mouth treat a rejected play as played: after a rejected hand of type T, T is still
    forbidden for the Eye. The Mouth must not use `plays_round`: it writes the first **valid**
    hand type to `boss_state.hand` in `after_play` (reset at blind start) and rejects any other
    type while `boss_state.hand` is set.
-5. The Ox: tie → highest tier (iterate `HandType::ALL` in reverse, notes.md §4.1c).
+5. The Ox: tie → highest tier (iterate `HandType::ALL` in reverse).
 6. The Serpent: return 3 for `AfterPlay`/`AfterDiscard`, `default` otherwise; the game caps the
    hand at 16 cards.
 7. Water/Needle: record what you take in `boss_mut().removed` and give it back in `on_disable`.

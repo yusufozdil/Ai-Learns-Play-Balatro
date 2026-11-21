@@ -41,3 +41,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded HTML/JS page and stdlib-only daemons: long lines / plain file handles are intentional.
+"scripts/dashboard.py" = ["E501", "SIM105", "SIM115"]
+"scripts/gpu_queue.py" = ["SIM105", "SIM115"]

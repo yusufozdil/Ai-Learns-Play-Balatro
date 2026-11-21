@@ -108,7 +108,7 @@ pub struct GameState {
     /// Chips required to beat `blind`.
     pub target: f64,
     /// Tags offered for skipping this ante's Small and Big blind (rolled at ante start on
-    /// `RngKey::Tags`, notes.md §4.1c).
+    /// `RngKey::Tags`).
     pub blind_tags: [TagId; 2],
     /// Orbital hand picked for each offered tag (`Some` only when that tag is Orbital).
     pub blind_tag_hands: [Option<HandType>; 2],
@@ -315,7 +315,7 @@ impl GameState {
         self.refresh_target();
     }
 
-    /// Offer a tag for the Small and the Big blind (notes.md §4.1d): uniformly among the
+    /// Offer a tag for the Small and the Big blind: uniformly among the
     /// defined tags whose `min_ante <= ante` (all tags if none is defined), on `RngKey::Tags`.
     /// An Orbital tag also picks its hand now (an open hand, or a secret one already played).
     fn roll_blind_tags(&mut self) {
@@ -359,7 +359,7 @@ impl GameState {
 
     /// Boss blind multiplier: the boss's `mult` (Wall x4, Violet Vessel x6, Needle x1, else x2).
     /// A disabled boss (Chicot, Luchador) uses the standard x2, except The Needle
-    /// (`keep_mult_when_disabled`, notes.md §4.2).
+    /// (`keep_mult_when_disabled`).
     pub fn boss_mult(&self) -> f64 {
         match self.boss.and_then(try_boss_def) {
             Some(d) if !self.boss_disabled || d.keep_mult_when_disabled => d.mult,
@@ -651,7 +651,7 @@ impl GameState {
             ));
         }
         // Money: purchases never go below the debt floor (`can_afford`), but The Tooth may push
-        // it lower (notes.md §4.1c), so there is no money invariant.
+        // it lower, so there is no money invariant.
         if self.consumable_use_counts.len() != ConsumableId::COUNT {
             return Err("consumable use counts have the wrong length".into());
         }
@@ -727,7 +727,7 @@ fn clamp_delta(base: u32, delta: i32, lo: u32, hi: u32) -> u32 {
     v.clamp(i64::from(lo), i64::from(hi)) as u32
 }
 
-/// Phase transitions allowed by the state machine (prd.md §3.1). `from == to` is allowed for
+/// Phase transitions allowed by the state machine. `from == to` is allowed for
 /// actions that stay in their phase (Play/Discard/Sell/Skip). PackOpen edges are the market packs and pack tags.
 pub fn transition_allowed(from: Phase, to: Phase) -> bool {
     use Phase::*;

@@ -366,7 +366,7 @@ def test_repetition_guard_breaks_move_joker_loops():
     assert a[0, 0] == 8 and b[0, 0] == 8
 
 
-# --------------------------------------------------------------------------- speed options (G4)
+# --------------------------------------------------------------------------- speed options
 
 
 def test_bf16_update_runs_and_recompute_restores_unit_ratio(tmp_path):

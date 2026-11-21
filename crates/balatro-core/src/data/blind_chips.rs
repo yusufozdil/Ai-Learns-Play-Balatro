@@ -39,7 +39,7 @@ pub const ENDLESS_A: f64 = 1.6;
 pub const ENDLESS_B: f64 = 0.75;
 /// See [`ENDLESS_A8`].
 pub const ENDLESS_C: f64 = 0.2;
-/// Significant digits kept in endless base (blinds.md §2/§3, notes.md §4.1c: truncate).
+/// Significant digits kept in endless base (blinds.md §2/§3: truncate).
 pub const ENDLESS_SIG_DIGITS: u32 = 2;
 
 /// Small blind multiplier (blinds.md §3).

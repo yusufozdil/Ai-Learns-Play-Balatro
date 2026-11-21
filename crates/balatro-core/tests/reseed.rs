@@ -43,7 +43,11 @@ fn reseed_keeps_what_is_visible_and_changes_what_is_hidden() {
             if step % 5 == 0 {
                 let mut c = g.clone();
                 c.reseed_hidden(seed * 1000 + step, None);
-                assert_eq!(visible(g.state()), visible(c.state()), "seed {seed} step {step}");
+                assert_eq!(
+                    visible(g.state()),
+                    visible(c.state()),
+                    "seed {seed} step {step}"
+                );
                 c.state().check_invariants().unwrap();
                 // A reseeded game is a normal game: it can be played on.
                 let mut p = c.clone();
@@ -82,7 +86,10 @@ fn reseed_keeps_what_is_visible_and_changes_what_is_hidden() {
         }
     }
     assert!(checked > 20, "{checked}");
-    assert!(changed_pile > 10, "the draw order should change: {changed_pile}");
+    assert!(
+        changed_pile > 10,
+        "the draw order should change: {changed_pile}"
+    );
 }
 
 #[test]
@@ -97,7 +104,10 @@ fn all_streams_equal_listing_every_stream_and_matches_new() {
     let mut b = g.clone();
     a.reseed_hidden(9, None);
     b.reseed_hidden(9, Some(&RngKey::ALL));
-    assert_eq!(state_to_json(a.state(), false), state_to_json(b.state(), false));
+    assert_eq!(
+        state_to_json(a.state(), false),
+        state_to_json(b.state(), false)
+    );
     // Every stream is the one `GameRng::new(9)` has, advanced only by the pile shuffle (Deck).
     let fresh = balatro_core::rng::GameRng::new(9);
     for k in RngKey::ALL {
@@ -160,5 +170,8 @@ fn unreseeded_clone_is_the_same_future() {
         let (x, y) = (g.step(a).unwrap(), c.step(a).unwrap());
         assert_eq!(format!("{x:?}"), format!("{y:?}"));
     }
-    assert_eq!(state_to_json(g.state(), false), state_to_json(c.state(), false));
+    assert_eq!(
+        state_to_json(g.state(), false),
+        state_to_json(c.state(), false)
+    );
 }

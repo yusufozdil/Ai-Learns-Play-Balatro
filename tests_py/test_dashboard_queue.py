@@ -1,8 +1,11 @@
 """Log parsing (dashboard) and queue bookkeeping (gpu_queue); stdlib only."""
+
 import importlib.util
 import json
 import math
 from pathlib import Path
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
@@ -19,18 +22,29 @@ gq = _load("gpu_queue")
 
 
 def _upd(step, wall, **kw):
-    return {"type": "update", "update": step // 100, "global_step": step, "wall_seconds": wall, **kw}
+    return {
+        "type": "update",
+        "update": step // 100,
+        "global_step": step,
+        "wall_seconds": wall,
+        **kw,
+    }
 
 
 def test_logcache_incremental_partial_and_bad_lines(tmp_path):
     log = tmp_path / "log.jsonl"
     cache = dash.LogCache()
-    log.write_text(json.dumps(_upd(100, 1.0, ep_win=0.1)) + "\nnot json\n" + json.dumps(_upd(200, 2.0))[:20])
+    log.write_text(
+        json.dumps(_upd(100, 1.0, ep_win=0.1)) + "\nnot json\n" + json.dumps(_upd(200, 2.0))[:20]
+    )
     st = cache.get(log)
     assert [u["global_step"] for u in st["updates"]] == [100]  # partial last line ignored
     with open(log, "a") as f:
         f.write(json.dumps(_upd(200, 2.0))[20:] + "\n")
-        f.write(json.dumps({"type": "eval", "global_step": 200, "det_win_rate": 0.4, "new_best": True}) + "\n")
+        f.write(
+            json.dumps({"type": "eval", "global_step": 200, "det_win_rate": 0.4, "new_best": True})
+            + "\n"
+        )
     st = cache.get(log)
     assert [u["global_step"] for u in st["updates"]] == [100, 200]
     assert st["evals"][0]["det_win_rate"] == 0.4
@@ -51,10 +65,20 @@ def test_eta_and_downsample():
 
 
 def test_summarize_eval_formats():
-    one = dash.App.summarize_eval("x", {"games": 100, "win_rate": 0.5, "mean_ante": 6.0, "truncated": 0.0})
+    one = dash.App.summarize_eval(
+        "x", {"games": 100, "win_rate": 0.5, "mean_ante": 6.0, "truncated": 0.0}
+    )
     assert math.isclose(one[0]["se_pct"], 5.0) and one[0]["win_pct"] == 50.0
-    multi = dash.App.summarize_eval("y", {"det": {"games": 400, "win_rate": 0.25, "name": "d"}, "sample": {"games": 0},
-                                          "checkpoint": "c.pt", "deck": "red", "stake": "gold"})
+    multi = dash.App.summarize_eval(
+        "y",
+        {
+            "det": {"games": 400, "win_rate": 0.25, "name": "d"},
+            "sample": {"games": 0},
+            "checkpoint": "c.pt",
+            "deck": "red",
+            "stake": "gold",
+        },
+    )
     assert {r["entry"] for r in multi} == {"det", "sample"}
     assert multi[0]["set"] == "red/gold"
     assert dash.App.summarize_eval("z", [1, 2]) == []
@@ -72,7 +96,9 @@ def test_app_state_robust_and_confined(tmp_path):
     app = dash.App(tmp_path)
     assert (runs / "dashboard" / "roadmap.json").exists()
     st = app.state()
-    assert st["default_run"] in ("r1", "badcfg") and st["now"] is not None  # fresh log counts as active
+    assert (
+        st["default_run"] in ("r1", "badcfg") and st["now"] is not None
+    )  # fresh log counts as active
     assert app.run_summary("r1")["progress"] == 0.5
     assert app.results() == []
     assert app.run_dir("../etc") is None and app.run_dir("r1/../..") is None
@@ -85,11 +111,8 @@ def test_queue_add_numbering_and_run(tmp_path):
     p1 = q.add("ok", "echo hi", str(tmp_path), branch="b", commit="abc")
     p2 = q.add("bad", "exit 3", str(tmp_path), branch="b", commit="abc", kind="bench")
     assert p1.name == "001_ok.json" and p2.name == "002_bad.json"
-    try:
+    with pytest.raises(ValueError):
         q.add("bad name", "x", str(tmp_path), branch="b", commit="c")
-        assert False
-    except ValueError:
-        pass
     r = gq.Runner(q)
     for p in sorted((q.qdir / "pending").glob("*.json")):
         r.run_job(p)

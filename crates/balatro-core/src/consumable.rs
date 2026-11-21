@@ -35,7 +35,7 @@ pub enum ConsumableKind {
 
 impl ConsumableKind {
     /// Base shop price (consumables.md: Tarot $3, Planet $3, Spectral $4; The Soul and Black
-    /// Hole use the Spectral price, notes.md §4.1b).
+    /// Hole use the Spectral price).
     pub const fn base_cost(self) -> i32 {
         match self {
             ConsumableKind::Tarot => TAROT,
@@ -404,7 +404,7 @@ impl<'a> UseCtx<'a> {
     }
 
     /// The card at `dst` becomes a copy of the card at `src`: rank, suit, enhancement, edition,
-    /// seal and `perma_bonus` (Death, notes.md §4.1b). `uid` and the round flags of `dst`
+    /// seal and `perma_bonus` (Death). `uid` and the round flags of `dst`
     /// (debuff, face-down, played-this-ante) are kept.
     pub fn copy_card(&mut self, dst: usize, src: usize) {
         let Some(&from) = self.state.deck.hand.get(src) else {

@@ -1,4 +1,4 @@
-//! `Game`: the phase state machine over a [`GameState`] (prd.md §3.1).
+//! `Game`: the phase state machine over a [`GameState`].
 //!
 //! ```text
 //! BlindSelect --SelectBlind--> Play --(score >= target)--> [round end + cash out] --> Shop
@@ -949,7 +949,7 @@ impl Game {
         let s = &mut self.state;
         let last = s.last_hand.unwrap_or(HandType::HighCard);
         // 1. Cards held at round end: Gold card money, Blue Seal planets (Red Seal / Mime
-        //    retrigger them). Paid now, so it counts for interest (notes.md §4.1c).
+        //    retrigger them). Paid now, so it counts for interest.
         let view = s.run_view_for_hooks(&s.consumables);
         let held_money =
             self.scorer

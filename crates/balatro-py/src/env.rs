@@ -538,17 +538,19 @@ impl Env {
                 .hall_by_stake
                 .get(config.stake.index())
                 .filter(|v| !v.is_empty());
-            if rc.hall_prob > 0.0 && u >= rc.scenario_prob && u < rc.scenario_prob + rc.hall_prob {
-                if let Some(ids) = same_stake {
-                    let pick = ids[(splitmix64(h) % ids.len() as u64) as usize] as usize;
-                    let mut g = Game::from_state(rc.hall[pick].clone());
-                    g.reseed_hidden(splitmix64(seed ^ HALL_SALT), None);
-                    self.game = g;
-                    self.origin = Origin::Hall;
-                    self.ep_start_joker = None;
-                    self.refresh();
-                    return;
-                }
+            if rc.hall_prob > 0.0
+                && u >= rc.scenario_prob
+                && u < rc.scenario_prob + rc.hall_prob
+                && let Some(ids) = same_stake
+            {
+                let pick = ids[(splitmix64(h) % ids.len() as u64) as usize] as usize;
+                let mut g = Game::from_state(rc.hall[pick].clone());
+                g.reseed_hidden(splitmix64(seed ^ HALL_SALT), None);
+                self.game = g;
+                self.origin = Origin::Hall;
+                self.ep_start_joker = None;
+                self.refresh();
+                return;
             }
         }
         self.game.reset_with_seed(seed, config);

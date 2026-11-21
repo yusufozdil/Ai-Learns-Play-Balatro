@@ -1,4 +1,4 @@
-"""G1 build-power meter binding: deterministic in (state, salt), does not touch the game."""
+"""Build-power meter binding: deterministic in (state, salt), does not touch the game."""
 
 from __future__ import annotations
 
@@ -45,4 +45,7 @@ def test_power_follows_the_state_not_the_game_rng() -> None:
     # The ante's actual boss matters (v2) -- the target differs from the plain boss (v1) at
     # least for Wall / Violet Vessel / Needle; here just check both run and are finite.
     for flag in (False, True):
-        assert _engine.power(g1, 4, boss_aware=flag)["phi"] == _engine.power(g2, 4, boss_aware=flag)["phi"]
+        assert (
+            _engine.power(g1, 4, boss_aware=flag)["phi"]
+            == _engine.power(g2, 4, boss_aware=flag)["phi"]
+        )

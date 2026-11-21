@@ -1,1 +1,1 @@
-"""train (see prd.md)."""
+"""Training code: PPO, behaviour cloning, curriculum, evaluation (see docs/design/training.md)."""

@@ -577,7 +577,7 @@ fn observatory_multiplies_per_matching_planet() {
 
 #[test]
 fn plasma_deck_floors_the_balanced_value() {
-    // dump/back.lua:157-161: both become floor((chips + mult) / 2). 16 chips x 1 mult ->
+    // Plasma Deck: both become floor((chips + mult) / 2). 16 chips x 1 mult ->
     // floor(8.5) = 8 each -> 64 (an unfloored 8.5 x 8.5 would give 72).
     let played = vec![c(1, Ace, Spades)];
     let eval = ev(HandType::HighCard, 0b1, &[]);
@@ -706,7 +706,7 @@ fn same_seed_same_result() {
     assert_eq!(a.trace, b.trace);
 }
 
-// ----- real-game float parity (SMODS `m + m * (x - 1)`, bridge games 15) -----
+// ----- real-game float parity (`m + m * (x - 1)`, bridge games 15) -----
 
 use balatro_core::content::jokers::JokerId as J;
 
@@ -719,7 +719,7 @@ fn ramen_after(n: u32) -> f64 {
     v
 }
 
-/// xmult is applied as `mult += mult * (x - 1)` (smods game_object.lua mult `calc_effect`), not
+/// xmult is applied as `mult += mult * (x - 1)`, not
 /// `mult *= x`: 20 x 1.93 as 20 + 20 * 0.93 is 38.599999999999994, and 20 chips x that is
 /// 771.99.. (floor 771) where the naive product is exactly 772.
 #[test]

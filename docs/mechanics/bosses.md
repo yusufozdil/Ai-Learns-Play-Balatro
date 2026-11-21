@@ -81,7 +81,7 @@ Ante 1 pool (min ante Any): The Hook, The Club, The Psychic, The Goad, The Windo
 - Verdant Leaf (S4): all cards debuffed until a joker is sold; selling any joker ends it. Not required to sell.
 - Crimson Heart (S6): picks one random joker each hand, never the same as previous unless it is the only joker; previous joker restored when the next hand is played; perishable-debuffed jokers ineligible; the debuff stays through the winning hand until the next shop, so end-of-round jokers can be disabled. Swap point relative to scoring is `UNVERIFIED`; recommended: choose the disabled joker before scoring of each hand begins (first hand included).
 - Cerulean Bell (S5): a random card in hand is forced to be selected; if no force-selected card remains after a play or discard, pick a new random one. Discarding it is allowed. Initial pick time `UNVERIFIED`; recommended: after the opening draw. Action masks must always include the forced card.
-- The Flint: halve base chips and base mult, round up (notes.md §4.1).
+- The Flint: halve base chips and base mult, round up (project decision).
 - The Wall/Violet Vessel: requirement multiplier only (x4, x6).
 
 ## Selection rules

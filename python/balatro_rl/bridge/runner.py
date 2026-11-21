@@ -31,7 +31,14 @@ from . import actions as A
 from . import parity
 from . import tables as T
 from .client import ApiError, BridgeError, BridgeTimeout, Client
-from .state import TRANSIENT_STATES, TranslateError, Translation, build_game, translate
+from .state import (
+    TRANSIENT_STATES,
+    TranslateError,
+    Translation,
+    build_game,
+    strip_game_text,
+    translate,
+)
 
 MAX_REJECTS_PER_STATE = 12
 MAX_REJECTS_PER_GAME = 300
@@ -197,7 +204,7 @@ class Runner:
         import gzip
 
         with gzip.open(self.fixture_dir / f"{kind.lower()}_{n}.json.gz", "wt") as f:
-            json.dump(gs, f)
+            json.dump(strip_game_text(gs), f)
 
     def _maybe_dump_state(self, gs: dict, res: GameResult, tag: str = "") -> None:
         """``--dump-states``: every gamestate the policy decides on, for offline audits."""
@@ -208,7 +215,7 @@ class Runner:
         self.state_dump_dir.mkdir(parents=True, exist_ok=True)
         name = f"g{res.game}_d{res.decisions + 1:04d}_{tag or gs['state'].lower()}.json.gz"
         with gzip.open(self.state_dump_dir / name, "wt") as f:
-            json.dump(gs, f)
+            json.dump(strip_game_text(gs), f)
 
     # -- state handling ----------------------------------------------------------------
 
@@ -427,7 +434,7 @@ class Runner:
         d = self.log_path.with_suffix(".mismatch")
         d.mkdir(exist_ok=True)
         with gzip.open(d / f"g{res.game}_s{res.decisions}.json.gz", "wt") as f:
-            json.dump({"mask": mask, "gamestate": before}, f)
+            json.dump({"mask": mask, "gamestate": strip_game_text(before)}, f)
 
     def _price_check(self, game, gs: dict, res: GameResult) -> None:
         """Engine prices (from the observation) vs the prices BalatroBot reports."""

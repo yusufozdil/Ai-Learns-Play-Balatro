@@ -496,7 +496,7 @@ The `teacher_actions` heuristic uses `fair_info = true` (it decides on `Game::fa
 |---|---|
 | 1 | Phase 8B: 203 `global_f`, 8 `global_i` columns. |
 | 2 | Phase 10G: `global_f` +11 scalars (cols 203..214, section 3.2), `global_i` +`deck`, `stake` (cols 8, 9). Every older column keeps its index. The simulator, masks, actions and reward are unchanged. |
-| 3 | Observation-gap fix (`docs/design/error_hall.md` §1): `global_f` +6 scalars (cols 214..220: `next_hands`, `next_discards`, `tarots_used`, `blinds_skipped`, `unique_planets_used`, `hands_played_run`), `joker_f` +4 contribution columns (cols 13..17). Every older column keeps its index and value. The simulator, masks, actions and reward are unchanged. |
+| 3 | Observation-gap fix (the policy could not see the hands/discards of the next round, the run counters, or what each joker contributes): `global_f` +6 scalars (cols 214..220: `next_hands`, `next_discards`, `tarots_used`, `blinds_skipped`, `unique_planets_used`, `hands_played_run`), `joker_f` +4 contribution columns (cols 13..17). Every older column keeps its index and value. The simulator, masks, actions and reward are unchanged. |
 
 `balatro_rl.model.load_checkpoint` accepts versions 1 and 2 and migrates them exactly
 (`balatro_rl/model/migrate.py`; v1 goes v1 -> v2 -> v3); any other version is refused. The new

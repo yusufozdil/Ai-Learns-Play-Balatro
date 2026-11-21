@@ -61,5 +61,5 @@ pub const REROLL_GLUT_BASE: i32 = 1;
 /// Cost increase per reroll within a shop.
 pub const REROLL_INCREMENT: i32 = 1;
 
-/// Starting money, Red Deck (notes.md §4.1c).
+/// Starting money, Red Deck.
 pub const STARTING_MONEY: i32 = 4;

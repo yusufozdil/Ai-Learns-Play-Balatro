@@ -271,9 +271,8 @@ fn ancient_scored(j: &mut JokerInstance, ctx: &mut ScoreCtx<'_>, card: &Card) {
 // played cards do not). When a discard would bring it to x1.0 or below it is eaten instead.
 // Sell value never changes.
 //
-// Bit-exact with the real game, NO rounding: card.lua:3109-3128 (`context.discard`, per card)
-// tests `x_mult - extra <= 1` and otherwise SMODS.scale_card subtracts `extra` in plain double
-// arithmetic (`initial + -1 * scalar`, smods/src/utils.lua:2840 `additive_scaling`). Repeated
+// Bit-exact with the real game, NO rounding: per discarded card the game tests
+// `x_mult - extra <= 1` and otherwise subtracts `extra` in plain double arithmetic. Repeated
 // `2.0 - 0.01` therefore drifts (99 cards leave 1.0099999999999991, not 1.01) and the
 // destroy test uses that drifted value; the 100th card still destroys it.
 const RAMEN_START: f64 = 2.0;

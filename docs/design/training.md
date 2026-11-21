@@ -65,7 +65,7 @@ section 5 shared the GPU with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 
 `--curriculum "play@5e6,play+pack+blind@10e6,all"`: stages separated by commas, each `phases[@global_env_steps]`
 (the last without a limit). Phases `blind play shop pack`; aliases `s1` = play, `s2` = play+pack+blind, `s3` = `s4` =
-all (the PRD's stage 3 adds SHOP; stage 4 "end to end" is the same routing, typically with KL/warm-up off). Per env step
+all (a later stage adds SHOP; stage 4 "end to end" is the same routing, typically with KL/warm-up off). Per env step
 the phase (`global_i[:, 0]`) selects who acts: the model (`act`) or the teacher (`env.teacher_actions(select)`).
 Only model-chosen steps enter the policy loss, entropy and KL; the critic learns from every step. Consumable use, selling
 and joker moves are legal in every phase, so a phase route also routes them (a teacher-controlled shop also does the
@@ -197,7 +197,7 @@ reports the unselected final checkpoint).
 * **Simulator exploits**: a 2x win rate over the heuristic in 24M steps is large; nothing in the logs says it is
   illegitimate (0 invalid actions, plausible shifts: no skipping, more rerolls), but the policy should be inspected game by
   game (replay, joker/voucher choices, rerolling) before the number is believed, and the weak spots of the simulator
-  (UNVERIFIED items in notes section 4.1) are exactly what RL finds.
+  (the simulator's unverified rules) are exactly what RL finds.
 * The value critic is shared and normalised only by the constant `reward_scale`; explained variance reached 0.91.
 * Truncation bootstrap is approximate (`V(s_{T-1})`, section 1); exact would need the env to keep the final observation.
 * k3 KL estimator spikes (0.7-0.9) appear when a few sampled actions get probability collapses; harmless here, but watch it
@@ -324,9 +324,9 @@ Open: seed repeats; Phase 5E (other decks and stakes) deferred until after train
 **Head freeze** (`evaluate.py --route`, reference `e2e_long_fix/latest`, 1000 games, raw det; full model 7.51 / 68.6%):
 teacher plays SHOP → 6.15 / 16.7% (teacher level), BLIND → 6.77 / 39.7%, PLAY → 7.39 / 60.2%, PACK → 7.41 / 60.6%.
 Sampled mode gives the same picture. The gain over the teacher is almost entirely shop decisions, then not skipping blinds.
-Drops are not additive (the other heads never saw teacher-induced states). Results: `runs/eval/freeze_no_*.json`.
+Drops are not additive (the other heads never saw teacher-induced states).
 
-**Seed repeats** (`scripts/chain_seeds.sh`: the `e2e_long` recipe, same BC init, PPO `--seed` 1 and 2, then the `_fix`
+**Seed repeats** (the `e2e_long` recipe, same BC init, PPO `--seed` 1 and 2, then the `_fix`
 fine-tune):
 
 | seed | 100M raw det | `_fix` raw det | `_fix` sampled |
@@ -376,7 +376,7 @@ the env is the fixed Red/White one, bit for bit. The lists land in `config.json`
 
 ## 14. Phase 10F results: margin and zero_play rewards (2026-11-15)
 
-`scripts/chain_reward.sh`: 24M steps each, `e2e_long` recipe (BC init, seed 0, v2 interface with migrated BC), raw test
+24M steps each, `e2e_long` recipe (BC init, seed 0, v2 interface with migrated BC), raw test
 (1000 games), paired differences vs `r_base`:
 
 | run | det ante / win | sampled ante / win | paired d_win vs base (det / sampled) |
@@ -386,15 +386,15 @@ the env is the fixed Red/White one, bit for bit. The lists land in `config.json`
 | `r_margin_zp` (`+ --zero-play -0.3`) | 7.09 / 39.7% (1.6%) | 7.02 / 39.1% | **+3.8 +- 2.0 / +3.7 +- 1.9** |
 
 Margin alone is neutral at 24M (validation curves overlap the baseline). Adding the zero-score-play cost gives ~+3.7 points
-in both modes (~2 standard errors, one seed; the loss analysis bounded the Eye/Mouth fix at ~+3.5 points at 100M).
+in both modes (~2 standard errors, one seed; an offline loss analysis bounded the Eye/Mouth fix at ~+3.5 points at 100M).
 Adopted for later runs: `--margin 1.0 --zero-play -0.3` (margin kept: harmless, may matter on higher stakes).
 
-## 15. Stake ladder v2 (package B2, branch `exp/stake-v2`)
+## 15. Stake ladder v2
 
-Four independent flags on top of the stake ladder (`scripts/chain_stakes.sh`); with all of them at their
+Four independent flags on top of the stake ladder; with all of them at their
 defaults training is bit-identical to before (checked: 3 updates of a tiny multi-stake config on CPU, losses and
 a parameter hash equal to the untouched main checkout). Motivation: st1 plateaued at 18-22 % Green validation
-after 1M steps; Black 4 %, Gold 0.1 % (`notes.md` 0.0a; `fabledan_notlar.md` G2, G3, G9).
+after 1M steps; Black 4 %, Gold 0.1 %.
 
 | flag | default | meaning |
 |---|---|---|
@@ -414,3 +414,13 @@ New engine surface (`rl_interface.md` stays valid; additive): `VecEnv(..., scena
 `set_scenario_prob`, `set_config_weights`, `config_pool`, `set_reset_pool(states, prob)`, `reset_pool_len`,
 `hall_collect(min_ante)`, `origins()`, and `scenario` / `hall` in `drain_finished_ex`. Tests:
 `tests_py/test_stake_v2.py`, `crates/balatro-core/tests/scenario.rs`.
+
+## 16. Final configuration (`final200`)
+
+The shipped checkpoint `runs/final200/latest.pt` (not in the repository) was trained with
+`scripts/train_ppo.py` from an earlier obs-v2 checkpoint (`--init`, which is migrated on load) for 200M steps,
+1024 envs x 128 steps, seed 6, with: decks `red,blue,yellow,green,black`, all eight stakes, `--endless
+--endless-max-ante 12`, rewards `--reorder-cost -0.25 --margin 1.0 --margin-cap 4 --zero-play -0.3`,
+`--adv-norm per_config`, `--stake-curriculum auto`, `--scenario-prob 0.1`, `--boss-hall 0.2`, `--lr 5e-5`
+(decaying to 10 %), `--kl-coef 0`, `--critic-warmup 2`, validation on Red / Black with the `val` set. Model: 4 layers,
+d_model 128, 4 heads, GRU memory 128. Evaluate it with `scripts/evaluate.py --checkpoint <path> --set val`.

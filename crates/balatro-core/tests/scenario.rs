@@ -10,7 +10,7 @@ fn cfg(i: u64) -> GameConfig {
     GameConfig {
         deck: DeckKind::ALL[(i as usize) % DeckKind::COUNT],
         stake: StakeKind::ALL[(i as usize / 3) % StakeKind::COUNT],
-        endless: i % 11 == 0,
+        endless: i.is_multiple_of(11),
     }
 }
 

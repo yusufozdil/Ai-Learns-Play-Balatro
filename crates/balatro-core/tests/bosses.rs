@@ -3,7 +3,7 @@
 //! mid-round), Matador (`triggered`), seed determinism for the random ones, plus selection over
 //! the complete boss pool. Preview/step mirroring and random-game smoke tests for every boss
 //! live in `boss_contract.rs`.
-//! Rules: docs/mechanics/bosses.md, notes.md §4.1c; contract: docs/design/consumables_bosses.md.
+//! Rules: docs/mechanics/bosses.md; contract: docs/design/consumables_bosses.md.
 
 use balatro_core::actions::{Action, ActionError};
 use balatro_core::blinds::{self, BlindKind, MULT_BOSS_DEFAULT, StakeScaling};

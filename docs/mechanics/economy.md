@@ -30,4 +30,4 @@ Sources: https://balatrowiki.org/w/Money , https://balatrowiki.org/w/Interest , 
 - Debt: only Credit Card allows negative money, down to -$20 (The_Ox page https://balatrowiki.org/w/The_Ox).
 
 ## Starting money
-$4 for Red Deck per notes.md §4.1 (not on fetched wiki pages; `UNVERIFIED`). Yellow Deck starts +$10 (Interest).
+$4 for Red Deck as a project decision (not on fetched wiki pages; `UNVERIFIED`). Yellow Deck starts +$10 (Interest).

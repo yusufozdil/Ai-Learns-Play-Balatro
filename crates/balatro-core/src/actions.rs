@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use thiserror::Error;
 
-/// Every decision a player can make (prd.md §3.1). Indices are positions (hand position, joker
+/// Every decision a player can make. Indices are positions (hand position, joker
 /// slot, consumable slot, shop slot, pack item).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Action {

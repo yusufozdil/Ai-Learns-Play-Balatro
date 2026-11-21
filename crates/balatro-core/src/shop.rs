@@ -1,5 +1,5 @@
 //! The market: shop state, generation (card slots, booster slots, voucher slots), prices,
-//! rerolls and joker creation pools. Phase 5.0. Rules: docs/mechanics/shop.md, notes.md §4.1d;
+//! rerolls and joker creation pools. Phase 5.0. Rules: docs/mechanics/shop.md;
 //! numbers: `data/shop_weights.rs`, `data/prices.rs`. Guide:
 //! `docs/design/shop_packs_vouchers_tags.md`.
 //!
@@ -152,7 +152,7 @@ pub fn pack_price_of(s: &GameState, p: &ShopPack) -> i32 {
     economy::shop_price(pack_price(p.spec.size), 0, s.shop_mods.discount)
 }
 
-/// What a voucher costs now (the discount applies, notes.md §4.1d).
+/// What a voucher costs now (the discount applies).
 pub fn voucher_price(s: &GameState, id: VoucherId) -> i32 {
     let base = try_voucher_def(id).map_or(crate::data::prices::VOUCHER, |d| d.cost);
     economy::shop_price(base, 0, s.shop_mods.discount)

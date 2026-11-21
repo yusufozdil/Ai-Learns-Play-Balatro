@@ -127,7 +127,7 @@ pub fn try_random_scenario(seed: u64, config: GameConfig) -> Result<Game, String
         jokers_of(Rarity::Legendary),
     ];
     let slots = g.state().joker_slots as i32;
-    let want = (((a + 1) / 2) as i32 + r.range(RngKey::Misc, 0, 3) as i32 - 1).clamp(0, slots);
+    let want = (a.div_ceil(2) as i32 + r.range(RngKey::Misc, 0, 3) as i32 - 1).clamp(0, slots);
     let weights = [
         50.0,
         28.0,

@@ -10,8 +10,8 @@ has no limit, an earlier stage ends once the *global* env-step counter reaches i
 
     play@5e6,play+pack+blind@10e6,all        # PLAY only, then + PACK + BLIND, then everything
 
-Phases are joined with ``+``: ``blind play shop pack``; ``all`` = all four. Aliases (the PRD's
-stage numbers): ``s1`` = play, ``s2`` = play+pack+blind, ``s3`` = ``s4`` = all (stage 3 adds SHOP,
+Phases are joined with ``+``: ``blind play shop pack``; ``all`` = all four. Aliases (stage
+numbers): ``s1`` = play, ``s2`` = play+pack+blind, ``s3`` = ``s4`` = all (stage 3 adds SHOP,
 stage 4 is "end to end" = the same routing, usually with the teacher KL and the critic warm-up
 switched off).
 """

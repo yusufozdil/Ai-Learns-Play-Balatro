@@ -6,7 +6,6 @@ import json
 import numpy as np
 import pytest
 import torch
-
 from balatro_rl import BalatroVecEnv
 from balatro_rl.train import ppo
 from balatro_rl.train.ppo import (
@@ -123,7 +122,9 @@ def test_weights_deterministic_across_threads():
 
 
 def _run_scenarios(threads, prob=1.0, n=24, steps=80):
-    env = BalatroVecEnv(n, seed=5, num_threads=threads, max_episode_steps=20, stakes=["white", "black"])
+    env = BalatroVecEnv(
+        n, seed=5, num_threads=threads, max_episode_steps=20, stakes=["white", "black"]
+    )
     env.set_scenario_prob(prob)
     obs, _ = env.reset()
     fin = []
@@ -191,7 +192,7 @@ def _hall_env(n=48, seed=11, min_ante=2):
 
 def test_boss_hall_collect_and_reset_pool():
     env, cands = _hall_env()
-    for i, ante, boss, stake, js in cands:
+    for _i, ante, boss, _stake, js in cands:
         st = json.loads(js)
         assert st["phase"] == "BlindSelect" and st["blind"] == "Boss" and st["ante"] == ante >= 2
         assert boss
@@ -254,7 +255,9 @@ TINY = dict(
 
 
 def _tiny(tmp_path, name, **kw):
-    cfg = PPOConfig(name=name, out_dir=str(tmp_path / name), total_steps=2 * 16 * 16, **{**TINY, **kw})
+    cfg = PPOConfig(
+        name=name, out_dir=str(tmp_path / name), total_steps=2 * 16 * 16, **{**TINY, **kw}
+    )
     return Trainer(cfg, echo=lambda *_: None, device="cpu")
 
 

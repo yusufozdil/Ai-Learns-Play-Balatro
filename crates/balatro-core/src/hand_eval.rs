@@ -1,6 +1,6 @@
 //! Poker hand evaluation (Four Fingers / Shortcut / Smeared / Wild / Stone / debuff rules),
 //! `contains` bitset and scoring-card mask; fast all-subsets evaluation.
-//! Rules: docs/mechanics/hands.md (decisions in notes.md §4). Implementation: Phase 1B.
+//! Rules: docs/mechanics/hands.md. Implementation: Phase 1B.
 //!
 //! INTERFACE (orchestrator-owned): the `HandEval` type and the `evaluate` signature are fixed;
 //! the scoring pipeline (Phase 1C) depends on them.
@@ -340,7 +340,7 @@ fn eval_infos(info: &[Info; MAX_PLAYED], n: usize, flags: &RuleFlags) -> HandEva
 /// More than 5 cards is a caller bug: it trips a `debug_assert!` in debug builds, and in release
 /// builds only the first 5 cards are evaluated. Does not allocate.
 ///
-/// Rules (decisions in `notes.md` §4.1, sources in `docs/mechanics/hands.md`):
+/// Rules (sources in `docs/mechanics/hands.md`):
 /// - Stone cards are ignored for typing and `contains` but always score.
 /// - Suit logic goes exclusively through [`Card::has_suit`] (Wild, Smeared, debuffed Wild).
 /// - Priority: Flush Five, Flush House, Five of a Kind, Straight Flush, Four of a Kind,

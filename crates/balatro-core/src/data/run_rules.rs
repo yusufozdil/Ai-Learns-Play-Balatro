@@ -1,20 +1,20 @@
 //! Run-start values (Red Deck, White Stake) and per-round limits of the game loop.
-//! Sources: docs/mechanics/blinds.md §1, §5-§7; notes.md §4.1 / §4.1c ("Başlangıç").
+//! Sources: docs/mechanics/blinds.md §1, §5-§7.
 //! Starting money lives in [`crate::data::prices::STARTING_MONEY`].
 
 /// Ante a run starts at (blinds.md §1).
 pub const STARTING_ANTE: i32 = 1;
-/// Hands per round before deck/voucher/joker changes (notes.md §4.1).
+/// Hands per round before deck/voucher/joker changes.
 pub const BASE_HANDS: u32 = 4;
-/// Discards per round before deck/voucher/joker changes (notes.md §4.1).
+/// Discards per round before deck/voucher/joker changes.
 pub const BASE_DISCARDS: u32 = 3;
 /// Red Deck: +1 discard every round (blinds.md §7).
 pub const RED_DECK_EXTRA_DISCARDS: u32 = 1;
-/// Hand size (notes.md §4.1).
+/// Hand size.
 pub const BASE_HAND_SIZE: u32 = 8;
-/// Joker slots (notes.md §4.1).
+/// Joker slots.
 pub const BASE_JOKER_SLOTS: u32 = 5;
-/// Consumable slots (notes.md §4.1).
+/// Consumable slots.
 pub const BASE_CONSUMABLE_SLOTS: u32 = 2;
 /// Cards in the standard starting deck.
 pub const STANDARD_DECK_SIZE: u32 = 52;

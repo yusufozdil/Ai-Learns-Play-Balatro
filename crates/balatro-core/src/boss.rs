@@ -296,7 +296,7 @@ impl DrawCtx<'_> {
         c.is_face(&self.rules)
     }
 
-    /// Probability roll (Oops! All 6s applies, notes.md §4.1c) on `RngKey::Bosses`.
+    /// Probability roll (Oops! All 6s applies) on `RngKey::Bosses`.
     pub fn chance(&mut self, numerator: u32, denominator: u32) -> bool {
         self.rng
             .chance(RngKey::Bosses, numerator, denominator, self.prob_mult)
@@ -365,7 +365,7 @@ impl PlayCtx<'_> {
         self.boss.triggered = true;
     }
 
-    /// Gain or lose money (The Tooth: -1 per card; may go negative, notes.md §4.1c).
+    /// Gain or lose money (The Tooth: -1 per card; may go negative).
     pub fn add_money(&mut self, dollars: i32) {
         *self.money = self.money.saturating_add(dollars);
     }
@@ -401,7 +401,7 @@ impl PlayCtx<'_> {
 // Selection
 // ---------------------------------------------------------------------------------------------
 
-/// Choose the boss of `ante` (notes.md §4.1c): among DEFINED bosses of the right pool
+/// Choose the boss of `ante`: among DEFINED bosses of the right pool
 /// (Showdown iff `ante > 0 && ante % interval == 0`; if that pool has no defined boss, the
 /// other pool) whose `min_ante <= max(ante, 1)`, keep those seen the fewest times, pick one
 /// uniformly on `RngKey::Bosses`, and count it as seen. `None` if no boss is defined.

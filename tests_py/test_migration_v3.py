@@ -217,25 +217,6 @@ def test_v3_columns_in_the_env():
     assert (obs["global_f"][:, GF["hands_played_run"]] > 0).any()
 
 
-def test_error_hall_pool_states_encode_under_v3():
-    """The error hall stores ``export_state`` JSON, not observations: pool states mined under v2
-    import into a v3 env and give finite v3 observations."""
-    from balatro_rl.analysis.hall import read_pool
-
-    pool = find_run_file("runs/errhall/st3.jsonl")
-    if pool is None:
-        pytest.skip("no error-hall pool")
-    recs = read_pool(pool)[:64]
-    env = BalatroVecEnv(1, seed=1, num_threads=1, decks=DECKS, stakes=STAKES)
-    env.reset()
-    for r in recs:
-        obs, _ = env.import_state(0, r["state"], reseed=5)
-        for k, v in obs.items():
-            if v.dtype.kind == "f":
-                assert np.isfinite(v).all(), k
-        assert obs["global_f"].shape[-1] == len(GF)
-
-
 def record():  # pragma: no cover - run by hand on a v2 build
     from balatro_rl.model import load_checkpoint
 

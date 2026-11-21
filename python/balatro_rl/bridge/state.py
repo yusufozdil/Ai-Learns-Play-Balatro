@@ -21,6 +21,29 @@ from balatro_rl import _engine
 from . import engine_tables as et
 from . import tables as T
 
+
+def strip_game_text(gs):
+    """Copy of a gamestate without the game's localized description prose.
+
+    Drops every ``effect`` (card / blind description text) except the ``ability.effect`` type key,
+    and every ``tag_effect``. Names, keys, ids and numbers are kept; the translation never reads
+    the removed fields. Used for everything the bridge writes to disk (fixtures, state dumps).
+    """
+
+    def walk(o, parent=None):
+        if isinstance(o, dict):
+            return {
+                k: walk(v, k)
+                for k, v in o.items()
+                if k != "tag_effect" and not (k == "effect" and parent != "ability")
+            }
+        if isinstance(o, list):
+            return [walk(v, parent) for v in o]
+        return o
+
+    return walk(gs)
+
+
 PHASE_OF_STATE = {
     "BLIND_SELECT": "BlindSelect",
     "SELECTING_HAND": "Play",

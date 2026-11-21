@@ -36,8 +36,22 @@ fn deterministic_and_pure() {
             assert_eq!(a, power(h.state(), 8, &cfg));
         }
         // Salt gives an independent sample; a different build gives a different digest.
-        let s1 = power(g.state(), 8, &PowerCfg { salt: 1, ..PowerCfg::default() });
-        let s2 = power(g.state(), 8, &PowerCfg { salt: 2, ..PowerCfg::default() });
+        let s1 = power(
+            g.state(),
+            8,
+            &PowerCfg {
+                salt: 1,
+                ..PowerCfg::default()
+            },
+        );
+        let s2 = power(
+            g.state(),
+            8,
+            &PowerCfg {
+                salt: 2,
+                ..PowerCfg::default()
+            },
+        );
         assert!(s1.phi != s2.phi || s1.std != s2.std);
         let mut h = g.clone_state_game();
         h.state_mut().money += 1;
@@ -84,10 +98,16 @@ fn strong_xmult_joker_does_not_lower_power() {
             let g = at_ante(seed, ante);
             base += power(g.state(), 8, &PowerCfg::default()).phi;
             let mut h = at_ante(seed, ante);
-            h.add_joker(JokerInstance::new(0, JokerId::Cavendish)).unwrap();
+            h.add_joker(JokerInstance::new(0, JokerId::Cavendish))
+                .unwrap();
             with += power(h.state(), 8, &PowerCfg::default()).phi;
             n += 1.0;
         }
     }
-    assert!(with / n > base / n + 0.2, "base {} with {}", base / n, with / n);
+    assert!(
+        with / n > base / n + 0.2,
+        "base {} with {}",
+        base / n,
+        with / n
+    );
 }

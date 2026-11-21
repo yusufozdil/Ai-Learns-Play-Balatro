@@ -12,7 +12,7 @@ Sources (fetched 2026-11-15):
 - D4 https://balatrowiki.org/w/Blinds_and_Antes (Plasma doubles the requirement "for all stakes")
 - D5 https://balatrowiki.org/w/Money (Green Deck payout, also blinds.md §4)
 
-Run-start base (notes.md §4.1): $4, 4 hands, 3 discards, hand size 8, 5 joker slots, 2 consumable
+Run-start base (project decision): $4, 4 hands, 3 discards, hand size 8, 5 joker slots, 2 consumable
 slots, 52 cards. A deck is a set of deltas on that base.
 
 | Deck | Effect (D1) | Implementation |
@@ -63,8 +63,7 @@ slots, 52 cards. A deck is a set of deltas on that base.
     the ante's base chips, as the game's ante scaling does). `UNVERIFIED` for Showdown bosses; they
     are treated the same.
   - The balancing step is `Scorer` step 7 (`tests/scoring.rs::plasma_deck_balances`,
-    `plasma_deck_floors_the_balanced_value`). Verified against the real game's Lua (dump
-    `back.lua:157-161`): both values become `math.floor((chips + mult) / 2)` (the wiki's "rounds
+    `plasma_deck_floors_the_balanced_value`). Verified against the real game: both values become `math.floor((chips + mult) / 2)` (the wiki's "rounds
     half-down"; the old engine kept the unfloored average, off by up to 0.5 each).
     Its place relative to joker effects follows scoring.md step 7 (after Observatory, i.e. after
     all joker/edition effects).

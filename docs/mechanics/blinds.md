@@ -14,7 +14,7 @@ Sources:
 - B9 https://balatrowiki.org/w/Gold_Card (Gold card, Blue Seal at end of round)
 - B10 https://balatrowiki.org/w/Gameplay
 - B11 https://balatrowiki.org/w/Vouchers
-- N notes.md §4.1 (project decisions)
+- N project decisions
 
 ## 1. Run structure
 
@@ -119,7 +119,7 @@ Sources are thin; items marked `UNVERIFIED` are standard game behavior not state
 ## 7. Starting state (Red Deck, White Stake)
 
 - Red Deck effect: +1 discard every round; no other effect (B7). Wiki pages fetched do not give the generic base values (B7, B10: "not mentioned").
-- Values from notes.md §4.1 (project decision, matches the well known game defaults): money $4, hands 4, discards 3 + 1 (Red) = 4, hand size 8, joker slots 5, consumable slots 2, 52-card standard deck. `UNVERIFIED` by the fetched wiki pages; the decks overview does not list them. Recommended: keep as in notes.md.
+- Values are a project decision (matches the well known game defaults): money $4, hands 4, discards 3 + 1 (Red) = 4, hand size 8, joker slots 5, consumable slots 2, 52-card standard deck. `UNVERIFIED` by the fetched wiki pages; the decks overview does not list them. Recommended: keep these values.
 - Money may go negative only with Credit Card (debt up to -$20) (B-Ox page https://balatrowiki.org/w/The_Ox).
 
 ## 8. Selling

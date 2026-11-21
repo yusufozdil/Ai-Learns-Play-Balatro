@@ -14,7 +14,7 @@ Sources (S-codes used below):
 
 ## 1. The 12 hands (level 1 values, per-level increments)
 
-Source: S1. Matches the prd.md Faz 1 draft table in every cell (no differences).
+Source: S1. Matches the simulator's table in every cell.
 
 | Hand | Chips | Mult | +Chips/lvl | +Mult/lvl | Definition (5 cards unless noted) | Cards that score |
 |---|---|---|---|---|---|---|
@@ -31,7 +31,7 @@ Source: S1. Matches the prd.md Faz 1 draft table in every cell (no differences).
 | Flush House (secret) | 140 | 14 | 40 | 4 | Full House where all 5 share a suit | all 5 |
 | Flush Five (secret) | 160 | 16 | 50 | 3 | 5 cards same rank AND suit | all 5 |
 
-- Level value: `chips = base + (level-1)*inc_chips`, `mult = base + (level-1)*inc_mult` (S1; level 1 = base). Planets: Pluto, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Neptune, Uranus, Ceres (Flush House), Planet X (Five of a Kind), Eris (Flush Five) (S1; not needed by the simulator for Faz 1).
+- Level value: `chips = base + (level-1)*inc_chips`, `mult = base + (level-1)*inc_mult` (S1; level 1 = base). Planets: Pluto, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Neptune, Uranus, Ceres (Flush House), Planet X (Five of a Kind), Eris (Flush Five) (S1; not needed by the simulator for the first phase).
 - Secret hands (Five of a Kind, Flush House, Flush Five) are hidden in Run Info until played once; their Planets only appear after that in a run (S1). This is a UI/shop concern, the evaluator always detects them.
 - Royal Flush is only a display name; it is a Straight Flush for all purposes (levels, jokers) (S1). Do not model as a hand type.
 - Hands may have fewer than 5 cards (1 to 5 played). Only hands needing 5 cards (Straight, Flush, Full House, Straight Flush, Five-based) require 5 played cards, except with Four Fingers (section 3).
@@ -116,7 +116,7 @@ Default rule (S1): only the cards that form the hand type score; unmatched "kick
 - Splash: every played card scores (S6).
 - Debuffed cards stay in the scoring set (they count for hand type) but contribute nothing (section 7). Also joker "when scored" effects skip debuffed cards (S6).
 
-Scoring order inside the set: left to right as in the player's hand order (prd.md 3.1; scoring.md).
+Scoring order inside the set: left to right as in the player's hand order (see scoring.md).
 
 ## 6. Stone cards and hand detection
 - No rank, no suit (S3). Excluded from pair/straight/flush detection; excluded from Pareidolia-independent rank/suit jokers.

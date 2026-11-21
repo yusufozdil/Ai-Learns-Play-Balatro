@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --quiet -- -D warnings
+      - run: cargo test --workspace --release --quiet
+
+  python:
+    name: Python (ruff, pytest on CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install dev deps and build the Rust extension
+        run: make setup
+      - name: Install CPU-only PyTorch (model / PPO tests)
+        run: uv pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+      - run: uv run --no-sync ruff check python tests_py scripts
+      - run: uv run --no-sync ruff format --check python tests_py scripts
+      - run: uv run --no-sync pytest -q

@@ -1,23 +1,23 @@
-# Joker hook contract (Phase 1C) — guide for joker authors
+# Joker hook contract — guide for joker authors
 
 This is the contract every joker (and later every tarot/boss/voucher effect that touches scoring)
-is written against. **Phase 3 agents: follow this document exactly.** If a joker cannot be
-expressed cleanly, do not hack around it — describe the gap in your report and the orchestrator
-extends the contract.
+is written against. **Follow this document exactly.** If a joker cannot be expressed cleanly, do
+not hack around it: extend the contract (and this document) instead.
 
 Code: `crates/balatro-core/src/{joker.rs, hooks.rs, scoring.rs}`, registry
 `src/content/jokers/mod.rs`, working examples `src/content/jokers/prototypes.rs`, tests
-`tests/joker_prototypes.rs`. Mechanics: `docs/mechanics/scoring.md`, decisions `notes.md` §4.1.
+`tests/joker_prototypes.rs`. Mechanics: `docs/mechanics/scoring.md`, scoring decisions are summarised in `docs/mechanics/scoring.md`.
 
 ---
 
 ## 1. Adding a joker in 6 steps
 
 1. Find the id in `src/content/jokers/ids.rs` (`JokerId::YourJoker`). Never edit `ids.rs`
-   (orchestrator-owned). Missing id → ask in your report.
+   (generated from `docs/mechanics/jokers.csv` by `scripts/gen_joker_ids.py`). Missing id: add a
+   row to the CSV and regenerate.
 2. Open **your** file `src/content/jokers/waveN.rs` (only that file). It has one
    `pub static DEFS: &[JokerDef] = &[ ... ];` table. It must be listed once in
-   `content/jokers/mod.rs::SOURCES` (orchestrator adds the line).
+   `content/jokers/mod.rs::SOURCES` (add the line when you add a file).
 3. Add a `JokerDef` entry (template in §2). Set `rarity`, `base_cost`, compatibility flags and
    initial state from the wiki page / `docs/mechanics/jokers.csv`.
 4. Write the hook functions below the table, one block per joker, starting with a comment line
@@ -98,7 +98,7 @@ Scaling jokers whose gain should count for the current hand scale in `before_sco
 
 ## 4. The pipeline (when each scoring hook runs)
 
-Exact order of one `Scorer::score_hand` call (`scoring.md`, `notes.md` §4.1):
+Exact order of one `Scorer::score_hand` call (`scoring.md`):
 
 0. **Boss validation.** `run.boss.hand_invalid` → score 0: only `on_invalid_hand`, then
    `after_scoring` run. Nothing else (no card effects, no Glass rolls).

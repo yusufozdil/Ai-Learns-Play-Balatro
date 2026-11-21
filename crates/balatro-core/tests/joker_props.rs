@@ -33,7 +33,7 @@ fn arb_card() -> impl Strategy<Value = Card> {
         0usize..Rank::COUNT,
         0usize..Suit::COUNT,
         0usize..Enhancement::COUNT,
-        // Negative is never put on playing cards (notes.md §4.1).
+        // Negative is never put on playing cards.
         prop::sample::select(vec![
             Edition::Base,
             Edition::Base,

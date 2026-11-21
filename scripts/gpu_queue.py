@@ -10,6 +10,7 @@ Job file: pending/<NNN>_<name>.json
   gpu_queue.py add --name N --cmd C --cwd D [--branch B] [--kind train]
   gpu_queue.py ls
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,7 +36,9 @@ def now_iso() -> str:
 
 def git(cwd, *args) -> str | None:
     try:
-        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=20)
+        r = subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=20
+        )
         return r.stdout.strip() or None
     except Exception:
         return None
@@ -75,17 +78,36 @@ class Queue:
                     best = max(best, int(m.group(1)))
         return best + 1
 
-    def add(self, name, cmd, cwd, branch=None, commit=None, kind="train",
-            run_dir=None, notes=None, expected_minutes=None) -> Path:
+    def add(
+        self,
+        name,
+        cmd,
+        cwd,
+        branch=None,
+        commit=None,
+        kind="train",
+        run_dir=None,
+        notes=None,
+        expected_minutes=None,
+    ) -> Path:
         if not NAME_RE.match(name):
             raise ValueError(f"bad job name {name!r} (allowed: A-Za-z0-9_.+-)")
         if commit is None:
             commit = git(cwd, "rev-parse", "--short", "HEAD")
         if branch is None:
             branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-        job = {"name": name, "cmd": cmd, "cwd": str(cwd), "branch": branch,
-               "commit": commit, "kind": kind, "run_dir": run_dir, "notes": notes,
-               "expected_minutes": expected_minutes, "added": now_iso()}
+        job = {
+            "name": name,
+            "cmd": cmd,
+            "cwd": str(cwd),
+            "branch": branch,
+            "commit": commit,
+            "kind": kind,
+            "run_dir": run_dir,
+            "notes": notes,
+            "expected_minutes": expected_minutes,
+            "added": now_iso(),
+        }
         n = self.next_number()
         p = self.path("pending", f"{n:03d}_{name}.json")
         tmp = p.with_suffix(".tmp")
@@ -96,8 +118,13 @@ class Queue:
     def write_status(self, current=None, runner_pid=None):
         fin = self.list_state("done") + self.list_state("failed")
         fin.sort(key=lambda d: d.get("ended") or "")
-        st = {"updated": now_iso(), "runner_pid": runner_pid, "current": current,
-              "pending": self.list_state("pending"), "finished": fin[-20:]}
+        st = {
+            "updated": now_iso(),
+            "runner_pid": runner_pid,
+            "current": current,
+            "pending": self.list_state("pending"),
+            "finished": fin[-20:],
+        }
         tmp = self.qdir / "status.json.tmp"
         tmp.write_text(json.dumps(st, indent=2))
         os.replace(tmp, self.qdir / "status.json")
@@ -167,8 +194,12 @@ class Runner:
                 lf.flush()
                 self.child = subprocess.Popen(
                     ["flock", str(self.q.gpu_lock), "bash", "-lc", cmd],
-                    cwd=cwd, stdout=lf, stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL, start_new_session=True)
+                    cwd=cwd,
+                    stdout=lf,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
                 last = time.time()
                 while self.child.poll() is None:
                     time.sleep(0.5)
@@ -221,7 +252,9 @@ def fmt_dur(s):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--root", default=str(REPO_ROOT))
     sub = ap.add_subparsers(dest="mode", required=True)
     sub.add_parser("run")
@@ -239,13 +272,26 @@ def main(argv=None):
     args = ap.parse_args(argv)
     q = Queue(Path(args.root))
     if args.mode == "add":
-        print(q.add(args.name, args.cmd, args.cwd, args.branch, args.commit, args.kind,
-                    args.run_dir, args.notes, args.expected_minutes))
+        print(
+            q.add(
+                args.name,
+                args.cmd,
+                args.cwd,
+                args.branch,
+                args.commit,
+                args.kind,
+                args.run_dir,
+                args.notes,
+                args.expected_minutes,
+            )
+        )
     elif args.mode == "ls":
         for s in ("running", "pending", "done", "failed"):
             for j in q.list_state(s):
-                print(f"{s:8s} {j['id']:32s} {j.get('kind', '-'):5s} {j.get('commit', '-')!s:9s} "
-                      f"exit={j.get('exit_code', '-')} dur={fmt_dur(j.get('duration_s'))}")
+                print(
+                    f"{s:8s} {j['id']:32s} {j.get('kind', '-'):5s} {j.get('commit', '-')!s:9s} "
+                    f"exit={j.get('exit_code', '-')} dur={fmt_dur(j.get('duration_s'))}"
+                )
     else:
         lock = open(q.qdir / ".runner.lock", "a+")
         try:

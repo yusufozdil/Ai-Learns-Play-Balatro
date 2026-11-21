@@ -1,9 +1,8 @@
-# Market, pack, voucher and tag contract (Phase 5.0): guide for content authors
+# Market, pack, voucher and tag contract: guide for content authors
 
 This is the contract the market, the 15 booster packs, the 32 vouchers and the 24 tags are written
-against. **Phase 5B/5C agents: follow this document exactly and write only your own files**
-(table in §1). If something cannot be expressed cleanly, do not hack around it: describe the gap
-in your report and the orchestrator extends the contract.
+against. **Follow this document exactly.** If something cannot be expressed cleanly, do not hack around it:
+extend the contract (and this document) instead.
 
 Code: `src/shop.rs` (market, prices, rerolls, joker pools), `src/packs.rs` (pack kinds, sizes,
 open pack, generation), `src/voucher.rs` (`VoucherDef`, `ShopMods`, `VoucherCtx`, `redeem`),
@@ -12,7 +11,7 @@ ids `src/content/ids.rs` (`VoucherId`, `TagId`; `PackKind` is in `hooks.rs`, `Pa
 `packs.rs`), registry `src/content/mod.rs`, numbers `src/data/shop_weights.rs` and
 `src/data/prices.rs`. Working examples: `content/{vouchers,tags}.rs`. Contract tests:
 `tests/{shop,packs,vouchers_tags}.rs`. Rules: `docs/mechanics/{shop,packs,vouchers,tags}.md`,
-decisions `notes.md` §4.1d and §6 of this file. Joker hooks that react to the market
+decisions in §6 of this file. Joker hooks that react to the market
 (`on_reroll`, `on_pack_open`, `on_pack_skip`, `on_shop_enter/exit`, `Modifiers::{free_rerolls,
 free_planets, allow_duplicates, debt_limit}`): `docs/design/hooks.md`.
 
@@ -100,7 +99,7 @@ builds. Use `voucher::redeem(g.state_mut(), V::X)`.
 Which voucher is offered: at every ante start (`GameState::start_ante`, `RngKey::Shop`) uniformly
 among **defined** vouchers that are not owned and whose base is owned (bases need nothing). The
 voucher stays in every shop of the ante until bought; after the boss it is rolled again. All
-vouchers are unlocked (notes.md §4.1d). An undefined voucher is never offered, so adding your
+vouchers are unlocked. An undefined voucher is never offered, so adding your
 defs changes the rolled vouchers of every seed: never assert a specific seed's voucher.
 
 ### 2.3 Survey: every voucher -> API
@@ -354,7 +353,7 @@ targets, None)` (slot `None`: free-slot counts are the raw ones).
 | Pack picks | consumables are used at once and never take a slot (also Planets); Standard cards go to the draw pile at a random position |
 | Edition tags | modify the first base-edition shop joker (it becomes free); consumed only if one exists; Uncommon/Rare tags add an extra free joker |
 | Voucher fallback | if no voucher is eligible, no voucher is offered (the wiki says Blank appears; irrelevant while Blank is unowned) |
-| Orbital | hand picked when the tag is offered (notes.md §4.1c) |
+| Orbital | hand picked when the tag is offered |
 | Speed | counts the skip that earned it (UNVERIFIED) |
 | Boss reroll | `Action::RerollBoss` in BlindSelect: $10, a different boss of the same pool, the old one counts as unseen again, Director's Cut once per ante |
 | Stickers | White Stake has none; `shop::roll_stickers` is the hook for Eternal/Perishable/Rental |

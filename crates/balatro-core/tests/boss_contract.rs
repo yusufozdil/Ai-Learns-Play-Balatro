@@ -180,7 +180,7 @@ fn the_needle_allows_one_hand_and_keeps_x1_when_disabled() {
     assert_eq!(g.state().hands_left, 1);
     assert_eq!(g.state().target, base);
     add(&mut g, JokerId::Chicot);
-    // The hands come back; the requirement stays x1 (notes.md §4.2).
+    // The hands come back; the requirement stays x1.
     assert_eq!(g.state().hands_left, g.state().round_hands());
     assert_eq!(g.state().target, base);
     // Chicot owned before the blind: disabled during selection, hands never lost.
@@ -257,8 +257,7 @@ fn the_hook_discards_two_held_cards_before_scoring() {
 }
 
 /// Bridge game 15 ante 1 (real 2494, engine's 4 samples all gave 2732). Order of events in the
-/// real game (functions/state_events.lua `play_cards_from_highlighted`, blind.lua `press_play`
-/// The Hook, `discard_cards_from_highlighted(nil, true)`): played cards leave the hand, The Hook
+/// real game (The Hook): played cards leave the hand, The Hook
 /// discards 2 random held cards (Ramen -0.01 each, no discard used), then `evaluate_play` runs and
 /// Raised Fist reads the lowest of the cards STILL held. Held K, Q, 9: the survivor is a face
 /// card (Raised Fist +20, 3 jacks 60 chips x (3 + 20) x 1.98 = 2732) or the 9 (+18 -> 2494). Both

@@ -1,5 +1,5 @@
 //! Pure blind math: base chips per ante, requirement per blind kind, blind rewards.
-//! Source: docs/mechanics/blinds.md §2-§4; decisions in notes.md §4.1c.
+//! Source: docs/mechanics/blinds.md §2-§4.
 
 use crate::data::blind_chips::{
     BASE_CHIPS_ANTE_LE_0, ENDLESS_A, ENDLESS_A8, ENDLESS_B, ENDLESS_C, ENDLESS_SIG_DIGITS,
@@ -71,7 +71,7 @@ pub fn base_chips(ante: i32, scaling: StakeScaling) -> f64 {
     }
 }
 
-/// Chip requirement of a blind: truncated base times the multiplier (notes.md §4.1c).
+/// Chip requirement of a blind: truncated base times the multiplier.
 /// `boss_mult` is only used for `BlindKind::Boss` (default [`MULT_BOSS_DEFAULT`]; the caller passes
 /// [`MULT_WALL`], [`MULT_VIOLET_VESSEL`] or [`MULT_NEEDLE`] for those bosses, and the default when
 /// Chicot disables Wall/Vessel).

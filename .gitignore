@@ -35,7 +35,7 @@ id_ed25519*
 *.gpg
 wandb/settings
 
-# ---------- Proprietary game files (never commit; see notes.md §1) ----------
+# ---------- Proprietary game files (never commit) ----------
 # The simulator models mechanics from public descriptions only.
 *.love
 Balatro*
@@ -126,3 +126,10 @@ Thumbs.db
 
 # ---------- Agent worktrees (isolated copies used by subagents) ----------
 .claude/worktrees/
+
+# ---------- Private planning notes (kept locally, never committed) ----------
+prd.md
+notes.md
+fabledan_notlar.md
+*_notlar.md
+docs/internal/

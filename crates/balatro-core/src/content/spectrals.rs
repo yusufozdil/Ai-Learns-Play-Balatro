@@ -1,8 +1,7 @@
 //! Spectral cards (18). Phase 4B owns this file (tests: `tests/consumables_spectrals.rs`).
 //!
 //! Phase 4.0 prototypes: Black Hole, Ankh. 4B adds the other 16.
-//! Guide: `docs/design/consumables_bosses.md`; rules `docs/mechanics/consumables.md` §3,
-//! decisions `notes.md` §4.1b.
+//! Guide: `docs/design/consumables_bosses.md`; rules `docs/mechanics/consumables.md` §3.
 
 use crate::card::Card;
 use crate::consumable::{ConsumableDef, UseCheck, UseCtx};
@@ -226,7 +225,7 @@ fn medium(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Aura: https://balatrowiki.org/w/Aura ------------------------------------------------------
-// Foil 50 / Holographic 35 / Polychrome 15 (`EDITION_ROLL`, notes.md §4.1b). The target must have
+// Foil 50 / Holographic 35 / Polychrome 15 (`EDITION_ROLL`). The target must have
 // no edition (the base game only offers Aura on edition-less cards).
 
 fn aura_can_use(c: &UseCheck<'_>) -> bool {
@@ -246,8 +245,8 @@ fn aura(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Wraith: https://balatrowiki.org/w/Wraith ---------------------------------------------------
-// Random Rare joker and money set to $0 (also when negative,
-// notes.md §4.1b). Needs a free joker slot.
+// Random Rare joker and money set to $0 (also when negative).
+// Needs a free joker slot.
 const WRAITH_MONEY: i32 = 0;
 
 fn wraith(ctx: &mut UseCtx<'_>) {
@@ -301,7 +300,7 @@ fn ectoplasm(ctx: &mut UseCtx<'_>) {
 }
 
 // --- Immolate: https://balatrowiki.org/w/Immolate ---------------------------------------------------
-// `min(5, hand)` distinct random cards, +$20 (the wiki is silent below 5 cards: notes.md §4.1b).
+// `min(5, hand)` distinct random cards, +$20 (the wiki is silent below 5 cards).
 const IMMOLATE_CARDS: usize = 5;
 const IMMOLATE_MONEY: i32 = 20;
 

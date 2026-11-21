@@ -1,5 +1,5 @@
-//! Scoring pipeline with a fixed event order (`prd.md` §3.2, `docs/mechanics/scoring.md`,
-//! decisions in `notes.md` §4.1), and [`ScoreCtx`], the context every scoring hook receives.
+//! Scoring pipeline with a fixed event order (see `docs/mechanics/scoring.md`),
+//! and [`ScoreCtx`], the context every scoring hook receives.
 //!
 //! Usage (game layer): evaluate the played cards with `hand_eval::evaluate`, fill a
 //! [`RunView`], then call [`Scorer::score_hand`]. Apply `ScoreResult::money_delta` and the
@@ -20,14 +20,14 @@ use crate::hooks::{
 use crate::joker::{JokerDef, JokerInstance};
 use crate::rng::{GameRng, RngKey};
 
-/// The single rounding rule (notes.md §4.1): chips and mult stay `f64` with no intermediate
+/// The single rounding rule: chips and mult stay `f64` with no intermediate
 /// rounding; the hand score is `floor(chips * mult)`, never negative, NaN -> 0.
 pub fn round_score(chips: f64, mult: f64) -> f64 {
     let s = (chips * mult).floor();
     if s.is_nan() || s < 0.0 { 0.0 } else { s }
 }
 
-/// The Flint (notes.md §4.1): `ceil(x / 2)`, applied to base chips and base mult.
+/// The Flint: `ceil(x / 2)`, applied to base chips and base mult.
 pub fn halve_round_up(x: f64) -> f64 {
     (x / 2.0).ceil()
 }
@@ -572,9 +572,8 @@ impl<'a> ScoreCtx<'a> {
 
     /// `xmult`.
     ///
-    /// Bit-exact with the real game: SMODS does not multiply, it adds `mult * (x - 1)`
-    /// (`smods/src/game_object.lua` Scoring_Parameter 'mult' `calc_effect`, line ~3825:
-    /// `self:modify(mult * (amount - 1))`, with `modify` = `current + amount`). In doubles
+    /// Bit-exact with the real game: the game does not multiply, it adds `mult * (x - 1)`
+    /// to the running mult. In doubles
     /// `m + m * (x - 1)` differs from `m * x` by an ulp for non-dyadic `x` (Ramen 1.93:
     /// 20 + 20 * 0.93 = 38.599999999999994 -> 20 * that = 771.99.. -> 771, not 772). `x == 1`
     /// is skipped there (a no-op here too).
@@ -1003,9 +1002,8 @@ impl ScoreCtx<'_> {
             }
         }
         if run.plasma_deck {
-            // back.lua `Plasma Deck` final_scoring_step: both become `math.floor((chips + mult) / 2)`
-            // (dump/back.lua:157-161). `mod_mult(F)` then stores `mult + (F - mult)`
-            // (SMODS `modify` with `skip`, game_object.lua mult `modify`), which can differ from F
+            // Plasma Deck: both become `floor((chips + mult) / 2)`. The real game then stores
+            // `mult + (F - mult)` for the new mult F, which can differ from F
             // by an ulp when the old mult is not an integer; chips are integral so exact.
             let avg = ((self.chips + self.mult) / 2.0).floor();
             self.chips = avg;

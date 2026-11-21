@@ -693,8 +693,8 @@ fn ramen_starts_x2_and_loses_001_per_discarded_card() {
 #[test]
 fn ramen_is_eaten_when_the_100th_card_would_bring_it_to_x1() {
     let mut js = jokers(&[J::Ramen]);
-    // 99 cards: the real game subtracts 0.01 in plain doubles (card.lua:3109-3128, SMODS
-    // additive_scaling), so the value drifts to 1.0099999999999991 (no rounding), still alive.
+    // 99 cards: the real game subtracts 0.01 in plain doubles, so the value
+    // drifts to 1.0099999999999991 (no rounding), still alive.
     let fx = discard(&mut js, &cards(99));
     assert!(fx.is_empty());
     assert_eq!(js[0].value, 1.0099999999999991);
