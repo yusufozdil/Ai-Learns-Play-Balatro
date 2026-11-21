@@ -1,5 +1,4 @@
-# ai-plays-balatro
-
+# Ai-Learns-Play-Balatro
 A reinforcement learning agent that plays a **Balatro-style poker roguelike** from start to
 finish (blind selection, playing hands, shop, booster packs), trained entirely in a fast,
 headless Rust re-implementation of the game's rules.
