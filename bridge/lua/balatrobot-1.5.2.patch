@@ -4,7 +4,7 @@
    "src/lua/endpoints/sell.lua",
    -- Use consumable endpoint
    "src/lua/endpoints/use.lua",
-+  -- council-of-jokers bridge patch: boss reroll
++  -- ai-plays-balatro bridge patch: boss reroll
 +  "src/lua/endpoints/reroll_boss.lua",
 +  "src/lua/endpoints/continue_endless.lua",
    -- If debug mode is enabled, debugger.lua will load test endpoints
@@ -14,7 +14,7 @@
    BB_DEBUG.setup()
  end
  
-+-- council-of-jokers bridge patch: raw state extension (never fatal)
++-- ai-plays-balatro bridge patch: raw state extension (never fatal)
 +do
 +  local ok, mod = pcall(function()
 +    return assert(SMODS.load_file("src/lua/utils/bridge_ext.lua"))()

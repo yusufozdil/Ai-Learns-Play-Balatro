@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply the council-of-jokers bridge patch to the installed BalatroBot mod.
+# Apply the ai-plays-balatro bridge patch to the installed BalatroBot mod.
 #
 #   bridge/apply_lua_patch.sh [--revert]
 #

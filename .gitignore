@@ -1,5 +1,5 @@
 # ==========================================================================
-# council-of-jokers — .gitignore
+# ai-plays-balatro — .gitignore
 # Principle: commit source, docs and small configs only. Never commit build
 # outputs, environments, secrets, training artifacts or any game files.
 # ==========================================================================

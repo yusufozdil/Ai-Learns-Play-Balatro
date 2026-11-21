@@ -24,13 +24,13 @@ def edit_balatrobot(text: str) -> str:
     text = text.replace(
         '  -- Use consumable endpoint\n  "src/lua/endpoints/use.lua",\n',
         '  -- Use consumable endpoint\n  "src/lua/endpoints/use.lua",\n'
-        "  -- council-of-jokers bridge patch: boss reroll\n"
+        "  -- ai-plays-balatro bridge patch: boss reroll\n"
         '  "src/lua/endpoints/reroll_boss.lua",\n'
         '  "src/lua/endpoints/continue_endless.lua",\n',
     )
     text = text.replace(
         "-- Load core modules\n",
-        "-- council-of-jokers bridge patch: raw state extension (never fatal)\n"
+        "-- ai-plays-balatro bridge patch: raw state extension (never fatal)\n"
         "do\n"
         "  local ok, mod = pcall(function()\n"
         '    return assert(SMODS.load_file("src/lua/utils/bridge_ext.lua"))()\n'

@@ -1,4 +1,4 @@
----Bridge extension for BalatroBot (council-of-jokers, patch version 3).
+---Bridge extension for BalatroBot (ai-plays-balatro, patch version 3).
 ---Exposes raw game information that the stock gamestate only has as effect text:
 ---  * per card `raw` (the `card.ability` table, seal, edition, base, flags),
 ---  * `bridge` (selected G.GAME fields: current_round targets, round_resets, tags, blind, ...),
